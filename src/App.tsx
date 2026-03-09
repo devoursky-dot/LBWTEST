@@ -1,9 +1,9 @@
-import React, { useState, Suspense, Component, ErrorInfo, ReactNode } from 'react';
+import { useState, Suspense, Component, type ErrorInfo, type ReactNode, lazy, type LazyExoticComponent, type ComponentType, type ChangeEvent } from 'react';
 
 // 앱 정의 인터페이스
 interface AppDefinition {
   name: string;
-  component: React.LazyExoticComponent<React.ComponentType<any>>;
+  component: LazyExoticComponent<ComponentType<any>>;
 }
 
 // import.meta.glob을 사용하여 apps 폴더의 모든 .tsx 파일을 동적으로 로드
@@ -19,22 +19,22 @@ for (const path in modules) {
 
   APPS[name] = {
     name: name,
-    component: React.lazy(modules[path] as any)
+    component: lazy(modules[path] as any)
   };
 }
 
 // 에러 바운더리 컴포넌트: 하위 컴포넌트에서 에러 발생 시 UI를 대체함
-class ErrorBoundary extends Component<{ children: ReactNode, onReset: () => void }, { hasError: boolean, error: Error | null }> {
+class ErrorBoundary extends Component<{ children: ReactNode, onReset: () => void }, { hasError: boolean, error: any }> {
   constructor(props: { children: ReactNode, onReset: () => void }) {
     super(props);
     this.state = { hasError: false, error: null };
   }
 
-  static getDerivedStateFromError(error: Error) {
+  static getDerivedStateFromError(error: any) {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  componentDidCatch(error: any, errorInfo: ErrorInfo) {
     console.error("App crashed:", error, errorInfo);
   }
 
@@ -44,7 +44,7 @@ class ErrorBoundary extends Component<{ children: ReactNode, onReset: () => void
         <div style={{ padding: '20px', color: '#d32f2f', textAlign: 'center', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
           <h2 style={{ marginBottom: '10px' }}>앱 실행 중 오류가 발생했습니다.</h2>
           <p style={{ maxWidth: '80%', overflow: 'auto', background: '#f5f5f5', padding: '15px', borderRadius: '4px', fontFamily: 'monospace', textAlign: 'left' }}>
-            {this.state.error?.message}
+            {this.state.error instanceof Error ? this.state.error.message : String(this.state.error)}
           </p>
           <button 
             onClick={() => {
@@ -66,7 +66,7 @@ class ErrorBoundary extends Component<{ children: ReactNode, onReset: () => void
 const App = () => {
   const [currentApp, setCurrentApp] = useState<string>('');
 
-  const handleAppChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleAppChange = (e: ChangeEvent<HTMLSelectElement>) => {
     setCurrentApp(e.target.value);
   };
 

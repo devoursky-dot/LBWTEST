@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, type MouseEvent as ReactMouseEvent, type TouchEvent as ReactTouchEvent } from 'react';
 // import katex from 'katex';
 // import 'katex/dist/katex.min.css';
 
@@ -27,14 +27,14 @@ const Whiteboard = () => {
   }, []);
 
   // 2. 그리기 로직 (직접 Canvas 조작으로 리액트 리렌더링 회피)
-  const startDrawing = ({ nativeEvent }: React.MouseEvent | React.TouchEvent) => {
+  const startDrawing = ({ nativeEvent }: ReactMouseEvent | ReactTouchEvent) => {
     const { offsetX, offsetY } = getCoordinates(nativeEvent);
     contextRef.current?.beginPath();
     contextRef.current?.moveTo(offsetX, offsetY);
     setIsDrawing(true);
   };
 
-  const draw = ({ nativeEvent }: React.MouseEvent | React.TouchEvent) => {
+  const draw = ({ nativeEvent }: ReactMouseEvent | ReactTouchEvent) => {
     if (!isDrawing) return;
     const { offsetX, offsetY } = getCoordinates(nativeEvent);
     contextRef.current?.lineTo(offsetX, offsetY);
@@ -47,15 +47,15 @@ const Whiteboard = () => {
   };
 
   // 좌표 계산 유틸리티 (마우스/터치 공용)
-  const getCoordinates = (event: any) => {
-    if (event.touches) {
+  const getCoordinates = (event: MouseEvent | TouchEvent) => {
+    if ('touches' in event) {
       const rect = canvasRef.current?.getBoundingClientRect();
       return {
         offsetX: event.touches[0].clientX - (rect?.left || 0),
         offsetY: event.touches[0].clientY - (rect?.top || 0)
       };
     }
-    return { offsetX: event.offsetX, offsetY: event.offsetY };
+    return { offsetX: (event as MouseEvent).offsetX, offsetY: (event as MouseEvent).offsetY };
   };
 
   return (

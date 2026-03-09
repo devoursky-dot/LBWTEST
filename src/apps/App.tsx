@@ -1,9 +1,9 @@
-import React, { useState, Suspense, Component, ErrorInfo, ReactNode } from 'react';
+import { useState, Suspense, Component, type ErrorInfo, type ReactNode, lazy, type LazyExoticComponent, type ComponentType, type ChangeEvent } from 'react';
 
 // 앱 정의 인터페이스
 interface AppDefinition {
   name: string;
-  component: React.LazyExoticComponent<React.ComponentType<any>>;
+  component: LazyExoticComponent<ComponentType<any>>;
 }
 
 // import.meta.glob을 사용하여 현재 폴더의 모든 .tsx 파일을 동적으로 로드
@@ -20,7 +20,7 @@ for (const path in modules) {
   APPS[name] = {
     name: name, // 파일명을 앱 이름으로 표시
     // import.meta.glob의 반환값은 () => Promise<{ default: Component }> 형태이므로 React.lazy와 호환됨
-    component: React.lazy(modules[path] as any)
+    component: lazy(modules[path] as any)
   };
 }
 
@@ -67,7 +67,7 @@ class ErrorBoundary extends Component<{ children: ReactNode, onReset: () => void
 const App = () => {
   const [currentApp, setCurrentApp] = useState<string>('');
 
-  const handleAppChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleAppChange = (e: ChangeEvent<HTMLSelectElement>) => {
     setCurrentApp(e.target.value);
   };
 
