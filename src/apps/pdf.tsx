@@ -9,7 +9,7 @@ npm install pdfjs-dist@2.16.105
 */}
 
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
 // [최적화] 전자칠판 호환용 워커 설정
