@@ -12,7 +12,6 @@ const Whiteboard = () => {
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null); // PDF 렌더링용 캔버스
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [latex, setLatex] = useState<string>("e = mc^2");
   // 좌표뿐만 아니라 시간과 굵기 정보도 저장
   const lastPointRef = useRef<{ x: number; y: number; time: number; width: number } | null>(null);
 
