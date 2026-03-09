@@ -60,7 +60,19 @@ const Whiteboard = () => {
     if (!file) return;
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
+      let arrayBuffer: ArrayBuffer;
+      // 구형 브라우저(전자칠판) 호환성: file.arrayBuffer()가 없는 경우 FileReader 사용
+      if (typeof file.arrayBuffer === 'function') {
+        arrayBuffer = await file.arrayBuffer();
+      } else {
+        arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as ArrayBuffer);
+          reader.onerror = reject;
+          reader.readAsArrayBuffer(file);
+        });
+      }
+
       const loadingTask = pdfjsLib.getDocument({ 
         data: arrayBuffer,
         cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
