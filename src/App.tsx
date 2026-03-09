@@ -76,24 +76,62 @@ const App = () => {
 
   const ActiveComponent = currentApp ? APPS[currentApp]?.component : null;
 
+  // 앱이 실행 중일 때 (전체 화면)
+  if (currentApp && ActiveComponent) {
+    return (
+      <div style={{ width: '100vw', height: '100vh', position: 'relative', overflow: 'hidden', backgroundColor: '#fff' }}>
+        <button 
+          onClick={resetApp}
+          style={{ 
+            position: 'absolute', 
+            top: '20px', 
+            right: '20px', 
+            zIndex: 9999, 
+            padding: '8px 16px', 
+            fontSize: '1rem', 
+            backgroundColor: '#333', 
+            color: 'white', 
+            border: 'none', 
+            borderRadius: '4px',
+            cursor: 'pointer',
+            opacity: 0.8
+          }}
+        >
+          홈으로
+        </button>
+        
+        <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
+          <ErrorBoundary onReset={resetApp} key={currentApp}>
+            <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>Loading...</div>}>
+              <ActiveComponent />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
+      </div>
+    );
+  }
+
+  // 메인 화면 (앱 선택)
   return (
-    <div className="main-screen" style={{ padding: '20px', height: '100vh', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-      <header style={{ marginBottom: '20px', paddingBottom: '20px', borderBottom: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={{ margin: 0, fontSize: '1.5rem' }}>LBW Test Apps</h1>
+    <div className="main-screen" style={{ padding: '20px', height: '100vh', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
+      <div style={{ textAlign: 'center', padding: '40px', backgroundColor: 'white', borderRadius: '12px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
+        <h1 style={{ margin: '0 0 30px 0', fontSize: '2rem', color: '#333' }}>LBW Test Apps</h1>
         
         <div className="app-selector">
           <select 
             value={currentApp} 
             onChange={handleAppChange}
             style={{ 
-              padding: '8px 12px', 
-              fontSize: '1rem', 
-              borderRadius: '4px', 
+              padding: '12px 20px', 
+              fontSize: '1.1rem', 
+              borderRadius: '6px', 
               border: '1px solid #ddd',
-              minWidth: '200px'
+              minWidth: '250px',
+              cursor: 'pointer',
+              outline: 'none'
             }}
           >
-            <option value="">앱 선택...</option>
+            <option value="">앱을 선택하세요</option>
             {Object.entries(APPS).map(([key, app]) => (
               <option key={key} value={key}>
                 {app.name}
@@ -101,21 +139,7 @@ const App = () => {
             ))}
           </select>
         </div>
-      </header>
-
-      <main style={{ flex: 1, position: 'relative', overflow: 'auto' }}>
-        <ErrorBoundary onReset={resetApp} key={currentApp}>
-          {ActiveComponent ? (
-            <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>Loading...</div>}>
-              <ActiveComponent />
-            </Suspense>
-          ) : (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#999', flexDirection: 'column' }}>
-              <p style={{ fontSize: '1.2rem' }}>드롭다운 메뉴에서 실행할 앱을 선택해주세요.</p>
-            </div>
-          )}
-        </ErrorBoundary>
-      </main>
+      </div>
     </div>
   );
 };
