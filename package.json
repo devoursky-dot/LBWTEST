@@ -10,15 +10,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "fabric": "^7.2.0",
     "katex": "^0.16.38",
-    "pdfjs-dist": "^5.5.207",
+    "pdfjs-dist": "^2.16.105",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@types/fabric": "^5.3.11",
     "@types/katex": "^0.16.8",
     "@types/node": "^24.10.1",
+    "@types/pdfjs-dist": "^2.10.377",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
