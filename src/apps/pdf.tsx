@@ -1,62 +1,94 @@
-import { useRef, useEffect, useState, type MouseEvent as ReactMouseEvent, type TouchEvent as ReactTouchEvent, type ChangeEvent } from 'react';
-// import katex from 'katex';
-// import 'katex/dist/katex.min.css';
-// @ts-ignore
+import { useEffect, useState, type ChangeEvent } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // PDF.js 워커 설정 (호환성을 위해 CDN 사용, 버전 자동 감지 또는 고정)
 const pdfVersion = pdfjsLib.version || '2.16.105';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfVersion}/pdf.worker.min.js`;
 
-const Whiteboard = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const pdfCanvasRef = useRef<HTMLCanvasElement>(null); // PDF 렌더링용 캔버스
-  const contextRef = useRef<CanvasRenderingContext2D | null>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
-  // 좌표뿐만 아니라 시간과 굵기 정보도 저장
-  const lastPointRef = useRef<{ x: number; y: number; time: number; width: number } | null>(null);
+// --- IndexedDB 유틸리티 (브라우저 내부 저장소) ---
+const DB_NAME = 'PDF_CACHE_DB';
+const STORE_NAME = 'pages';
+const DB_VERSION = 1;
 
-  // PDF 관련 상태
-  const [pdfDoc, setPdfDoc] = useState<any>(null);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [totalPages, setTotalPages] = useState<number>(0);
-
-  // 1. 캔버스 초기 설정 및 리사이즈 대응
-  useEffect(() => {
-    const handleResize = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      // 초기 상태(PDF 없을 때)는 전체 화면으로 설정
-      if (!pdfDoc) {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        
-        const context = canvas.getContext('2d');
-        if (context) {
-          context.lineCap = "round";
-          context.lineJoin = "round";
-          context.strokeStyle = "black";
-          context.lineWidth = 5;
-          contextRef.current = context;
-        }
-      } else {
-        // PDF가 있으면 renderPage에서 크기를 결정하므로 여기서는 호출만 함
-        renderPage(currentPage);
+const openDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        // fileId + pageIndex를 키로 사용
+        db.createObjectStore(STORE_NAME, { keyPath: ['fileId', 'pageIndex'] });
       }
     };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
 
-    // 초기 실행
-    handleResize();
+const savePageToCache = async (fileId: string, pageIndex: number, blob: Blob) => {
+  const db = await openDB();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.put({ fileId, pageIndex, blob, timestamp: Date.now() });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+};
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [pdfDoc, currentPage]);
+const getPageFromCache = async (fileId: string, pageIndex: number): Promise<Blob | null> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.get([fileId, pageIndex]);
+    request.onsuccess = () => resolve(request.result ? request.result.blob : null);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const checkCacheExists = async (fileId: string, totalPages: number): Promise<boolean> => {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    // 첫 페이지와 마지막 페이지가 있는지 확인하여 캐시 여부 판단 (단순화된 로직)
+    const req1 = store.get([fileId, 1]);
+    req1.onsuccess = () => {
+      if (!req1.result) return resolve(false);
+      const req2 = store.get([fileId, totalPages]);
+      req2.onsuccess = () => resolve(!!req2.result);
+    };
+  });
+};
+
+const Whiteboard = () => {
+  const [currentImageSrc, setCurrentImageSrc] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [progress, setProgress] = useState<string>('');
+  const [currentFileId, setCurrentFileId] = useState<string>('');
+  const [scale, setScale] = useState<number>(1.0);
+
+  // 페이지 변경 시 이미지 로드
+  useEffect(() => {
+    if (currentFileId && totalPages > 0) {
+      loadPageImage(currentFileId, currentPage);
+    }
+    setScale(1.0); // 페이지 변경 시 배율 초기화
+  }, [currentPage, currentFileId]);
 
   // PDF 파일 선택 핸들러
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
+
+    // 파일 고유 ID 생성 (이름 + 크기 + 수정일)
+    const fileId = `${file.name}_${file.size}_${file.lastModified}`;
+    setCurrentFileId(fileId);
+    setIsLoading(true);
+    setProgress('파일 분석 중...');
 
     try {
       // 구형 환경 호환성을 위해 무조건 FileReader 사용
@@ -79,148 +111,88 @@ const Whiteboard = () => {
         cMapPacked: true,
       });
       const doc = await loadingTask.promise;
-      setPdfDoc(doc);
-      setTotalPages(doc.numPages);
-      setCurrentPage(1);
+      const pages = doc.numPages;
+      setTotalPages(pages);
+
+      // 캐시 확인
+      const isCached = await checkCacheExists(fileId, pages);
+
+      if (isCached) {
+        setProgress('캐시된 데이터 로드 중...');
+        setIsLoading(false);
+        setCurrentPage(1);
+        loadPageImage(fileId, 1);
+      } else {
+        // 캐시 생성 프로세스 시작
+        await generateCache(doc, fileId, pages);
+      }
+
     } catch (error) {
       console.error("PDF 로드 실패:", error);
       alert(`PDF 파일을 로드하는데 실패했습니다.\n${error instanceof Error ? error.message : String(error)}`);
+      setIsLoading(false);
     }
   };
 
-  // 페이지 변경 시 렌더링
-  useEffect(() => {
-    if (pdfDoc) {
-      renderPage(currentPage);
-    }
-  }, [pdfDoc, currentPage]);
+  // 고화질 이미지 생성 및 캐싱 (최초 1회)
+  const generateCache = async (doc: any, fileId: string, total: number) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-  const renderPage = async (pageNum: number) => {
-    if (!pdfDoc) return;
-
-    try {
-      const page = await pdfDoc.getPage(pageNum);
-      // 화면 너비에 맞춰 스케일 조정
-      const viewport = page.getViewport({ scale: 1.0 });
+    for (let i = 1; i <= total; i++) {
+      setProgress(`고화질 변환 중... (${i}/${total})`);
       
-      // 화면에 꽉 차게 비율 계산 (너비/높이 중 더 작은 쪽 기준)
-      const scaleX = window.innerWidth / viewport.width;
-      const scaleY = window.innerHeight / viewport.height;
-      const scale = Math.min(scaleX, scaleY) * 0.95; // 약간의 여백(0.95)
-      const scaledViewport = page.getViewport({ scale });
+      try {
+        const page = await doc.getPage(i);
+        // 고화질을 위해 스케일 2.0 설정 (전자칠판 해상도 대응)
+        const viewport = page.getViewport({ scale: 2.0 });
+        
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
 
-      const pdfCanvas = pdfCanvasRef.current;
-      const drawCanvas = canvasRef.current;
+        await page.render({
+          canvasContext: ctx,
+          viewport: viewport
+        }).promise;
 
-      if (pdfCanvas && drawCanvas) {
-        // 캔버스 크기 설정
-        pdfCanvas.width = scaledViewport.width;
-        pdfCanvas.height = scaledViewport.height;
-        drawCanvas.width = scaledViewport.width;
-        drawCanvas.height = scaledViewport.height;
-
-        // 드로잉 컨텍스트 재설정 (크기 변경 시 초기화되므로)
-        const context = drawCanvas.getContext('2d');
-        if (context) {
-          context.lineCap = "round";
-          context.lineJoin = "round";
-          context.strokeStyle = "black";
-          context.lineWidth = 5;
-          contextRef.current = context;
+        // 캔버스를 Blob(이미지)으로 변환하여 저장
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+        
+        if (blob) {
+          await savePageToCache(fileId, i, blob);
         }
+      } catch (err) {
+        console.error(`페이지 ${i} 변환 실패`, err);
+      }
+    }
 
-        // PDF 렌더링
-        const renderContext = {
-          canvasContext: pdfCanvas.getContext('2d')!,
-          viewport: scaledViewport,
-        };
-        await page.render(renderContext).promise;
+    setIsLoading(false);
+    setCurrentPage(1);
+    loadPageImage(fileId, 1);
+  };
+
+  // 캐시된 이미지 불러오기 (빠른 로딩)
+  const loadPageImage = async (fileId: string, pageNum: number) => {
+    try {
+      const blob = await getPageFromCache(fileId, pageNum);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        setCurrentImageSrc(url);
+        // 이전 URL 해제 (메모리 누수 방지)
+        return () => URL.revokeObjectURL(url);
       }
     } catch (error) {
-      console.error("페이지 렌더링 실패:", error);
+      console.error("이미지 로드 실패:", error);
     }
   };
 
-  // 속도 기반 굵기 계산 함수
-  const getLineWidth = (speed: number) => {
-    const minWidth = 1;
-    const maxWidth = 10;
-    const minSpeed = 0.1;
-    const maxSpeed = 2.5; // 속도 임계값 (조절 가능)
-
-    // 속도가 빠를수록 얇게, 느릴수록 굵게
-    const normalizedSpeed = Math.min(Math.max((speed - minSpeed) / (maxSpeed - minSpeed), 0), 1);
-    return maxWidth - normalizedSpeed * (maxWidth - minWidth);
+  // 확대/축소 핸들러
+  const handleZoomIn = () => {
+    setScale(prev => Math.min(prev + 0.25, 3.0)); // 최대 3배
   };
-
-  // 2. 그리기 로직 (직접 Canvas 조작으로 리액트 리렌더링 회피)
-  const startDrawing = ({ nativeEvent }: ReactMouseEvent | ReactTouchEvent) => {
-    const { offsetX, offsetY } = getCoordinates(nativeEvent);
-    contextRef.current?.beginPath();
-    contextRef.current?.moveTo(offsetX, offsetY);
-    setIsDrawing(true);
-    // 초기 상태 저장 (현재 시간, 기본 굵기)
-    lastPointRef.current = { x: offsetX, y: offsetY, time: Date.now(), width: 5 };
-  };
-
-  const draw = ({ nativeEvent }: ReactMouseEvent | ReactTouchEvent) => {
-    if (!isDrawing) return;
-    const { offsetX, offsetY } = getCoordinates(nativeEvent);
-    const ctx = contextRef.current;
-    
-    if (ctx && lastPointRef.current) {
-      const now = Date.now();
-      const timeDiff = now - lastPointRef.current.time;
-      const dist = Math.sqrt(Math.pow(offsetX - lastPointRef.current.x, 2) + Math.pow(offsetY - lastPointRef.current.y, 2));
-      
-      // 속도 계산 및 굵기 보간
-      let newWidth = lastPointRef.current.width;
-      if (timeDiff > 0) {
-        const speed = dist / timeDiff;
-        const targetWidth = getLineWidth(speed);
-        // 급격한 굵기 변화를 막기 위해 이전 굵기와 보간 (0.2는 반응 속도 계수)
-        newWidth = lastPointRef.current.width + (targetWidth - lastPointRef.current.width) * 0.2;
-      }
-
-      const midX = (lastPointRef.current.x + offsetX) / 2;
-      const midY = (lastPointRef.current.y + offsetY) / 2;
-
-      // 계산된 굵기 적용
-      ctx.lineWidth = newWidth;
-      
-      // 스플라인 곡선 그리기
-      ctx.quadraticCurveTo(lastPointRef.current.x, lastPointRef.current.y, midX, midY);
-      ctx.stroke();
-      
-      // 다음 선을 위해 경로 초기화 및 시작점 이동
-      ctx.beginPath();
-      ctx.moveTo(midX, midY);
-      
-      // 상태 업데이트
-      lastPointRef.current = { x: offsetX, y: offsetY, time: now, width: newWidth };
-    }
-  };
-
-  const stopDrawing = () => {
-    const ctx = contextRef.current;
-    if (ctx && lastPointRef.current) {
-      ctx.lineTo(lastPointRef.current.x, lastPointRef.current.y);
-      ctx.stroke();
-    }
-    setIsDrawing(false);
-    lastPointRef.current = null;
-  };
-
-  // 좌표 계산 유틸리티 (마우스/터치 공용)
-  const getCoordinates = (event: MouseEvent | TouchEvent) => {
-    if ('touches' in event) {
-      const rect = canvasRef.current?.getBoundingClientRect();
-      return {
-        offsetX: event.touches[0].clientX - (rect?.left || 0),
-        offsetY: event.touches[0].clientY - (rect?.top || 0)
-      };
-    }
-    return { offsetX: (event as MouseEvent).offsetX, offsetY: (event as MouseEvent).offsetY };
+  const handleZoomOut = () => {
+    setScale(prev => Math.max(prev - 0.25, 1.0)); // 최소 1배 (기본)
   };
 
   return (
@@ -240,59 +212,51 @@ const Whiteboard = () => {
         alignItems: 'center',
         backdropFilter: 'blur(5px)'
       }}>
-        <span style={{ fontWeight: 'bold', marginRight: '10px' }}>PDF 화이트보드</span>
+        <span style={{ fontWeight: 'bold', marginRight: '10px' }}>PDF 고속 뷰어</span>
         <input type="file" accept=".pdf" onChange={handleFileChange} />
         
-        {/* 페이지 목록 아이콘 */}
-        {totalPages > 0 && (
-          <div style={{ display: 'flex', gap: '5px', overflowX: 'auto', maxWidth: '300px' }}>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-              <button
-                key={pageNum}
-                onClick={() => setCurrentPage(pageNum)}
-                style={{
-                  padding: '5px 10px',
-                  cursor: 'pointer',
-                  backgroundColor: currentPage === pageNum ? '#007bff' : '#f0f0f0',
-                  color: currentPage === pageNum ? 'white' : 'black',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  minWidth: '30px'
-                }}
-              >
-                {pageNum}
-              </button>
-            ))}
+        {totalPages > 0 && !isLoading && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}>이전</button>
+            <span>{currentPage} / {totalPages}</span>
+            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}>다음</button>
+          </div>
+        )}
+
+        {/* 확대/축소 버튼 */}
+        {currentImageSrc && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginLeft: '10px', borderLeft: '1px solid #ccc', paddingLeft: '10px' }}>
+            <button onClick={handleZoomOut} disabled={scale <= 1.0}>-</button>
+            <span style={{ minWidth: '40px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+            <button onClick={handleZoomIn} disabled={scale >= 3.0}>+</button>
           </div>
         )}
       </div>
 
-      {/* 캔버스 컨테이너 */}
-      <div style={{ position: 'relative', boxShadow: '0 0 20px rgba(0,0,0,0.1)' }}>
-        {/* PDF 렌더링용 캔버스 (배경) */}
-        <canvas
-          ref={pdfCanvasRef}
-          style={{ display: 'block', backgroundColor: '#fff' }}
-        />
-        {/* 드로잉용 캔버스 (상단, 투명) */}
-        <canvas
-          ref={canvasRef}
-          onMouseDown={startDrawing}
-          onMouseMove={draw}
-          onMouseUp={stopDrawing}
-          onMouseLeave={stopDrawing}
-          onTouchStart={startDrawing}
-          onTouchMove={draw}
-          onTouchEnd={stopDrawing}
-          style={{ 
-            position: 'absolute', 
-            top: 0, 
-            left: 0, 
-            cursor: 'crosshair', 
-            touchAction: 'none',
-            backgroundColor: 'transparent' // 투명 배경
-          }}
-        />
+      {/* 로딩 인디케이터 */}
+      {isLoading && (
+        <div style={{ position: 'absolute', zIndex: 50, backgroundColor: 'rgba(0,0,0,0.7)', color: 'white', padding: '20px', borderRadius: '10px' }}>
+          {progress}
+        </div>
+      )}
+
+      {/* 이미지 뷰어 컨테이너 */}
+      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto' }}>
+        {currentImageSrc ? (
+          <img 
+            src={currentImageSrc} 
+            alt={`Page ${currentPage}`} 
+            style={{ 
+              maxWidth: scale === 1 ? '100%' : 'none', 
+              maxHeight: scale === 1 ? '100%' : 'none', 
+              width: scale === 1 ? 'auto' : `${scale * 100}%`, // 확대 시 너비 강제 조정
+              objectFit: 'contain', 
+              boxShadow: '0 0 20px rgba(0,0,0,0.1)' 
+            }} 
+          />
+        ) : (
+          <div style={{ color: '#999' }}>PDF 파일을 선택해주세요 (최초 1회 변환 과정이 필요합니다)</div>
+        )}
       </div>
     </div>
   );
