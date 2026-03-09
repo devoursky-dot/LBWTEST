@@ -72,7 +72,7 @@ const Whiteboard = () => {
         onTouchStart={startDrawing}
         onTouchMove={draw}
         onTouchEnd={stopDrawing}
-        style={{ border: '2px solid #333', borderRadius: '8px', cursor: 'crosshair', backgroundColor: '#fff' }}
+        style={{ border: '2px solid #333', borderRadius: '8px', cursor: 'crosshair', backgroundColor: '#fff', touchAction: 'none' }}
       />
 
       <div style={{ marginTop: '20px' }}>
