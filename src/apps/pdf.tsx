@@ -21,26 +21,37 @@ const Whiteboard = () => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(0);
 
-  // 1. 캔버스 초기 설정 (저사양 기기 최적화)
+  // 1. 캔버스 초기 설정 및 리사이즈 대응
   useEffect(() => {
-    if (pdfDoc) return; // PDF가 있으면 renderPage에서 처리
+    const handleResize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      // 초기 상태(PDF 없을 때)는 전체 화면으로 설정
+      if (!pdfDoc) {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        const context = canvas.getContext('2d');
+        if (context) {
+          context.lineCap = "round";
+          context.lineJoin = "round";
+          context.strokeStyle = "black";
+          context.lineWidth = 5;
+          contextRef.current = context;
+        }
+      } else {
+        // PDF가 있으면 renderPage에서 크기를 결정하므로 여기서는 호출만 함
+        renderPage(currentPage);
+      }
+    };
 
-    // 브라우저 크기에 맞게 설정
-    canvas.width = window.innerWidth * 0.8;
-    canvas.height = 500;
+    // 초기 실행
+    handleResize();
 
-    const context = canvas.getContext('2d');
-    if (context) {
-      context.lineCap = "round";
-      context.lineJoin = "round"; // 선 연결 부위를 부드럽게
-      context.strokeStyle = "black";
-      context.lineWidth = 5; // 기본 굵기
-      contextRef.current = context;
-    }
-  }, [pdfDoc]);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [pdfDoc, currentPage]);
 
   // PDF 파일 선택 핸들러
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -74,8 +85,11 @@ const Whiteboard = () => {
       const page = await pdfDoc.getPage(pageNum);
       // 화면 너비에 맞춰 스케일 조정
       const viewport = page.getViewport({ scale: 1.0 });
-      const desiredWidth = window.innerWidth * 0.8;
-      const scale = desiredWidth / viewport.width;
+      
+      // 화면에 꽉 차게 비율 계산 (너비/높이 중 더 작은 쪽 기준)
+      const scaleX = window.innerWidth / viewport.width;
+      const scaleY = window.innerHeight / viewport.height;
+      const scale = Math.min(scaleX, scaleY) * 0.95; // 약간의 여백(0.95)
       const scaledViewport = page.getViewport({ scale });
 
       const pdfCanvas = pdfCanvasRef.current;
@@ -193,16 +207,28 @@ const Whiteboard = () => {
   };
 
   return (
-    <div style={{ padding: '20px', textAlign: 'center', fontFamily: 'sans-serif' }}>
-      <h2>속도 기반 필압 감지 화이트보드 (PDF 지원)</h2>
+    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', backgroundColor: '#f5f5f5', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
       
-      {/* 툴바 영역 */}
-      <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+      {/* 툴바 영역 (상단 플로팅) */}
+      <div style={{ 
+        position: 'absolute', 
+        top: 10, 
+        zIndex: 100, 
+        backgroundColor: 'rgba(255, 255, 255, 0.9)', 
+        padding: '10px 20px', 
+        borderRadius: '30px', 
+        boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
+        display: 'flex', 
+        gap: '15px', 
+        alignItems: 'center',
+        backdropFilter: 'blur(5px)'
+      }}>
+        <span style={{ fontWeight: 'bold', marginRight: '10px' }}>PDF 화이트보드</span>
         <input type="file" accept=".pdf" onChange={handleFileChange} />
         
         {/* 페이지 목록 아이콘 */}
         {totalPages > 0 && (
-          <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', justifyContent: 'center', maxWidth: '80%' }}>
+          <div style={{ display: 'flex', gap: '5px', overflowX: 'auto', maxWidth: '300px' }}>
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
               <button
                 key={pageNum}
@@ -224,10 +250,8 @@ const Whiteboard = () => {
         )}
       </div>
 
-      <p style={{ fontSize: '0.9rem', color: '#666' }}>빠르게 그리면 얇게, 천천히 그리면 굵게 나옵니다.</p>
-      
-      {/* 캔버스 컨테이너 (겹치기 위해 relative) */}
-      <div style={{ position: 'relative', display: 'inline-block', border: '2px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
+      {/* 캔버스 컨테이너 */}
+      <div style={{ position: 'relative', boxShadow: '0 0 20px rgba(0,0,0,0.1)' }}>
         {/* PDF 렌더링용 캔버스 (배경) */}
         <canvas
           ref={pdfCanvasRef}
@@ -252,27 +276,6 @@ const Whiteboard = () => {
             backgroundColor: 'transparent' // 투명 배경
           }}
         />
-      </div>
-
-      <div style={{ marginTop: '20px' }}>
-        <input 
-          type="text" 
-          value={latex} 
-          onChange={(e) => setLatex(e.target.value)}
-          placeholder="LaTeX 수식을 입력하세요"
-          style={{ width: '60%', padding: '10px', fontSize: '1.2rem' }}
-        />
-        
-        {/* 수식 렌더링 영역 (katex 미설치 시 오류 방지를 위해 주석 처리) */}
-        {/* <div 
-          style={{ marginTop: '20px', fontSize: '2rem' }}
-          dangerouslySetInnerHTML={{ 
-            __html: katex.renderToString(latex, { throwOnError: false }) 
-          }} 
-        /> */}
-        <div style={{ marginTop: '20px', color: '#888' }}>
-          (수식 렌더링을 위해선 katex 패키지 설치가 필요합니다)
-        </div>
       </div>
     </div>
   );

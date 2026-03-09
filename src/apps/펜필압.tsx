@@ -7,6 +7,7 @@ const Whiteboard = () => {
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [latex, setLatex] = useState<string>("e = mc^2");
+  const [maxSpeed, setMaxSpeed] = useState<number>(2.5);
   // 좌표뿐만 아니라 시간과 굵기 정보도 저장
   const lastPointRef = useRef<{ x: number; y: number; time: number; width: number } | null>(null);
 
@@ -34,7 +35,6 @@ const Whiteboard = () => {
     const minWidth = 1;
     const maxWidth = 10;
     const minSpeed = 0.1;
-    const maxSpeed = 2.5; // 속도 임계값 (조절 가능)
 
     // 속도가 빠를수록 얇게, 느릴수록 굵게
     const normalizedSpeed = Math.min(Math.max((speed - minSpeed) / (maxSpeed - minSpeed), 0), 1);
@@ -115,6 +115,21 @@ const Whiteboard = () => {
     <div style={{ padding: '20px', textAlign: 'center', fontFamily: 'sans-serif' }}>
       <h2>속도 기반 필압 감지 화이트보드</h2>
       <p style={{ fontSize: '0.9rem', color: '#666' }}>빠르게 그리면 얇게, 천천히 그리면 굵게 나옵니다.</p>
+
+      <div style={{ marginBottom: '10px' }}>
+        <label>
+          속도 민감도: {maxSpeed}
+          <input
+            type="range"
+            min="0.5"
+            max="10"
+            step="0.1"
+            value={maxSpeed}
+            onChange={(e) => setMaxSpeed(Number(e.target.value))}
+            style={{ marginLeft: '10px', verticalAlign: 'middle' }}
+          />
+        </label>
+      </div>
       
       {/* 판서 영역 */}
       <canvas
