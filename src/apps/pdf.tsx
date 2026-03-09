@@ -3,11 +3,10 @@ import { useRef, useEffect, useState, type MouseEvent as ReactMouseEvent, type T
 // import 'katex/dist/katex.min.css';
 // @ts-ignore
 import * as pdfjsLib from 'pdfjs-dist';
-// @ts-ignore
-import pdfWorker from 'pdfjs-dist/build/pdf.worker?url';
 
-// PDF.js 워커 설정 (로컬 파일 사용 - CDN 문제 해결 및 버전 불일치 방지)
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+// PDF.js 워커 설정 (호환성을 위해 CDN 사용, 버전 자동 감지 또는 고정)
+const pdfVersion = pdfjsLib.version || '2.16.105';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfVersion}/pdf.worker.min.js`;
 
 const Whiteboard = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -56,26 +55,27 @@ const Whiteboard = () => {
 
   // PDF 파일 선택 핸들러
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const file = e.target.files && e.target.files[0];
     if (!file) return;
 
     try {
-      let arrayBuffer: ArrayBuffer;
-      // 구형 브라우저(전자칠판) 호환성: file.arrayBuffer()가 없는 경우 FileReader 사용
-      if (typeof file.arrayBuffer === 'function') {
-        arrayBuffer = await file.arrayBuffer();
-      } else {
-        arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as ArrayBuffer);
-          reader.onerror = reject;
-          reader.readAsArrayBuffer(file);
-        });
-      }
+      // 구형 환경 호환성을 위해 무조건 FileReader 사용
+      const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (reader.result) {
+            resolve(reader.result as ArrayBuffer);
+          } else {
+            reject(new Error("파일을 읽을 수 없습니다."));
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
 
       const loadingTask = pdfjsLib.getDocument({ 
         data: arrayBuffer,
-        cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
+        cMapUrl: `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfVersion}/cmaps/`,
         cMapPacked: true,
       });
       const doc = await loadingTask.promise;
@@ -224,7 +224,7 @@ const Whiteboard = () => {
   };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', backgroundColor: '#f5f5f5', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative', backgroundColor: '#f5f5f5', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', touchAction: 'none' }}>
       
       {/* 툴바 영역 (상단 플로팅) */}
       <div style={{ 
