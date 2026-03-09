@@ -3,9 +3,11 @@ import { useRef, useEffect, useState, type MouseEvent as ReactMouseEvent, type T
 // import 'katex/dist/katex.min.css';
 // @ts-ignore
 import * as pdfjsLib from 'pdfjs-dist';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/build/pdf.worker?url';
 
-// PDF.js 워커 설정 (CDN 사용)
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// PDF.js 워커 설정 (로컬 파일 사용 - CDN 문제 해결 및 버전 불일치 방지)
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const Whiteboard = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -59,14 +61,18 @@ const Whiteboard = () => {
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const loadingTask = pdfjsLib.getDocument({ 
+        data: arrayBuffer,
+        cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
+        cMapPacked: true,
+      });
       const doc = await loadingTask.promise;
       setPdfDoc(doc);
       setTotalPages(doc.numPages);
       setCurrentPage(1);
     } catch (error) {
       console.error("PDF 로드 실패:", error);
-      alert("PDF 파일을 로드하는데 실패했습니다.");
+      alert(`PDF 파일을 로드하는데 실패했습니다.\n${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
