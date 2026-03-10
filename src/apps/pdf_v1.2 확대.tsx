@@ -16,12 +16,32 @@ import * as pdfjsLib from "pdfjs-dist";
 const PDFJS_VERSION = '2.16.105';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
 
+// --- IndexedDB 유틸리티 (고화질 이미지 캐시용) ---
+const DB_NAME = 'PDF_HIGH_RES_CACHE';
+const STORE_NAME = 'images';
+const DB_VERSION = 1;
+
+const openDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: ['fileId', 'pageNum'] });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
 export default function PdfApp() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [pdfDoc, setPdfDoc] = useState<any>(null);
+  const [progress, setProgress] = useState("");
+  const [fileId, setFileId] = useState("");
   const [showPageList, setShowPageList] = useState(false);
 
   // 확대/축소 및 이동 상태
@@ -30,57 +50,80 @@ export default function PdfApp() {
   const containerRef = useRef<HTMLDivElement>(null);
   const touchRef = useRef({ lastDist: 0, lastPos: { x: 0, y: 0 } });
 
-  // [핵심] 단일 페이지 고화질 렌더링 로직
-  const renderPage = useCallback(async (doc: any, pageNum: number) => {
-    if (!doc) return;
-    setIsLoading(true);
-    try {
-      const page = await doc.getPage(pageNum);
-      // [고화질 업스케일링] 3.0배율 적용
+  // 메모리 해제 및 이미지 업데이트
+  const updateImageSource = useCallback((blob: Blob) => {
+    setCurrentImage((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(blob);
+    });
+    setZoom(1); // 페이지 변경 시 줌 초기화
+    setOffset({ x: 0, y: 0 });
+  }, []);
+
+  const loadFromCache = async (fId: string, pageNum: number): Promise<Blob | null> => {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const request = tx.objectStore(STORE_NAME).get([fId, pageNum]);
+      request.onsuccess = () => resolve(request.result ? request.result.blob : null);
+      request.onerror = () => resolve(null);
+    });
+  };
+
+  // PDF 고화질 변환 (최초 1회)
+  const generateCache = async (pdf: any, fId: string) => {
+    const db = await openDB();
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      setProgress(`고화질 변환 중... (${i}/${pdf.numPages})`);
+      const page = await pdf.getPage(i);
+      // [고화질 업스케일링] 3.0배율로 렌더링하여 확대 시에도 선명함 유지
       const viewport = page.getViewport({ scale: 3.0 });
-      
-      const canvas = document.createElement("canvas");
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      const context = canvas.getContext("2d");
-      
-      if (context) {
-        await page.render({ canvasContext: context, viewport }).promise;
-        
-        // 캔버스를 이미지로 변환 (메모리 효율을 위해 JPEG 사용)
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const url = URL.createObjectURL(blob);
-            setCurrentImage((prev) => {
-              if (prev) URL.revokeObjectURL(prev); // 이전 페이지 메모리 해제
-              return url;
-            });
-            setZoom(1);
-            setOffset({ x: 0, y: 0 });
-          }
-          setIsLoading(false);
-        }, 'image/jpeg', 0.9);
+
+      await page.render({ canvasContext: context, viewport }).promise;
+
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+      if (blob) {
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put({ fileId: fId, pageNum: i, blob });
       }
-    } catch (err) {
-      console.error("렌더링 에러:", err);
-      setIsLoading(false);
+      if (i === 1) {
+        const firstBlob = await loadFromCache(fId, 1);
+        if (firstBlob) updateImageSource(firstBlob);
+      }
     }
-  }, []);
+    setProgress("");
+    setIsLoading(false);
+  };
 
   const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsLoading(true);
+    setProgress("파일 분석 중...");
+    const fId = `${file.name}_${file.size}`;
+    setFileId(fId);
+
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const data = event.target?.result as ArrayBuffer;
         const pdf = await pdfjsLib.getDocument({ data }).promise;
-        setPdfDoc(pdf);
         setTotalPages(pdf.numPages);
-        setCurrentPage(1);
-        renderPage(pdf, 1);
+
+        const cached = await loadFromCache(fId, 1);
+        if (cached) {
+          updateImageSource(cached);
+          setIsLoading(false);
+        } else {
+          await generateCache(pdf, fId);
+        }
       } catch (err) {
         alert("PDF 로드 실패");
         setIsLoading(false);
@@ -90,13 +133,10 @@ export default function PdfApp() {
   };
 
   const selectPage = async (num: number) => {
-    if (num === currentPage) {
-      setShowPageList(false);
-      return;
-    }
     setCurrentPage(num);
     setShowPageList(false);
-    renderPage(pdfDoc, num);
+    const blob = await loadFromCache(fileId, num);
+    if (blob) updateImageSource(blob);
   };
 
   // --- 터치 이벤트 핸들러 (확대/축소/이동) ---
@@ -125,6 +165,20 @@ export default function PdfApp() {
 
   return (
     <div style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", backgroundColor: "#1a1a1a", overflow: "hidden", touchAction: "none" }}>
+      {/* 상단 툴바 */}
+      <div style={{ height: "60px", background: "#2c2c2c", display: "flex", alignItems: "center", padding: "0 20px", gap: "15px", color: "white", zIndex: 100 }}>
+        <input type="file" accept=".pdf" onChange={onFileChange} style={{ fontSize: "14px" }} />
+        {totalPages > 0 && (
+          <button 
+            onClick={() => setShowPageList(true)}
+            style={{ padding: "8px 20px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}
+          >
+            페이지 목록 ({currentPage}/{totalPages})
+          </button>
+        )}
+        {progress && <span style={{ color: "#ffc107", fontSize: "13px" }}>{progress}</span>}
+      </div>
+
       {/* 메인 뷰어 영역 */}
       <div 
         ref={containerRef}
@@ -147,21 +201,8 @@ export default function PdfApp() {
           />
         ) : (
           <div style={{ color: "#555", textAlign: "center" }}>
-            {isLoading ? "고화질 로딩 중..." : "PDF 파일을 선택하세요."}
+            {isLoading ? "고화질 변환 중입니다. 잠시만 기다려주세요..." : "PDF 파일을 선택하여 시작하세요."}
           </div>
-        )}
-      </div>
-
-      {/* 하단 툴바 */}
-      <div style={{ height: "60px", background: "#2c2c2c", display: "flex", alignItems: "center", padding: "0 20px", gap: "15px", color: "white", zIndex: 100 }}>
-        <input type="file" accept=".pdf" onChange={onFileChange} style={{ fontSize: "14px" }} />
-        {totalPages > 0 && (
-          <button 
-            onClick={() => setShowPageList(true)}
-            style={{ padding: "8px 20px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}
-          >
-            페이지 목록 ({currentPage}/{totalPages})
-          </button>
         )}
       </div>
 
