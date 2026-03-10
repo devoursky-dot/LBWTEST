@@ -43,9 +43,11 @@ class ErrorBoundary extends Component<{ children: ReactNode, onReset: () => void
       return (
         <div style={{ padding: '20px', color: '#d32f2f', textAlign: 'center', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
           <h2 style={{ marginBottom: '10px' }}>앱 실행 중 오류가 발생했습니다.</h2>
-          <p style={{ maxWidth: '80%', overflow: 'auto', background: '#f5f5f5', padding: '15px', borderRadius: '4px', fontFamily: 'monospace', textAlign: 'left' }}>
-            {this.state.error instanceof Error ? this.state.error.message : String(this.state.error)}
-          </p>
+          <div style={{ maxWidth: '90%', maxHeight: '300px', overflow: 'auto', background: '#f5f5f5', padding: '15px', borderRadius: '4px', fontFamily: 'monospace', textAlign: 'left', fontSize: '12px', whiteSpace: 'pre-wrap' }}>
+            <strong>Error:</strong> {this.state.error && this.state.error.message ? this.state.error.message : String(this.state.error)}
+            <br /><br />
+            <strong>Stack:</strong> {this.state.error && this.state.error.stack ? this.state.error.stack : 'No stack trace available'}
+          </div>
           <button 
             onClick={() => {
               this.setState({ hasError: false, error: null });
