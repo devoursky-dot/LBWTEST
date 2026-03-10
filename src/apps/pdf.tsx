@@ -24,6 +24,7 @@ export default function PdfApp() {
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [showPageList, setShowPageList] = useState(false);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // 확대/축소 및 이동 상태
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -123,8 +124,36 @@ export default function PdfApp() {
     }
   };
 
+  // 전체 화면 토글 함수
+  const toggleFullScreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((err) => {
+        console.error(`전체 화면 모드 활성화 실패: ${err.message}`);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  // 공통 아이콘 버튼 스타일
+  const iconButtonStyle: React.CSSProperties = {
+    width: "45px",
+    height: "45px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#444",
+    color: "white",
+    border: "none",
+    borderRadius: "10px",
+    cursor: "pointer",
+    fontSize: "20px",
+  };
+
   return (
-    <div style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", backgroundColor: "#1a1a1a", overflow: "hidden", touchAction: "none" }}>
+    <div style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "row", backgroundColor: "#1a1a1a", overflow: "hidden", touchAction: "none" }}>
       {/* 메인 뷰어 영역 */}
       <div 
         ref={containerRef}
@@ -152,17 +181,34 @@ export default function PdfApp() {
         )}
       </div>
 
-      {/* 하단 툴바 */}
-      <div style={{ height: "60px", background: "#2c2c2c", display: "flex", alignItems: "center", padding: "0 20px", gap: "15px", color: "white", zIndex: 100 }}>
-        <input type="file" accept=".pdf" onChange={onFileChange} style={{ fontSize: "14px" }} />
+      {/* 우측 툴바 */}
+      <div style={{ 
+        width: "65px", 
+        background: "#2c2c2c", 
+        display: "flex", 
+        flexDirection: "column", 
+        alignItems: "center", 
+        justifyContent: "center", // 세로 중앙 배치
+        padding: "10px", 
+        gap: "15px", 
+        color: "white", 
+        zIndex: 100, 
+        flexShrink: 0,
+        borderLeft: "1px solid #444"
+      }}>
+        <input type="file" ref={fileInputRef} accept=".pdf" onChange={onFileChange} style={{ display: "none" }} />
+        <button onClick={() => fileInputRef.current?.click()} style={iconButtonStyle} title="파일 열기">
+          📂
+        </button>
+        
         {totalPages > 0 && (
-          <button 
-            onClick={() => setShowPageList(true)}
-            style={{ padding: "8px 20px", backgroundColor: "#007bff", color: "white", border: "none", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}
-          >
-            페이지 목록 ({currentPage}/{totalPages})
+          <button onClick={() => setShowPageList(true)} style={{ ...iconButtonStyle, backgroundColor: "#007bff" }} title="페이지 목록">
+            📑
           </button>
         )}
+        <button onClick={toggleFullScreen} style={{ ...iconButtonStyle, backgroundColor: "#6c757d" }} title="전체화면">
+          ⛶
+        </button>
       </div>
 
       {/* 80% 팝업 페이지 목록 */}
