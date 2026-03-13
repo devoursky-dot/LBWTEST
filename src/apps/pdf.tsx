@@ -1,12 +1,12 @@
-{/*
-# 기존 패키지 삭제
-npm uninstall pdfjs-dist
+/*
+ # 기존 패키지 삭제
+ npm uninstall pdfjs-dist
 
-# 저사양 기기용 안정 버전 설치
-npm install pdfjs-dist@2.16.105
+ # 저사양 기기용 안정 버전 설치
+ npm install pdfjs-dist@2.16.105
 
-버전을 반드시 맞추고 실행해야한다는 것을 항상 체크해주세요
-*/}
+ 버전을 반드시 맞추고 실행해야한다는 것을 항상 체크해주세요
+*/
 
 
 import React, { useState, useCallback, useRef } from "react";
