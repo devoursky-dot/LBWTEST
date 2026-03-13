@@ -1,0 +1,4 @@
+# Git이 자동으로 텍스트 파일을 감지하고 줄바꿈을 처리하도록 설정
+* text=auto
+
+*.json text eol=lf
