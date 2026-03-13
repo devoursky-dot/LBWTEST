@@ -1,4 +1,13 @@
-import React, { useState, useEffect, useRef, type ChangeEvent, type MouseEvent as ReactMouseEvent, type TouchEvent as ReactTouchEvent } from 'react';
+/*
+# 기존 패키지 삭제
+npm uninstall pdfjs-dist
+
+# 저사양 기기용 안정 버전 설치
+npm install pdfjs-dist@2.16.105
+
+버전을 반드시 맞추고 실행해야한다는 것을 항상 체크해주세요
+*/
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================================================
