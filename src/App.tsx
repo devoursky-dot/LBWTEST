@@ -24,51 +24,6 @@ const formatBytes = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-// 공유드라이브 실제 루트 폴더 기본 구조 (구글서버 수신 전 1초 표시용)
-const REAL_ROOT_ITEMS: DriveItem[] = [
-  {
-    id: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
-    name: '이병우',
-    type: 'folder',
-    folderId: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
-    size: '',
-    updatedAt: '',
-    viewUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
-    downloadUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
-  },
-  {
-    id: '1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
-    name: '요한계시록 12장.pdf',
-    type: 'document',
-    size: '',
-    updatedAt: '',
-    viewUrl: 'https://drive.google.com/file/d/1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg/view?usp=sharing',
-    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
-  }
-];
-
-// 이병우 하위 폴더 실제 기본 구조
-const REAL_SUBFOLDER_ITEMS: DriveItem[] = [
-  {
-    id: '1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
-    name: '2026 자이스토리 고2 미적분 1 - L.pdf',
-    type: 'document',
-    size: '',
-    updatedAt: '',
-    viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
-    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
-  },
-  {
-    id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
-    name: '미래엔_미적분1_교과서.pdf',
-    type: 'document',
-    size: '',
-    updatedAt: '',
-    viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
-    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
-  }
-];
-
 const App = () => {
   const [folderHistory, setFolderHistory] = useState<{ id: string; name: string }[]>([
     { id: ROOT_FOLDER_ID, name: 'LBW 공유드라이브' }
@@ -137,7 +92,7 @@ const App = () => {
 
     let scannedItems: DriveItem[] = [];
 
-    // 1. Vercel 서버리스 API 프록시로 구글 드라이브 실시간 HTML 파싱 (CORS 완전 해제)
+    // 1. Vercel 서버리스 API 프록시로 구글 드라이브 실시간 HTML 파싱 (100% CORS 해제)
     try {
       const res = await fetch(`/api/drive?id=${folderId}`);
       if (res.ok) {
@@ -145,7 +100,7 @@ const App = () => {
         scannedItems = parseDriveHtml(html);
       }
     } catch (e) {
-      console.warn('Vercel API proxy fetch failed, fallbacking...', e);
+      console.warn('Vercel API proxy fetch failed:', e);
     }
 
     // 2. 외부 프록시 백업 시도
@@ -163,21 +118,14 @@ const App = () => {
       }
     }
 
-    // 3. 실제 구글 드라이브 폴더별 100% 일치 데이터 맵
-    if (scannedItems.length === 0) {
-      if (folderId === ROOT_FOLDER_ID) {
-        scannedItems = REAL_ROOT_ITEMS;
-      } else {
-        scannedItems = REAL_SUBFOLDER_ITEMS;
-      }
-    }
-
+    // 100% 실시간 구글 서버 수집 결과만 바인딩 (하드코딩 배열 전면 삭제!)
     setItems(scannedItems);
     setIsLoading(false);
 
     // 구글 서버 실제 용량 비동기 측정
     fetchRealFileSizes(scannedItems);
   };
+
 
   const handleRefresh = () => {
     showToast('🔄 구글 드라이브 실시간 검색을 재실행합니다...');
