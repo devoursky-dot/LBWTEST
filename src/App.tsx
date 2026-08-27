@@ -9,19 +9,51 @@ interface DriveItem {
   name: string;
   type: 'folder' | 'document';
   folderId?: string;
-  size: string;
   updatedAt: string;
   viewUrl: string;
   downloadUrl: string;
 }
 
-// 용량 단위 변환 함수 (용량이 없거나 0이면 빈 문자열 반환)
-const formatBytes = (bytes: number): string => {
-  if (!bytes || isNaN(bytes) || bytes === 0) return '';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+// 구글 날짜 문자열 타임스탬프 변환 함수 (최신순 정렬용)
+const parseDriveDateToTimestamp = (rawDate: string): number => {
+  if (!rawDate) return 0;
+  const d = rawDate.trim().toLowerCase();
+
+  // 1. "10:12 pm", "11:13 am" 등 오늘 시간 데이터
+  if (d.includes('am') || d.includes('pm')) {
+    const timeMatch = d.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
+    if (timeMatch) {
+      let hours = parseInt(timeMatch[1], 10);
+      const minutes = parseInt(timeMatch[2], 10);
+      const isPm = timeMatch[3].toLowerCase() === 'pm';
+      if (isPm && hours < 12) hours += 12;
+      if (!isPm && hours === 12) hours = 0;
+      const today = new Date();
+      today.setHours(hours, minutes, 0, 0);
+      return today.getTime();
+    }
+    return new Date().getTime();
+  }
+
+  // 2. "11/11/25", "3/2/24" 등 슬래시 날짜 데이터
+  if (d.includes('/')) {
+    const parts = d.split('/');
+    if (parts.length === 3) {
+      const month = parseInt(parts[0], 10) - 1;
+      const day = parseInt(parts[1], 10);
+      let year = parseInt(parts[2], 10);
+      if (year < 100) year += 2000;
+      return new Date(year, month, day).getTime();
+    }
+  }
+
+  // 3. "Aug 9", "Mar 2" 등 월/일 데이터
+  const parsedDate = Date.parse(`${rawDate}, 2026`);
+  if (!isNaN(parsedDate)) {
+    return parsedDate;
+  }
+
+  return 0;
 };
 
 const App = () => {
@@ -45,25 +77,6 @@ const App = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // 구글 서버실제 파일 용량(Content-Length) 비동기 측정
-  const fetchRealFileSizes = (driveItems: DriveItem[]) => {
-    driveItems.forEach(async (item) => {
-      if (item.type === 'folder') return;
-
-      try {
-        const directUrl = `https://drive.usercontent.google.com/download?id=${item.id}&export=download&confirm=t`;
-        const res = await fetch(directUrl, { method: 'HEAD' });
-        const length = res.headers.get('content-length');
-        if (length) {
-          const exactSizeStr = formatBytes(parseInt(length, 10));
-          setItems(prev => prev.map(p => p.id === item.id ? { ...p, size: exactSizeStr } : p));
-        }
-      } catch (e) {
-        console.warn(`Size fetch for ${item.name} failed:`, e);
-      }
-    });
-  };
-
   const parseDriveHtml = (html: string): DriveItem[] => {
     const regex = /class="flip-entry" id="entry-([^"]+)"[\s\S]*?href="([^"]+)"[\s\S]*?class="flip-entry-title">([^<]+)<\/div>[\s\S]*?class="flip-entry-last-modified">\s*<div>([^<]+)<\/div>/g;
     const parsed: DriveItem[] = [];
@@ -80,7 +93,6 @@ const App = () => {
         name,
         type: isFolder ? 'folder' : 'document',
         folderId: isFolder ? id : undefined,
-        size: '',
         updatedAt: rawDate,
         viewUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/file/d/${id}/view?usp=sharing`,
         downloadUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/uc?export=download&confirm=t&id=${id}`
@@ -134,7 +146,6 @@ const App = () => {
       setFetchError(true);
     } else {
       setFetchError(false);
-      fetchRealFileSizes(scannedItems);
     }
   };
 
@@ -180,9 +191,24 @@ const App = () => {
     window.location.href = standardDownloadUrl;
   };
 
+  // 검색어 필터링
   const filteredItems = items.filter(item => 
     item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // 정렬 규칙: 폴더 상단 나열 (폴더명 순 정렬) -> 파일 하단 나열 (최신 수정날짜 순 정렬)
+  const sortedItems = [...filteredItems].sort((a, b) => {
+    if (a.type === 'folder' && b.type !== 'folder') return -1;
+    if (a.type !== 'folder' && b.type === 'folder') return 1;
+
+    if (a.type === 'folder' && b.type === 'folder') {
+      return a.name.localeCompare(b.name, 'ko');
+    }
+
+    const timeA = parseDriveDateToTimestamp(a.updatedAt);
+    const timeB = parseDriveDateToTimestamp(b.updatedAt);
+    return timeB - timeA;
+  });
 
   return (
     <div className="explorer-container" style={{ padding: '1.25rem' }}>
@@ -237,33 +263,31 @@ const App = () => {
               <tr>
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
-                <th style={{ width: '130px' }}>용량</th>
-                <th style={{ width: '130px' }}>수정 날짜</th>
+                <th style={{ width: '150px' }}>수정 날짜</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#60a5fa', fontSize: '1.1rem' }}>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#60a5fa', fontSize: '1.1rem' }}>
                     🔄 구글 드라이브 실시간 목록을 검색하여 불러오는 중입니다...
                   </td>
                 </tr>
               ) : fetchError ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#ef4444', fontSize: '1.1rem', fontWeight: 700 }}>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#ef4444', fontSize: '1.1rem', fontWeight: 700 }}>
                     ⚠️ 구글 드라이브 실시간 수집에 실패했습니다. 네트워크 상태를 확인하시거나 상단의 [🔄 실시간 다시 읽기] 버튼을 눌러주세요.
                   </td>
                 </tr>
-              ) : filteredItems.length === 0 ? (
+              ) : sortedItems.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
                     📁 이 폴더에 저장된 파일이나 하위 폴더가 없습니다.
                   </td>
                 </tr>
               ) : (
-
-                filteredItems.map(item => {
+                sortedItems.map(item => {
                   const isFolder = item.type === 'folder';
                   return (
                     <tr key={item.id}>
@@ -287,10 +311,7 @@ const App = () => {
                           <span>📄 {item.name}</span>
                         )}
                       </td>
-                      <td style={{ fontWeight: 600, color: '#60a5fa' }}>
-                        {item.size ? item.size : '-'}
-                      </td>
-                      <td style={{ fontWeight: 500, color: '#94a3b8', fontSize: '0.9rem' }}>
+                      <td style={{ fontWeight: 500, color: '#94a3b8', fontSize: '0.95rem' }}>
                         {item.updatedAt ? item.updatedAt : '-'}
                       </td>
                       <td>
