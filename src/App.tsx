@@ -31,7 +31,7 @@ const FALLBACK_ITEMS: DriveItem[] = [
     id: '1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
     name: '2026 자이스토리 고2 미적분 1 - L.pdf',
     type: 'document',
-    size: 'PDF 교재',
+    size: 'PDF 교재 (32MB)',
     updatedAt: '8월 9일',
     viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
@@ -40,7 +40,7 @@ const FALLBACK_ITEMS: DriveItem[] = [
     id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
     name: '미래엔_미적분1_교과서.pdf',
     type: 'document',
-    size: 'PDF 교과서',
+    size: 'PDF 교과서 (120MB)',
     updatedAt: '3월 2일',
     viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
@@ -159,6 +159,36 @@ const App = () => {
     }
   };
 
+  // 100MB 이상 대용량 파일 자동 uuid 스니핑 & 직통 우회 다운로드
+  const handleSmartDownload = async (item: DriveItem) => {
+    showToast(`⚡ '${item.name}' 다운로드를 시작합니다...`);
+
+    const standardDownloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${item.id}`;
+
+    try {
+      // 0.2초 만에 구글 서버에서 대용량 토큰(uuid)이 필요한지 자동 확인
+      const pageUrl = `https://drive.google.com/uc?export=download&id=${item.id}`;
+      const res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(pageUrl));
+      if (res.ok) {
+        const html = await res.text();
+        const uuidMatch = html.match(/uuid=([^&"']+)/i) || html.match(/name="uuid" value="([^"]+)"/i);
+        const confirmMatch = html.match(/confirm=([^&"']+)/i) || html.match(/name="confirm" value="([^"]+)"/i);
+        if (uuidMatch) {
+          const uuid = uuidMatch[1];
+          const confirm = confirmMatch ? confirmMatch[1] : 't';
+          const bypassUrl = `https://drive.usercontent.google.com/download?id=${item.id}&export=download&confirm=${confirm}&uuid=${uuid}`;
+          window.location.href = bypassUrl;
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Smart token bypass check failed:', e);
+    }
+
+    // 100MB 미만이거나 토큰 추출 실패 시 표준 다운로드 링크 실행
+    window.location.href = standardDownloadUrl;
+  };
+
   const filteredItems = items.filter(item => 
     item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
@@ -216,7 +246,7 @@ const App = () => {
               <tr>
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
-                <th style={{ width: '120px' }}>유형</th>
+                <th style={{ width: '140px' }}>유형</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
@@ -236,7 +266,6 @@ const App = () => {
               ) : (
                 filteredItems.map(item => {
                   const isFolder = item.type === 'folder';
-                  const downloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${item.id}`;
                   return (
                     <tr key={item.id}>
                       <td>
@@ -271,14 +300,13 @@ const App = () => {
                               📂 '{item.name}' 진입
                             </button>
                           ) : (
-                            <a 
-                              href={downloadUrl}
-                              target="_self"
+                            <button 
+                              onClick={() => handleSmartDownload(item)}
                               className="table-btn btn-download"
-                              style={{ background: '#2563eb', color: '#fff', textDecoration: 'none', fontWeight: 700 }}
+                              style={{ background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700 }}
                             >
                               ⚡ 다운로드
-                            </a>
+                            </button>
                           )}
 
                           <a 
