@@ -15,24 +15,24 @@ interface DriveItem {
   downloadUrl: string;
 }
 
-// 용량 단위 변환 함수
+// 용량 단위 변환 함수 (용량이 없거나 0이면 빈 문자열 반환)
 const formatBytes = (bytes: number): string => {
-  if (!bytes || isNaN(bytes) || bytes === 0) return 'PDF 문서';
+  if (!bytes || isNaN(bytes) || bytes === 0) return '';
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-// 백업 데이터 (초기 로딩 시 용량 자동 조회)
+// 백업 데이터 (초기 용량은 빈값으로 두고 실시간 수집 시에만 표기)
 const INITIAL_ITEMS: DriveItem[] = [
   {
     id: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
     name: '이병우',
     type: 'folder',
     folderId: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
-    size: '하위 폴더',
-    updatedAt: '이병우선생님',
+    size: '',
+    updatedAt: '',
     viewUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
     downloadUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
   },
@@ -40,8 +40,8 @@ const INITIAL_ITEMS: DriveItem[] = [
     id: '1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
     name: '2026 자이스토리 고2 미적분 1 - L.pdf',
     type: 'document',
-    size: '용량 계산 중...',
-    updatedAt: '8월 9일',
+    size: '',
+    updatedAt: '',
     viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
   },
@@ -49,8 +49,8 @@ const INITIAL_ITEMS: DriveItem[] = [
     id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
     name: '미래엔_미적분1_교과서.pdf',
     type: 'document',
-    size: '용량 계산 중...',
-    updatedAt: '3월 2일',
+    size: '',
+    updatedAt: '',
     viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
   }
@@ -76,7 +76,7 @@ const App = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // 실시간 구글 서버 실제 파일 용량(Content-Length) 비동기 수집 엔진
+  // 구글 서버실제 파일 용량(Content-Length) 비동기 측정
   const fetchRealFileSizes = (driveItems: DriveItem[]) => {
     driveItems.forEach(async (item) => {
       if (item.type === 'folder') return;
@@ -90,7 +90,7 @@ const App = () => {
           setItems(prev => prev.map(p => p.id === item.id ? { ...p, size: exactSizeStr } : p));
         }
       } catch (e) {
-        console.warn(`Dynamic size fetch for ${item.name} failed:`, e);
+        console.warn(`Size fetch for ${item.name} failed:`, e);
       }
     });
   };
@@ -110,8 +110,8 @@ const App = () => {
         name,
         type: isFolder ? 'folder' : 'document',
         folderId: isFolder ? id : undefined,
-        size: isFolder ? '하위 폴더' : '용량 조율 중...',
-        updatedAt: '실시간 검색됨',
+        size: '',
+        updatedAt: '',
         viewUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/file/d/${id}/view?usp=sharing`,
         downloadUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/uc?export=download&confirm=t&id=${id}`
       });
@@ -157,8 +157,8 @@ const App = () => {
             id: '1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
             name: '요한계시록 12장.pdf',
             type: 'document',
-            size: '용량 계산 중...',
-            updatedAt: '실시간 수집',
+            size: '',
+            updatedAt: '',
             viewUrl: 'https://drive.google.com/file/d/1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg/view?usp=sharing',
             downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
           }
@@ -169,7 +169,7 @@ const App = () => {
     setItems(scannedItems);
     setIsLoading(false);
 
-    // 실제 파일 용량(Content-Length) 구글 서버 100% 동적 실시간 수집 시작
+    // 구글 서버 실제 용량이 측정되는 경우에만 업데이트
     fetchRealFileSizes(scannedItems);
   };
 
@@ -188,7 +188,6 @@ const App = () => {
     }
   };
 
-  // 100MB 이상 대용량 파일 자동 uuid 스니핑 & 직통 우회 다운로드
   const handleSmartDownload = async (item: DriveItem) => {
     showToast(`⚡ '${item.name}' 다운로드를 시작합니다...`);
 
@@ -273,7 +272,7 @@ const App = () => {
               <tr>
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
-                <th style={{ width: '150px' }}>실제 용량</th>
+                <th style={{ width: '130px' }}>용량</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
@@ -315,7 +314,9 @@ const App = () => {
                           <span>📄 {item.name}</span>
                         )}
                       </td>
-                      <td style={{ fontWeight: 600, color: '#60a5fa' }}>{item.size}</td>
+                      <td style={{ fontWeight: 600, color: '#60a5fa' }}>
+                        {item.size ? item.size : '-'}
+                      </td>
                       <td>
                         <div className="table-btn-group">
                           {isFolder ? (
