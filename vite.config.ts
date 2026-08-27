@@ -5,8 +5,10 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   build: {
-    // 구형 브라우저 호환성을 위해 타겟을 chrome80 또는 es2015로 낮춤
-    target: 'chrome80',
-    cssTarget: 'chrome80'
+    // 전자칠판 내장 브라우저(구형 안드로이드 WebView/Chrome) 극대화 호환성 설정
+    target: ['es2015', 'chrome60', 'safari11', 'edge18'],
+    cssTarget: 'chrome60'
   }
 })
+
+

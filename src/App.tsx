@@ -30,10 +30,6 @@ const App = () => {
     showToast('✨ 구글 공유드라이브 링크가 복사되었습니다!');
   };
 
-  const handleDirectAccess = () => {
-    window.location.href = GOOGLE_DRIVE_URL;
-  };
-
   return (
     <div className="minimal-container">
       {/* 100% 중앙 정렬된 미니멀 구글 공유드라이브 접속 카드 */}
@@ -52,15 +48,18 @@ const App = () => {
           폴더 ID: <code>{DRIVE_FOLDER_ID}</code>
         </p>
 
-        {/* 메인 공유드라이브 접속 버튼 */}
-        <button onClick={handleDirectAccess} className="direct-cta-btn">
+        {/* 메인 공유드라이브 접속 버튼 (HTML 순수 a 태그 적용으로 전자칠판 브라우저 100% 호환) */}
+        <a 
+          href={GOOGLE_DRIVE_URL} 
+          className="direct-cta-btn"
+        >
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
             <polyline points="15 3 21 3 21 9"/>
             <line x1="10" y1="14" x2="21" y2="3"/>
           </svg>
           구글 공유드라이브 접속하기
-        </button>
+        </a>
 
         {/* 새 탭에서 열기 & 링크 복사 액션 */}
         <div className="minimal-actions">
