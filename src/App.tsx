@@ -15,8 +15,17 @@ interface DriveItem {
   downloadUrl: string;
 }
 
-// 백업 데이터
-const FALLBACK_ITEMS: DriveItem[] = [
+// 용량 단위 변환 함수
+const formatBytes = (bytes: number): string => {
+  if (!bytes || isNaN(bytes) || bytes === 0) return 'PDF 문서';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+};
+
+// 백업 데이터 (초기 로딩 시 용량 자동 조회)
+const INITIAL_ITEMS: DriveItem[] = [
   {
     id: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
     name: '이병우',
@@ -31,7 +40,7 @@ const FALLBACK_ITEMS: DriveItem[] = [
     id: '1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
     name: '2026 자이스토리 고2 미적분 1 - L.pdf',
     type: 'document',
-    size: 'PDF 교재 (32MB)',
+    size: '용량 계산 중...',
     updatedAt: '8월 9일',
     viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
@@ -40,7 +49,7 @@ const FALLBACK_ITEMS: DriveItem[] = [
     id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
     name: '미래엔_미적분1_교과서.pdf',
     type: 'document',
-    size: 'PDF 교과서 (120MB)',
+    size: '용량 계산 중...',
     updatedAt: '3월 2일',
     viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
@@ -67,6 +76,25 @@ const App = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // 실시간 구글 서버 실제 파일 용량(Content-Length) 비동기 수집 엔진
+  const fetchRealFileSizes = (driveItems: DriveItem[]) => {
+    driveItems.forEach(async (item) => {
+      if (item.type === 'folder') return;
+
+      try {
+        const directUrl = `https://drive.usercontent.google.com/download?id=${item.id}&export=download&confirm=t`;
+        const res = await fetch(directUrl, { method: 'HEAD' });
+        const length = res.headers.get('content-length');
+        if (length) {
+          const exactSizeStr = formatBytes(parseInt(length, 10));
+          setItems(prev => prev.map(p => p.id === item.id ? { ...p, size: exactSizeStr } : p));
+        }
+      } catch (e) {
+        console.warn(`Dynamic size fetch for ${item.name} failed:`, e);
+      }
+    });
+  };
+
   const parseDriveHtml = (html: string): DriveItem[] => {
     const regex = /class="flip-entry" id="entry-([^"]+)"[\s\S]*?href="([^"]+)"[\s\S]*?class="flip-entry-title">([^<]+)<\/div>/g;
     const parsed: DriveItem[] = [];
@@ -82,7 +110,7 @@ const App = () => {
         name,
         type: isFolder ? 'folder' : 'document',
         folderId: isFolder ? id : undefined,
-        size: isFolder ? '하위 폴더' : '파일 문서',
+        size: isFolder ? '하위 폴더' : '용량 조율 중...',
         updatedAt: '실시간 검색됨',
         viewUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/file/d/${id}/view?usp=sharing`,
         downloadUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/uc?export=download&confirm=t&id=${id}`
@@ -95,53 +123,54 @@ const App = () => {
     setIsLoading(true);
     const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
 
+    let scannedItems: DriveItem[] = [];
+
     try {
       const res = await fetch(targetUrl);
       if (res.ok) {
         const html = await res.text();
-        const liveItems = parseDriveHtml(html);
-        if (liveItems.length > 0) {
-          setItems(liveItems);
-          setIsLoading(false);
-          return;
-        }
+        scannedItems = parseDriveHtml(html);
       }
     } catch (e) {
       console.warn('Direct fetch blocked, trying proxy...');
     }
 
-    try {
-      const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl);
-      const res = await fetch(proxyUrl);
-      if (res.ok) {
-        const html = await res.text();
-        const liveItems = parseDriveHtml(html);
-        if (liveItems.length > 0) {
-          setItems(liveItems);
-          setIsLoading(false);
-          return;
+    if (scannedItems.length === 0) {
+      try {
+        const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl);
+        const res = await fetch(proxyUrl);
+        if (res.ok) {
+          const html = await res.text();
+          scannedItems = parseDriveHtml(html);
         }
+      } catch (e) {
+        console.warn('Proxy fetch failed:', e);
       }
-    } catch (e) {
-      console.warn('Proxy fetch failed:', e);
     }
 
-    if (folderId === ROOT_FOLDER_ID) {
-      setItems(FALLBACK_ITEMS);
-    } else {
-      setItems([
-        {
-          id: '1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
-          name: '요한계시록 12장.pdf',
-          type: 'document',
-          size: 'PDF 문서',
-          updatedAt: '실시간 수집',
-          viewUrl: 'https://drive.google.com/file/d/1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg/view?usp=sharing',
-          downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
-        }
-      ]);
+    if (scannedItems.length === 0) {
+      if (folderId === ROOT_FOLDER_ID) {
+        scannedItems = INITIAL_ITEMS;
+      } else {
+        scannedItems = [
+          {
+            id: '1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
+            name: '요한계시록 12장.pdf',
+            type: 'document',
+            size: '용량 계산 중...',
+            updatedAt: '실시간 수집',
+            viewUrl: 'https://drive.google.com/file/d/1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg/view?usp=sharing',
+            downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
+          }
+        ];
+      }
     }
+
+    setItems(scannedItems);
     setIsLoading(false);
+
+    // 실제 파일 용량(Content-Length) 구글 서버 100% 동적 실시간 수집 시작
+    fetchRealFileSizes(scannedItems);
   };
 
   const handleRefresh = () => {
@@ -166,7 +195,6 @@ const App = () => {
     const standardDownloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${item.id}`;
 
     try {
-      // 0.2초 만에 구글 서버에서 대용량 토큰(uuid)이 필요한지 자동 확인
       const pageUrl = `https://drive.google.com/uc?export=download&id=${item.id}`;
       const res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(pageUrl));
       if (res.ok) {
@@ -185,7 +213,6 @@ const App = () => {
       console.warn('Smart token bypass check failed:', e);
     }
 
-    // 100MB 미만이거나 토큰 추출 실패 시 표준 다운로드 링크 실행
     window.location.href = standardDownloadUrl;
   };
 
@@ -246,7 +273,7 @@ const App = () => {
               <tr>
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
-                <th style={{ width: '140px' }}>유형</th>
+                <th style={{ width: '150px' }}>실제 용량</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
@@ -288,7 +315,7 @@ const App = () => {
                           <span>📄 {item.name}</span>
                         )}
                       </td>
-                      <td>{item.size}</td>
+                      <td style={{ fontWeight: 600, color: '#60a5fa' }}>{item.size}</td>
                       <td>
                         <div className="table-btn-group">
                           {isFolder ? (
