@@ -108,13 +108,19 @@ const App = () => {
     let scannedItems: DriveItem[] = [];
     let isSuccess = false;
 
-    // 1. Vercel 서버리스 API 프록시로 구글 드라이브 실시간 HTML 파싱 (100% CORS 해제)
+    // 1. Vercel 서버리스 API 프록시로 구글 드라이브 실시간 HTML 파싱 (GitHub Pages 교차 출처 CORS 지원)
     try {
-      const res = await fetch(`/api/drive?id=${folderId}`);
+      const apiEndpoint = window.location.hostname.includes('vercel.app') 
+        ? `/api/drive?id=${folderId}` 
+        : `https://lbwtest.vercel.app/api/drive?id=${folderId}`;
+
+      const res = await fetch(apiEndpoint);
       if (res.ok) {
         const html = await res.text();
         scannedItems = parseDriveHtml(html);
-        isSuccess = true;
+        if (scannedItems.length > 0) {
+          isSuccess = true;
+        }
       }
     } catch (e) {
       console.warn('Vercel API proxy fetch failed:', e);
