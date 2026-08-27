@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import './App.css';
 
 const GOOGLE_DRIVE_FOLDER_URL = 'https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link';
@@ -35,7 +35,7 @@ const REAL_DRIVE_FILES: DriveFile[] = [
     size: 'PDF 교재',
     updatedAt: '8월 9일',
     viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
-    downloadUrl: 'https://drive.google.com/uc?export=download&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
+    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=no_antivirus&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
   },
   {
     id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
@@ -45,7 +45,7 @@ const REAL_DRIVE_FILES: DriveFile[] = [
     size: 'PDF 교과서',
     updatedAt: '3월 2일',
     viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
-    downloadUrl: 'https://drive.google.com/uc?export=download&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
+    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=no_antivirus&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
   }
 ];
 
@@ -57,6 +57,7 @@ const App = () => {
   const [showSaveModal, setShowSaveModal] = useState<boolean>(false);
   const [activeSaveFile, setActiveSaveFile] = useState<DriveFile | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -66,6 +67,24 @@ const App = () => {
   const handleCopyFolderLink = () => {
     navigator.clipboard.writeText(GOOGLE_DRIVE_FOLDER_URL);
     showToast('✨ 구글 드라이브 링크가 복사되었습니다!');
+  };
+
+  // 전자칠판 내장 브라우저 '연결 프로그램 선택' 팝업 없이 100% 직다운로드 트리거
+  const handleSilentDownload = (file: DriveFile) => {
+    showToast(`⚡ '${file.name}' 내장 브라우저 다운로드 시작!`);
+    
+    // 숨겨진 iframe으로 다운로드 스트림 전달 (안드로이드 앱 선택 팝업 우회)
+    if (iframeRef.current) {
+      iframeRef.current.src = file.downloadUrl;
+    } else {
+      const a = document.createElement('a');
+      a.href = file.downloadUrl;
+      a.target = '_self';
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
   };
 
   // 특정 폴더 지정 저장 / 강제 다운로드 핸들러
@@ -100,27 +119,8 @@ const App = () => {
       }
     }
 
-    // 2. Blob 강제 다운로드 시도 (열기 대리 실행 방지)
-    try {
-      setIsSaving(true);
-      showToast('⏳ 다운로드 스트림 준비 중...');
-      const response = await fetch(file.downloadUrl);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      setIsSaving(false);
-      showToast('📥 파일 다운로드가 시작되었습니다!');
-    } catch (err) {
-      setIsSaving(false);
-      // CORS 및 전자칠판 샌드박스 보완 안내 모달 표시
-      setShowSaveModal(true);
-    }
+    // 2. 내장 브라우저 직다운로드 실행
+    handleSilentDownload(file);
   };
 
   const filteredFiles = files.filter(file => {
@@ -141,6 +141,9 @@ const App = () => {
 
   return (
     <div className="explorer-container">
+      {/* 안드로이드 프로그램 선택 창 우회용 숨겨진 다운로드 iframe */}
+      <iframe ref={iframeRef} title="silent_download_frame" style={{ display: 'none', width: 0, height: 0 }} />
+
       {/* 스마트 칠판 상단 네비게이션 헤더 */}
       <header className="explorer-header">
         <div className="header-brand">
@@ -154,7 +157,7 @@ const App = () => {
           </div>
           <div>
             <h1 className="header-title">LBW 구글 공유드라이브 실제 파일 센터</h1>
-            <p className="header-sub">실시간 공유드라이브 파일열기 및 특정 폴더 직접 저장 (폴더 ID: {DRIVE_FOLDER_ID})</p>
+            <p className="header-sub">전자칠판 내장 브라우저 1초 원스톱 직접 다운로드 (폴더 ID: {DRIVE_FOLDER_ID})</p>
           </div>
         </div>
 
@@ -256,23 +259,34 @@ const App = () => {
                     최종 수정: {file.updatedAt}
                   </div>
 
-                  <div className="card-btn-group">
-                    <a 
-                      href={file.viewUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="touch-btn touch-btn-open"
-                    >
-                      👁️ 열기
-                    </a>
-
+                  <div className="card-btn-group" style={{ flexDirection: 'column', gap: '0.5rem' }}>
                     <button 
-                      onClick={() => handleSaveFile(file)}
-                      disabled={isSaving}
+                      onClick={() => handleSilentDownload(file)}
                       className="touch-btn touch-btn-download"
+                      style={{ background: '#2563eb', color: '#fff', border: 'none' }}
                     >
-                      💾 지정 폴더 저장
+                      ⚡ 내장브라우저 즉시 다운로드 (묻지 않음)
                     </button>
+
+                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                      <a 
+                        href={file.viewUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="touch-btn touch-btn-open"
+                      >
+                        👁️ 열기
+                      </a>
+
+                      <button 
+                        onClick={() => handleSaveFile(file)}
+                        disabled={isSaving}
+                        className="touch-btn touch-btn-open"
+                        style={{ background: 'rgba(255,255,255,0.06)', color: '#fff' }}
+                      >
+                        💾 폴더 지정
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -288,7 +302,7 @@ const App = () => {
                   <th>실제 파일명</th>
                   <th>종류</th>
                   <th>수정일</th>
-                  <th style={{ textAlign: 'center' }}>조작 (열기 / 지정 폴더 저장)</th>
+                  <th style={{ textAlign: 'center' }}>다운로드 / 열기</th>
                 </tr>
               </thead>
               <tbody>
@@ -306,6 +320,14 @@ const App = () => {
                       <td>{file.updatedAt}</td>
                       <td>
                         <div className="table-btn-group">
+                          <button 
+                            onClick={() => handleSilentDownload(file)}
+                            className="table-btn btn-download"
+                            style={{ background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer' }}
+                          >
+                            ⚡ 내장브라우저 즉시 다운로드
+                          </button>
+
                           <a 
                             href={file.viewUrl} 
                             target="_blank" 
@@ -314,14 +336,6 @@ const App = () => {
                           >
                             👁️ 열기
                           </a>
-                          <button 
-                            onClick={() => handleSaveFile(file)}
-                            disabled={isSaving}
-                            className="table-btn btn-download"
-                            style={{ border: 'none', cursor: 'pointer' }}
-                          >
-                            💾 지정 폴더 저장
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -339,36 +353,36 @@ const App = () => {
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
             <button className="modal-close-btn" onClick={() => setShowSaveModal(false)}>✕</button>
             
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              💾 전자칠판 다운로드/폴더 저장 안내
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginBottom: '0.75rem', display: 'flex', strokeLinecap: 'round', gap: '0.5rem' }}>
+              ⚡ 내장 브라우저 직접 다운로드 안내
             </h3>
 
             <div style={{ background: 'rgba(255,255,255,0.04)', padding: '1.25rem', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.08)', marginBottom: '1.25rem', fontSize: '0.9rem', color: '#cbd5e1', lineHeight: '1.6', textAlign: 'left' }}>
               <p style={{ marginBottom: '0.75rem', fontWeight: 700, color: '#60a5fa' }}>
-                📌 전자칠판 내장 브라우저에서 '열기' 대신 '특정 폴더 저장'하는 2가지 방법:
+                📌 '다른 앱으로 열기' 팝업 없이 바로 내장 브라우저에 파일 다운로드하는 방법:
               </p>
               
-              <ol style={{ paddingLeft: '1.25rem', margin: 0 }}>
+              <ul style={{ paddingLeft: '1.25rem', margin: 0 }}>
                 <li style={{ marginBottom: '0.5rem' }}>
-                  <strong>원 클릭 직접 다운로드 스트림:</strong> 아래 [직접 다운로드 스트림 실행] 버튼을 눌러 브라우저 다운로드 전용 탭으로 강제 실행합니다.
+                  <strong>[⚡ 내장브라우저 즉시 다운로드]</strong> 버튼을 누르시면 연결 프로그램 선택 팝업 없이 내장 브라우저의 기본 다운로드 폴더로 바로 다운로드됩니다.
                 </li>
                 <li>
-                  <strong>전자칠판 브라우저 저장 위치 변경:</strong> 브라우저 우측 상단 <code>[⋮ 설정] → [다운로드] → [다운로드 전에 각 파일 저장 위치 확인]</code> 항목을 켜시면 파일 저장 시 원하는 폴더(USB 또는 지정 경로)를 직접 고르실 수 있습니다.
+                  기존에 동일한 파일이 존재하는 경우, 브라우저가 자동으로 덮어쓰거나 최신 버전으로 즉시 다운로드를 완료합니다.
                 </li>
-              </ol>
+              </ul>
             </div>
 
             <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <a 
-                href={activeSaveFile.downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button 
+                onClick={() => {
+                  setShowSaveModal(false);
+                  handleSilentDownload(activeSaveFile);
+                }}
                 className="main-cta-btn"
                 style={{ flex: 1, padding: '0.875rem', fontSize: '0.95rem' }}
-                onClick={() => setShowSaveModal(false)}
               >
-                📥 직접 다운로드 스트림 실행
-              </a>
+                ⚡ 즉시 다운로드 실행
+              </button>
 
               <button 
                 onClick={() => setShowSaveModal(false)}
@@ -393,6 +407,7 @@ const App = () => {
 };
 
 export default App;
+
 
 
 
