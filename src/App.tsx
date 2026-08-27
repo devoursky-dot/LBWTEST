@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 
 const ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
@@ -13,13 +13,6 @@ interface DriveItem {
   updatedAt: string;
   viewUrl: string;
   downloadUrl: string;
-}
-
-interface DownloadStatus {
-  active: boolean;
-  fileName: string;
-  step: 'starting' | 'downloading' | 'completed';
-  message: string;
 }
 
 // 백업 데이터
@@ -41,7 +34,7 @@ const FALLBACK_ITEMS: DriveItem[] = [
     size: 'PDF 교재',
     updatedAt: '8월 9일',
     viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
-    downloadUrl: 'https://drive.usercontent.google.com/download?id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK&export=download&confirm=t',
+    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
   },
   {
     id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
@@ -50,7 +43,7 @@ const FALLBACK_ITEMS: DriveItem[] = [
     size: 'PDF 교과서',
     updatedAt: '3월 2일',
     viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
-    downloadUrl: 'https://drive.usercontent.google.com/download?id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ&export=download&confirm=t',
+    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
   }
 ];
 
@@ -64,15 +57,6 @@ const App = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const currentFolder = folderHistory[folderHistory.length - 1];
-
-  const [downloadProgress, setDownloadProgress] = useState<DownloadStatus>({
-    active: false,
-    fileName: '',
-    step: 'starting',
-    message: ''
-  });
-
-  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     fetchDriveFolderLive(currentFolder.id);
@@ -101,7 +85,7 @@ const App = () => {
         size: isFolder ? '하위 폴더' : '파일 문서',
         updatedAt: '실시간 검색됨',
         viewUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/file/d/${id}/view?usp=sharing`,
-        downloadUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`
+        downloadUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/uc?export=download&confirm=t&id=${id}`
       });
     }
     return parsed;
@@ -153,7 +137,7 @@ const App = () => {
           size: 'PDF 문서',
           updatedAt: '실시간 수집',
           viewUrl: 'https://drive.google.com/file/d/1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg/view?usp=sharing',
-          downloadUrl: 'https://drive.usercontent.google.com/download?id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg&export=download&confirm=t',
+          downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
         }
       ]);
     }
@@ -175,73 +159,12 @@ const App = () => {
     }
   };
 
-  // 1. 내장 브라우저 무음 스트림 다운로드
-  const handleSilentDownload = (item: DriveItem) => {
-    const directUrl = `https://drive.usercontent.google.com/download?id=${item.id}&export=download&confirm=t`;
-
-    setDownloadProgress({
-      active: true,
-      fileName: item.name,
-      step: 'starting',
-      message: `⏳ '${item.name}' 다운로드 준비 중...`
-    });
-
-    if (iframeRef.current) {
-      iframeRef.current.src = directUrl;
-    } else {
-      const a = document.createElement('a');
-      a.href = directUrl;
-      a.target = '_self';
-      a.download = item.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-
-    setTimeout(() => {
-      setDownloadProgress({
-        active: true,
-        fileName: item.name,
-        step: 'downloading',
-        message: `🔄 내장 브라우저로 다운로드 진행 중... (바이러스 검사 예외 통과)`
-      });
-    }, 1000);
-
-    setTimeout(() => {
-      setDownloadProgress({
-        active: true,
-        fileName: item.name,
-        step: 'completed',
-        message: `✅ '${item.name}' 다운로드가 성공적으로 완료되었습니다!`
-      });
-    }, 4500);
-
-    setTimeout(() => {
-      setDownloadProgress(prev => ({ ...prev, active: false }));
-    }, 7000);
-  };
-
   const filteredItems = items.filter(item => 
     item.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
     <div className="explorer-container" style={{ padding: '1.25rem' }}>
-      <iframe ref={iframeRef} title="silent_download_frame" style={{ display: 'none', width: 0, height: 0 }} />
-
-      {/* 다운로드 진행 배너 */}
-      {downloadProgress.active && (
-        <div className={`download-progress-banner ${downloadProgress.step}`}>
-          <div className="progress-spinner">
-            {downloadProgress.step === 'completed' ? '✅' : '⏳'}
-          </div>
-          <div className="progress-text-group">
-            <div className="progress-filename">{downloadProgress.fileName}</div>
-            <div className="progress-msg">{downloadProgress.message}</div>
-          </div>
-        </div>
-      )}
-
       {/* 최상단 컨트롤 바: [상위 폴더 이동 / 현재 폴더명] + [검색창] + [🔄 실시간 다시 읽기] */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -294,7 +217,7 @@ const App = () => {
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
                 <th style={{ width: '120px' }}>유형</th>
-                <th style={{ textAlign: 'center', width: '420px' }}>조작 (진입 / 다운로드 / 대용량 바이러스우회)</th>
+                <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
             <tbody>
@@ -313,7 +236,7 @@ const App = () => {
               ) : (
                 filteredItems.map(item => {
                   const isFolder = item.type === 'folder';
-                  const directBypassUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${item.id}`;
+                  const downloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${item.id}`;
                   return (
                     <tr key={item.id}>
                       <td>
@@ -348,26 +271,14 @@ const App = () => {
                               📂 '{item.name}' 진입
                             </button>
                           ) : (
-                            <>
-                              <button 
-                                onClick={() => handleSilentDownload(item)}
-                                className="table-btn btn-download"
-                                style={{ background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700 }}
-                                title="연결 앱 선택 없이 내장 브라우저 1초 직다운로드"
-                              >
-                                ⚡ 1초 직다운로드
-                              </button>
-
-                              <a 
-                                href={directBypassUrl}
-                                target="_self"
-                                className="table-btn"
-                                style={{ background: '#059669', color: '#fff', textDecoration: 'none', fontWeight: 700 }}
-                                title="구글 대용량 바이러스검사 수동 승인 다운로드"
-                              >
-                                📥 대용량 우회
-                              </a>
-                            </>
+                            <a 
+                              href={downloadUrl}
+                              target="_self"
+                              className="table-btn btn-download"
+                              style={{ background: '#2563eb', color: '#fff', textDecoration: 'none', fontWeight: 700 }}
+                            >
+                              ⚡ 다운로드
+                            </a>
                           )}
 
                           <a 
@@ -400,6 +311,7 @@ const App = () => {
 };
 
 export default App;
+
 
 
 
