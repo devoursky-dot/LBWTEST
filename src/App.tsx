@@ -58,7 +58,7 @@ const parseDriveDateToTimestamp = (rawDate: string): number => {
 
 const App = () => {
   const [folderHistory, setFolderHistory] = useState<{ id: string; name: string }[]>([
-    { id: ROOT_FOLDER_ID, name: 'LBW 공유드라이브' }
+    { id: ROOT_FOLDER_ID, name: '전자칠판' }
   ]);
   const [items, setItems] = useState<DriveItem[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -261,7 +261,7 @@ const App = () => {
           <table className="file-list-table">
             <thead>
               <tr>
-                <th style={{ width: '120px' }}>구분</th>
+                <th style={{ width: '130px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
                 <th style={{ width: '150px' }}>수정 날짜</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
@@ -294,9 +294,10 @@ const App = () => {
                       <td>
                         <span className="file-type-badge" style={{ 
                           backgroundColor: isFolder ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
-                          color: isFolder ? '#f59e0b' : '#ef4444' 
+                          color: isFolder ? '#f59e0b' : '#ef4444',
+                          whiteSpace: 'nowrap'
                         }}>
-                          {isFolder ? '📁 하위 폴더' : '📄 PDF 문서'}
+                          {isFolder ? '📁 하위폴더' : '📄 PDF문서'}
                         </span>
                       </td>
                       <td className="table-filename">
