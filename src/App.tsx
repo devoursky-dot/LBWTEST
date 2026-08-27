@@ -54,15 +54,73 @@ const App = () => {
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [viewMode, setViewMode] = useState<'embedded' | 'grid' | 'list'>('embedded');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showSaveModal, setShowSaveModal] = useState<boolean>(false);
+  const [activeSaveFile, setActiveSaveFile] = useState<DriveFile | null>(null);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    setTimeout(() => setToastMessage(null), 3500);
   };
 
   const handleCopyFolderLink = () => {
     navigator.clipboard.writeText(GOOGLE_DRIVE_FOLDER_URL);
     showToast('✨ 구글 드라이브 링크가 복사되었습니다!');
+  };
+
+  // 특정 폴더 지정 저장 / 강제 다운로드 핸들러
+  const handleSaveFile = async (file: DriveFile) => {
+    setActiveSaveFile(file);
+
+    // 1. 최신 File System Access API 지원 시: 폴더 선택 팝업 열기
+    if ('showSaveFilePicker' in window) {
+      try {
+        setIsSaving(true);
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: file.name,
+          types: [{
+            description: 'PDF 문서 및 파일',
+            accept: { 'application/pdf': ['.pdf'], 'application/octet-stream': ['.*'] }
+          }]
+        });
+
+        showToast('⏳ 다운로드 중입니다. 잠시만 기다려주세요...');
+        const response = await fetch(file.downloadUrl);
+        const blob = await response.blob();
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        setIsSaving(false);
+        showToast('🎉 지정한 폴더에 파일이 성공적으로 저장되었습니다!');
+        return;
+      } catch (err: any) {
+        setIsSaving(false);
+        if (err.name === 'AbortError') return; // 사용자가 팝업 취소
+        console.warn('showSaveFilePicker fallback:', err);
+      }
+    }
+
+    // 2. Blob 강제 다운로드 시도 (열기 대리 실행 방지)
+    try {
+      setIsSaving(true);
+      showToast('⏳ 다운로드 스트림 준비 중...');
+      const response = await fetch(file.downloadUrl);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setIsSaving(false);
+      showToast('📥 파일 다운로드가 시작되었습니다!');
+    } catch (err) {
+      setIsSaving(false);
+      // CORS 및 전자칠판 샌드박스 보완 안내 모달 표시
+      setShowSaveModal(true);
+    }
   };
 
   const filteredFiles = files.filter(file => {
@@ -96,7 +154,7 @@ const App = () => {
           </div>
           <div>
             <h1 className="header-title">LBW 구글 공유드라이브 실제 파일 센터</h1>
-            <p className="header-sub">실시간 공유드라이브 파일열기 및 다운로드 (폴더 ID: {DRIVE_FOLDER_ID})</p>
+            <p className="header-sub">실시간 공유드라이브 파일열기 및 특정 폴더 직접 저장 (폴더 ID: {DRIVE_FOLDER_ID})</p>
           </div>
         </div>
 
@@ -208,14 +266,13 @@ const App = () => {
                       👁️ 열기
                     </a>
 
-                    <a 
-                      href={file.downloadUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
+                    <button 
+                      onClick={() => handleSaveFile(file)}
+                      disabled={isSaving}
                       className="touch-btn touch-btn-download"
                     >
-                      📥 다운로드
-                    </a>
+                      💾 지정 폴더 저장
+                    </button>
                   </div>
                 </div>
               );
@@ -231,7 +288,7 @@ const App = () => {
                   <th>실제 파일명</th>
                   <th>종류</th>
                   <th>수정일</th>
-                  <th style={{ textAlign: 'center' }}>조작 (열기 / 다운로드)</th>
+                  <th style={{ textAlign: 'center' }}>조작 (열기 / 지정 폴더 저장)</th>
                 </tr>
               </thead>
               <tbody>
@@ -257,14 +314,14 @@ const App = () => {
                           >
                             👁️ 열기
                           </a>
-                          <a 
-                            href={file.downloadUrl} 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
+                          <button 
+                            onClick={() => handleSaveFile(file)}
+                            disabled={isSaving}
                             className="table-btn btn-download"
+                            style={{ border: 'none', cursor: 'pointer' }}
                           >
-                            📥 다운로드
-                          </a>
+                            💾 지정 폴더 저장
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -275,6 +332,55 @@ const App = () => {
           </div>
         )}
       </main>
+
+      {/* 전자칠판 다운로드/저장 보완 안내 모달 */}
+      {showSaveModal && activeSaveFile && (
+        <div className="modal-overlay" onClick={() => setShowSaveModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+            <button className="modal-close-btn" onClick={() => setShowSaveModal(false)}>✕</button>
+            
+            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              💾 전자칠판 다운로드/폴더 저장 안내
+            </h3>
+
+            <div style={{ background: 'rgba(255,255,255,0.04)', padding: '1.25rem', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.08)', marginBottom: '1.25rem', fontSize: '0.9rem', color: '#cbd5e1', lineHeight: '1.6', textAlign: 'left' }}>
+              <p style={{ marginBottom: '0.75rem', fontWeight: 700, color: '#60a5fa' }}>
+                📌 전자칠판 내장 브라우저에서 '열기' 대신 '특정 폴더 저장'하는 2가지 방법:
+              </p>
+              
+              <ol style={{ paddingLeft: '1.25rem', margin: 0 }}>
+                <li style={{ marginBottom: '0.5rem' }}>
+                  <strong>원 클릭 직접 다운로드 스트림:</strong> 아래 [직접 다운로드 스트림 실행] 버튼을 눌러 브라우저 다운로드 전용 탭으로 강제 실행합니다.
+                </li>
+                <li>
+                  <strong>전자칠판 브라우저 저장 위치 변경:</strong> 브라우저 우측 상단 <code>[⋮ 설정] → [다운로드] → [다운로드 전에 각 파일 저장 위치 확인]</code> 항목을 켜시면 파일 저장 시 원하는 폴더(USB 또는 지정 경로)를 직접 고르실 수 있습니다.
+                </li>
+              </ol>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem' }}>
+              <a 
+                href={activeSaveFile.downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="main-cta-btn"
+                style={{ flex: 1, padding: '0.875rem', fontSize: '0.95rem' }}
+                onClick={() => setShowSaveModal(false)}
+              >
+                📥 직접 다운로드 스트림 실행
+              </a>
+
+              <button 
+                onClick={() => setShowSaveModal(false)}
+                className="secondary-btn"
+                style={{ padding: '0.875rem 1.25rem' }}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 토스트 메시지 */}
       {toastMessage && (
@@ -287,6 +393,7 @@ const App = () => {
 };
 
 export default App;
+
 
 
 
