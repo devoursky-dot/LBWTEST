@@ -31,6 +31,7 @@ const App = () => {
   const [items, setItems] = useState<DriveItem[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [fetchError, setFetchError] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const currentFolder = folderHistory[folderHistory.length - 1];
@@ -89,8 +90,10 @@ const App = () => {
 
   const fetchDriveFolderLive = async (folderId: string) => {
     setIsLoading(true);
+    setFetchError(false);
 
     let scannedItems: DriveItem[] = [];
+    let isSuccess = false;
 
     // 1. Vercel 서버리스 API 프록시로 구글 드라이브 실시간 HTML 파싱 (100% CORS 해제)
     try {
@@ -98,34 +101,41 @@ const App = () => {
       if (res.ok) {
         const html = await res.text();
         scannedItems = parseDriveHtml(html);
+        isSuccess = true;
       }
     } catch (e) {
       console.warn('Vercel API proxy fetch failed:', e);
     }
 
     // 2. 외부 프록시 백업 시도
-    if (scannedItems.length === 0) {
+    if (!isSuccess || scannedItems.length === 0) {
       try {
         const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
         const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl);
         const res = await fetch(proxyUrl);
         if (res.ok) {
           const html = await res.text();
-          scannedItems = parseDriveHtml(html);
+          const backupItems = parseDriveHtml(html);
+          if (backupItems.length > 0) {
+            scannedItems = backupItems;
+            isSuccess = true;
+          }
         }
       } catch (e) {
         console.warn('Allorigins proxy failed:', e);
       }
     }
 
-    // 100% 실시간 구글 서버 수집 결과만 바인딩 (하드코딩 배열 전면 삭제!)
     setItems(scannedItems);
     setIsLoading(false);
 
-    // 구글 서버 실제 용량 비동기 측정
-    fetchRealFileSizes(scannedItems);
+    if (!isSuccess && scannedItems.length === 0) {
+      setFetchError(true);
+    } else {
+      setFetchError(false);
+      fetchRealFileSizes(scannedItems);
+    }
   };
-
 
   const handleRefresh = () => {
     showToast('🔄 구글 드라이브 실시간 검색을 재실행합니다...');
@@ -237,6 +247,12 @@ const App = () => {
                     🔄 구글 드라이브 실시간 목록을 검색하여 불러오는 중입니다...
                   </td>
                 </tr>
+              ) : fetchError ? (
+                <tr>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#ef4444', fontSize: '1.1rem', fontWeight: 700 }}>
+                    ⚠️ 구글 드라이브 실시간 수집에 실패했습니다. 네트워크 상태를 확인하시거나 상단의 [🔄 실시간 다시 읽기] 버튼을 눌러주세요.
+                  </td>
+                </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
@@ -244,6 +260,7 @@ const App = () => {
                   </td>
                 </tr>
               ) : (
+
                 filteredItems.map(item => {
                   const isFolder = item.type === 'folder';
                   return (
