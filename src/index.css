@@ -563,20 +563,173 @@ body {
   font-size: 0.85rem;
 }
 
-/* Responsive adjustments */
-@media (max-width: 768px) {
-  .navbar {
-    padding: 1rem 1.25rem;
+/* Minimal Screen Layout Styles */
+.minimal-container {
+  min-height: 100vh;
+  width: 100vw;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1.5rem;
+  background: radial-gradient(circle at 50% 50%, rgba(59, 130, 246, 0.15) 0%, transparent 60%),
+              radial-gradient(circle at 20% 20%, rgba(139, 92, 246, 0.12) 0%, transparent 50%),
+              #07090e;
+  position: relative;
+  overflow: hidden;
+}
+
+.minimal-drive-card {
+  background: rgba(18, 24, 38, 0.75);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px;
+  padding: 3.5rem 3rem;
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 20px 60px -15px rgba(0, 0, 0, 0.7), 0 0 40px -10px rgba(59, 130, 246, 0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.3s ease;
+}
+
+.minimal-drive-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(66, 133, 244, 0.4);
+}
+
+.drive-icon-large {
+  width: 100px;
+  height: 100px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 2rem;
+  box-shadow: inset 0 0 25px rgba(255, 255, 255, 0.05);
+}
+
+.minimal-title {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.02em;
+}
+
+.minimal-subtitle {
+  color: var(--text-muted);
+  font-size: 0.925rem;
+  margin-bottom: 2.25rem;
+}
+
+.minimal-subtitle code {
+  color: #60a5fa;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.direct-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 1.25rem 2rem;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 50%, #2563eb 100%);
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  box-shadow: 0 12px 35px -5px rgba(59, 130, 246, 0.5);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  text-decoration: none;
+  margin-bottom: 1.25rem;
+}
+
+.direct-cta-btn:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 18px 40px -5px rgba(59, 130, 246, 0.75);
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 50%, #4f46e5 100%);
+}
+
+.direct-cta-btn:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.minimal-actions {
+  display: flex;
+  gap: 0.875rem;
+  width: 100%;
+  margin-bottom: 1.75rem;
+}
+
+.secondary-btn {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.secondary-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+}
+
+.auto-redirect-box {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 1.25rem;
+  width: 100%;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-label input {
+  accent-color: #3b82f6;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .minimal-drive-card {
+    padding: 2.5rem 1.5rem;
   }
-  .hero-title {
-    font-size: 2.1rem;
+  .minimal-title {
+    font-size: 1.6rem;
   }
-  .drive-card {
-    padding: 2rem 1.25rem;
-  }
-  .main-cta-btn {
-    padding: 1rem 1.5rem;
-    font-size: 1rem;
+  .direct-cta-btn {
+    padding: 1rem;
+    font-size: 1.05rem;
   }
 }
+
 
