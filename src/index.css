@@ -947,13 +947,68 @@ body {
   border: none;
 }
 
-.empty-files-box {
-  grid-column: 1 / -1;
-  text-align: center;
-  padding: 4rem;
-  color: var(--text-muted);
-  font-size: 1.1rem;
+/* Floating Download Progress Banner */
+.download-progress-banner {
+  position: fixed;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  border-radius: 100px;
+  padding: 0.9rem 2rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(59, 130, 246, 0.3);
+  animation: slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  max-width: 90vw;
 }
+
+.download-progress-banner.completed {
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 20px rgba(16, 185, 129, 0.3);
+}
+
+@keyframes slideDown {
+  from { transform: translate(-50%, -30px); opacity: 0; }
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
+.progress-spinner {
+  font-size: 1.4rem;
+  animation: pulse 1.5s infinite alternate;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  100% { transform: scale(1.15); }
+}
+
+.progress-text-group {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.progress-filename {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #ffffff;
+}
+
+.progress-msg {
+  font-size: 0.8rem;
+  color: #60a5fa;
+}
+
+.download-progress-banner.completed .progress-msg {
+  color: #34d399;
+}
+
 
 
 
