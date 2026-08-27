@@ -65,13 +65,14 @@ const App = () => {
   };
 
   const parseDriveHtml = (html: string): DriveItem[] => {
-    const regex = /class="flip-entry" id="entry-([^"]+)"[\s\S]*?href="([^"]+)"[\s\S]*?class="flip-entry-title">([^<]+)<\/div>/g;
+    const regex = /class="flip-entry" id="entry-([^"]+)"[\s\S]*?href="([^"]+)"[\s\S]*?class="flip-entry-title">([^<]+)<\/div>[\s\S]*?class="flip-entry-last-modified">\s*<div>([^<]+)<\/div>/g;
     const parsed: DriveItem[] = [];
     let match;
     while ((match = regex.exec(html)) !== null) {
       const id = match[1];
       const href = match[2];
       const name = match[3].trim();
+      const rawDate = match[4].trim();
       const isFolder = href.includes('/drive/folders/');
 
       parsed.push({
@@ -80,7 +81,7 @@ const App = () => {
         type: isFolder ? 'folder' : 'document',
         folderId: isFolder ? id : undefined,
         size: '',
-        updatedAt: '',
+        updatedAt: rawDate,
         viewUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/file/d/${id}/view?usp=sharing`,
         downloadUrl: isFolder ? `https://drive.google.com/drive/folders/${id}?usp=sharing` : `https://drive.google.com/uc?export=download&confirm=t&id=${id}`
       });
@@ -237,25 +238,26 @@ const App = () => {
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
                 <th style={{ width: '130px' }}>용량</th>
+                <th style={{ width: '130px' }}>수정 날짜</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#60a5fa', fontSize: '1.1rem' }}>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#60a5fa', fontSize: '1.1rem' }}>
                     🔄 구글 드라이브 실시간 목록을 검색하여 불러오는 중입니다...
                   </td>
                 </tr>
               ) : fetchError ? (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#ef4444', fontSize: '1.1rem', fontWeight: 700 }}>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#ef4444', fontSize: '1.1rem', fontWeight: 700 }}>
                     ⚠️ 구글 드라이브 실시간 수집에 실패했습니다. 네트워크 상태를 확인하시거나 상단의 [🔄 실시간 다시 읽기] 버튼을 눌러주세요.
                   </td>
                 </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
                     📁 이 폴더에 저장된 파일이나 하위 폴더가 없습니다.
                   </td>
                 </tr>
@@ -287,6 +289,9 @@ const App = () => {
                       </td>
                       <td style={{ fontWeight: 600, color: '#60a5fa' }}>
                         {item.size ? item.size : '-'}
+                      </td>
+                      <td style={{ fontWeight: 500, color: '#94a3b8', fontSize: '0.9rem' }}>
+                        {item.updatedAt ? item.updatedAt : '-'}
                       </td>
                       <td>
                         <div className="table-btn-group">
