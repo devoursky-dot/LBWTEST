@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
 
-const GOOGLE_DRIVE_FOLDER_URL = 'https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link';
 const ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
 
 // 구글 공유드라이브 아이템 구조
@@ -23,7 +22,7 @@ interface DownloadStatus {
   message: string;
 }
 
-// 실시간 동기화 실패 시 초기 폴더 데이터
+// 백업 데이터
 const FALLBACK_ITEMS: DriveItem[] = [
   {
     id: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
@@ -62,7 +61,6 @@ const App = () => {
   const [items, setItems] = useState<DriveItem[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [lastSyncTime, setLastSyncTime] = useState<string>('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const currentFolder = folderHistory[folderHistory.length - 1];
@@ -76,7 +74,6 @@ const App = () => {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // 1. 폴더 변경 시 구글 드라이브 실시간 자동 검색 수행
   useEffect(() => {
     fetchDriveFolderLive(currentFolder.id);
   }, [currentFolder.id]);
@@ -86,7 +83,6 @@ const App = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // 구글 드라이브 HTML 100% 동적 분석 스크래퍼 엔진
   const parseDriveHtml = (html: string): DriveItem[] => {
     const regex = /class="flip-entry" id="entry-([^"]+)"[\s\S]*?href="([^"]+)"[\s\S]*?class="flip-entry-title">([^<]+)<\/div>/g;
     const parsed: DriveItem[] = [];
@@ -111,20 +107,18 @@ const App = () => {
     return parsed;
   };
 
-  // 구글 드라이브 서버실시간 수집 함수
   const fetchDriveFolderLive = async (folderId: string) => {
     setIsLoading(true);
     const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
 
     try {
-      // Direct Fetch 시도
       const res = await fetch(targetUrl);
       if (res.ok) {
         const html = await res.text();
         const liveItems = parseDriveHtml(html);
         if (liveItems.length > 0) {
           setItems(liveItems);
-          finishSync();
+          setIsLoading(false);
           return;
         }
       }
@@ -132,7 +126,6 @@ const App = () => {
       console.warn('Direct fetch blocked, trying proxy...');
     }
 
-    // CORS Proxy Fallback
     try {
       const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl);
       const res = await fetch(proxyUrl);
@@ -141,7 +134,7 @@ const App = () => {
         const liveItems = parseDriveHtml(html);
         if (liveItems.length > 0) {
           setItems(liveItems);
-          finishSync();
+          setIsLoading(false);
           return;
         }
       }
@@ -149,7 +142,6 @@ const App = () => {
       console.warn('Proxy fetch failed:', e);
     }
 
-    // Fallback 백업 목록
     if (folderId === ROOT_FOLDER_ID) {
       setItems(FALLBACK_ITEMS);
     } else {
@@ -165,14 +157,7 @@ const App = () => {
         }
       ]);
     }
-    finishSync();
-  };
-
-  const finishSync = () => {
     setIsLoading(false);
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setLastSyncTime(timeStr);
   };
 
   const handleRefresh = () => {
@@ -180,18 +165,16 @@ const App = () => {
     fetchDriveFolderLive(currentFolder.id);
   };
 
-  // 하위 폴더 진입
   const handleOpenFolder = (folderId: string, folderName: string) => {
     setFolderHistory(prev => [...prev, { id: folderId, name: folderName }]);
-    showToast(`📂 '${folderName}' 하위 폴더로 진입합니다.`);
   };
 
-  // 특정 상위 폴더로 되돌아가기
-  const handleBreadcrumbClick = (index: number) => {
-    setFolderHistory(prev => prev.slice(0, index + 1));
+  const handleGoBack = () => {
+    if (folderHistory.length > 1) {
+      setFolderHistory(prev => prev.slice(0, prev.length - 1));
+    }
   };
 
-  // 원스톱 내장브라우저 직다운로드
   const handleSilentDownload = (item: DriveItem) => {
     setDownloadProgress({
       active: true,
@@ -240,7 +223,7 @@ const App = () => {
   );
 
   return (
-    <div className="explorer-container">
+    <div className="explorer-container" style={{ padding: '1.25rem' }}>
       <iframe ref={iframeRef} title="silent_download_frame" style={{ display: 'none', width: 0, height: 0 }} />
 
       {/* 다운로드 진행 배너 */}
@@ -256,85 +239,50 @@ const App = () => {
         </div>
       )}
 
-      {/* 헤더 바 */}
-      <header className="explorer-header">
-        <div className="header-brand">
-          <div className="brand-icon">
-            <svg width="32" height="32" viewBox="0 0 87.3 78" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M6.6 66.85L22.25 39.75H80.7L65.05 66.85H6.6Z" fill="#0066DA"/>
-              <path d="M43.65 11.15L59.3 38.25L29.9 89.25L14.25 62.15L43.65 11.15Z" fill="#00AC47"/>
-              <path d="M73.5 11.15L89.15 38.25H57.85L42.2 11.15H73.5Z" fill="#EA4335"/>
-              <path d="M43.65 11.15L28 38.25H59.3L43.65 11.15Z" fill="#FFBA00"/>
-            </svg>
-          </div>
-          <div>
-            <h1 className="header-title">LBW 구글 공유드라이브 자동 검색 스마트 탐색기</h1>
-            <p className="header-sub">
-              {isLoading ? '⏳ 구글 드라이브 실시간 검색 중...' : `🟢 실시간 수집 완료 (${lastSyncTime})`}
-            </p>
-          </div>
+      {/* 최상단 컨트롤 바: [상위 폴더 이동 / 현재 폴더명] + [검색창] + [🔄 실시간 다시 읽기] */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {folderHistory.length > 1 && (
+            <button 
+              onClick={handleGoBack}
+              style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '0.65rem 1.25rem', borderRadius: '10px', fontWeight: '700', fontSize: '0.95rem', cursor: 'pointer' }}
+            >
+              ← 상위 폴더로 이동
+            </button>
+          )}
+          <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            📂 {currentFolder.name}
+          </span>
         </div>
 
-        <div className="header-actions">
-          {/* 🔄 실시간 다시 읽기 버튼 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div className="search-box" style={{ maxWidth: '280px', margin: 0 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input 
+              type="text" 
+              placeholder="파일/하위폴더 검색..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm && (
+              <button className="clear-search-btn" onClick={() => setSearchTerm('')}>✕</button>
+            )}
+          </div>
+
           <button 
             onClick={handleRefresh} 
             disabled={isLoading}
             className="btn-secondary-touch"
-            style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#fff', border: 'none' }}
+            style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#fff', border: 'none', padding: '0.65rem 1.25rem', fontWeight: 700, fontSize: '0.95rem' }}
           >
             <span className={isLoading ? 'spinning-icon' : ''}>🔄</span> {isLoading ? '검색 중...' : '실시간 다시 읽기'}
           </button>
-
-          <a 
-            href={GOOGLE_DRIVE_FOLDER_URL} 
-            target="_blank" 
-            rel="noopener noreferrer" 
-            className="btn-drive-main"
-          >
-            구글 드라이브 열기
-          </a>
-        </div>
-      </header>
-
-      {/* 폴더 브레드크럼 탐색 바 */}
-      <div className="breadcrumb-bar">
-        {folderHistory.map((folder, idx) => (
-          <span key={folder.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {idx > 0 && <span className="breadcrumb-sep">›</span>}
-            <button 
-              className={idx === folderHistory.length - 1 ? 'breadcrumb-active' : 'breadcrumb-item'}
-              onClick={() => handleBreadcrumbClick(idx)}
-            >
-              {idx === 0 ? '🏠 최상위 공유드라이브' : `📂 ${folder.name}`}
-            </button>
-          </span>
-        ))}
-      </div>
-
-      {/* 검색 및 툴바 */}
-      <div className="explorer-toolbar" style={{ justifyContent: 'space-between' }}>
-        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          ≡ 실시간 목록 탐색 뷰 ({filteredItems.length}개 항목)
-        </div>
-
-        <div className="search-box" style={{ maxWidth: '350px' }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          <input 
-            type="text" 
-            placeholder="파일/하위폴더 이름 검색..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          {searchTerm && (
-            <button className="clear-search-btn" onClick={() => setSearchTerm('')}>✕</button>
-          )}
         </div>
       </div>
 
-      {/* 메인 목록형 전용 리스트 뷰 */}
+      {/* 탐색기 폴더 구조 목록 테이블 */}
       <main className="explorer-content">
         <div className="file-list-wrapper">
           <table className="file-list-table">
@@ -343,20 +291,19 @@ const App = () => {
                 <th style={{ width: '120px' }}>구분</th>
                 <th>파일 / 하위 폴더명</th>
                 <th style={{ width: '120px' }}>유형</th>
-                <th style={{ width: '160px' }}>상태</th>
                 <th style={{ textAlign: 'center', width: '320px' }}>조작 (진입 / 다운로드 / 열기)</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#60a5fa', fontSize: '1.1rem' }}>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#60a5fa', fontSize: '1.1rem' }}>
                     🔄 구글 드라이브 실시간 목록을 검색하여 불러오는 중입니다...
                   </td>
                 </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
                     📁 이 폴더에 저장된 파일이나 하위 폴더가 없습니다.
                   </td>
                 </tr>
@@ -386,7 +333,6 @@ const App = () => {
                         )}
                       </td>
                       <td>{item.size}</td>
-                      <td style={{ fontSize: '0.85rem', color: '#94a3b8' }}>{item.updatedAt}</td>
                       <td>
                         <div className="table-btn-group">
                           {isFolder ? (
@@ -395,7 +341,7 @@ const App = () => {
                               className="table-btn"
                               style={{ background: '#f59e0b', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700 }}
                             >
-                              📂 '{item.name}' 진입 (탐색)
+                              📂 '{item.name}' 진입
                             </button>
                           ) : (
                             <button 
@@ -437,6 +383,7 @@ const App = () => {
 };
 
 export default App;
+
 
 
 
