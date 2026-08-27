@@ -105,10 +105,25 @@ const App = () => {
     setIsLoading(true);
     setFetchError(false);
 
+    // 0. 클라이언트 세션 스토리지 캐시 우선 확인 (여러 교실 동시 접속 시 즉시 로딩)
+    const cacheKey = `drive_cache_${folderId}`;
+    const cachedData = sessionStorage.getItem(cacheKey);
+    if (cachedData) {
+      try {
+        const parsedCache = JSON.parse(cachedData);
+        if (Array.isArray(parsedCache) && parsedCache.length > 0) {
+          setItems(parsedCache);
+          setIsLoading(false);
+        }
+      } catch (e) {
+        sessionStorage.removeItem(cacheKey);
+      }
+    }
+
     let scannedItems: DriveItem[] = [];
     let isSuccess = false;
 
-    // 1. Vercel 서버리스 API 프록시로 구글 드라이브 실시간 HTML 파싱 (GitHub Pages 교차 출처 CORS 지원)
+    // 1. Vercel CDN 프록시 서버 수집 (Edge Caching 적용)
     try {
       const apiEndpoint = window.location.hostname.includes('vercel.app') 
         ? `/api/drive?id=${folderId}` 
@@ -117,8 +132,9 @@ const App = () => {
       const res = await fetch(apiEndpoint);
       if (res.ok) {
         const html = await res.text();
-        scannedItems = parseDriveHtml(html);
-        if (scannedItems.length > 0) {
+        const liveItems = parseDriveHtml(html);
+        if (liveItems.length > 0) {
+          scannedItems = liveItems;
           isSuccess = true;
         }
       }
@@ -126,12 +142,29 @@ const App = () => {
       console.warn('Vercel API proxy fetch failed:', e);
     }
 
-    // 2. 외부 프록시 백업 시도
+    // 2. 백업 1: corsproxy.io
     if (!isSuccess || scannedItems.length === 0) {
       try {
         const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
-        const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl);
-        const res = await fetch(proxyUrl);
+        const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`);
+        if (res.ok) {
+          const html = await res.text();
+          const backupItems = parseDriveHtml(html);
+          if (backupItems.length > 0) {
+            scannedItems = backupItems;
+            isSuccess = true;
+          }
+        }
+      } catch (e) {
+        console.warn('Corsproxy failed:', e);
+      }
+    }
+
+    // 3. 백업 2: allorigins.win
+    if (!isSuccess || scannedItems.length === 0) {
+      try {
+        const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
+        const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
         if (res.ok) {
           const html = await res.text();
           const backupItems = parseDriveHtml(html);
@@ -145,14 +178,17 @@ const App = () => {
       }
     }
 
-    setItems(scannedItems);
-    setIsLoading(false);
-
-    if (!isSuccess && scannedItems.length === 0) {
-      setFetchError(true);
-    } else {
+    if (isSuccess && scannedItems.length > 0) {
+      setItems(scannedItems);
       setFetchError(false);
+      sessionStorage.setItem(cacheKey, JSON.stringify(scannedItems));
+    } else {
+      if (!cachedData) {
+        setFetchError(true);
+      }
     }
+
+    setIsLoading(false);
   };
 
   const handleRefresh = () => {
