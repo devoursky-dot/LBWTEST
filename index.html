@@ -4,18 +4,40 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LBW 구글 공유드라이브</title>
+    <title>LBW 공유드라이브 스마트 파일 탐색기</title>
   </head>
   <body style="margin:0; background-color:#07090e; color:#ffffff; font-family:sans-serif;">
     <div id="root">
-      <!-- 구형 전자칠판 브라우저 JS 로딩 전/실패 시 즉시 표시되는 HTML 피드백 -->
-      <div style="min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; padding:20px; text-align:center;">
-        <h1 style="font-size:24px; margin-bottom:10px;">LBW 구글 공유드라이브</h1>
-        <p style="color:#94a3b8; margin-bottom:20px; font-size:14px;">폴더 ID: 1Ew38nohOksBhypc2UjHYTmi6bSjbICmn</p>
-        <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" 
-           style="display:inline-block; padding:16px 32px; background:#2563eb; color:#ffffff; text-decoration:none; font-weight:bold; font-size:18px; border-radius:12px; box-shadow:0 4px 14px rgba(37,99,235,0.4);">
-          🚀 구글 공유드라이브 접속하기
-        </a>
+      <!-- 구형 전자칠판 브라우저 JS 로딩 전/실패 시 즉시 표시되는 순수 HTML 스마트 탐색기 -->
+      <div style="max-width:1100px; margin:0 auto; padding:20px; text-align:center;">
+        <h1 style="font-size:22px; margin-bottom:6px; color:#ffffff;">LBW 공유드라이브 파일 탐색기</h1>
+        <p style="color:#94a3b8; margin-bottom:24px; font-size:14px;">전자칠판 전용 파일 열기 & 다운로드 센터 (폴더 ID: 1Ew38nohOksBhypc2UjHYTmi6bSjbICmn)</p>
+        
+        <div style="background:rgba(18,24,38,0.9); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:20px; margin-bottom:20px; text-align:left;">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border-bottom:1px solid rgba(255,255,255,0.08); flex-wrap:wrap; gap:10px;">
+            <span style="font-weight:bold; font-size:16px; color:#60a5fa;">📁 LBW 공유드라이브 전체 폴더</span>
+            <div>
+              <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" target="_blank" style="padding:8px 16px; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px; margin-right:6px;">👁️ 바로 열기</a>
+              <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" target="_blank" style="padding:8px 16px; background:#059669; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px;">📥 다운로드</a>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; border-bottom:1px solid rgba(255,255,255,0.08); flex-wrap:wrap; gap:10px;">
+            <span style="font-weight:bold; font-size:15px;">📄 2026학년도 프로젝트 수업 기획안.pdf</span>
+            <div>
+              <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" target="_blank" style="padding:8px 16px; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px; margin-right:6px;">👁️ 열기</a>
+              <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" target="_blank" style="padding:8px 16px; background:#059669; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px;">📥 다운로드</a>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; flex-wrap:wrap; gap:10px;">
+            <span style="font-weight:bold; font-size:15px;">📊 전자칠판 활용 시각자료 모음집.pptx</span>
+            <div>
+              <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" target="_blank" style="padding:8px 16px; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px; margin-right:6px;">👁️ 열기</a>
+              <a href="https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link" target="_blank" style="padding:8px 16px; background:#059669; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold; font-size:14px;">📥 다운로드</a>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>
