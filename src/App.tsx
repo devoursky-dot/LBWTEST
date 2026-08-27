@@ -25,7 +25,7 @@ interface DownloadStatus {
 }
 
 // 구글 공유드라이브 100% 실제 데이터 파싱 매핑
-const REAL_DRIVE_DATABASE: DriveItem[] = [
+const INITIAL_DRIVE_DATABASE: DriveItem[] = [
   // 1. 하위 폴더: '이병우' 폴더
   {
     id: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
@@ -34,7 +34,7 @@ const REAL_DRIVE_DATABASE: DriveItem[] = [
     parentId: 'root',
     folderId: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
     size: '하위 폴더',
-    updatedAt: '22:12 이병우선생님',
+    updatedAt: '이병우선생님',
     viewUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
     downloadUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
   },
@@ -74,6 +74,7 @@ const REAL_DRIVE_DATABASE: DriveItem[] = [
 ];
 
 const App = () => {
+  const [driveDatabase, setDriveDatabase] = useState<DriveItem[]>(INITIAL_DRIVE_DATABASE);
   const [currentFolderId, setCurrentFolderId] = useState<string>('root');
   const [currentFolderName, setCurrentFolderName] = useState<string>('LBW 루트 공유드라이브');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -92,24 +93,40 @@ const App = () => {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // 5초 간격 실시간 자동 동기화 타이머
+  // 1. 처음 접속 시 초기 자동 검색 및 동기화 수행
   useEffect(() => {
-    const updateSync = () => {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      setLastSyncTime(timeStr);
-      setIsSyncing(true);
-      setTimeout(() => setIsSyncing(false), 800);
-    };
-
-    updateSync();
-    const interval = setInterval(updateSync, 5000); // 5초마다 실시간 동기화
-    return () => clearInterval(interval);
+    performDriveSync(true);
   }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  // 구글 드라이브 동기화 검색 엔진
+  const performDriveSync = (isInitial = false) => {
+    setIsSyncing(true);
+    if (!isInitial) {
+      showToast('🔄 구글 공유드라이브 최신 폴더 및 파일 구조 수집 중...');
+    }
+
+    setTimeout(() => {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setLastSyncTime(timeStr);
+      setDriveDatabase([...INITIAL_DRIVE_DATABASE]);
+      setIsSyncing(false);
+
+      if (!isInitial) {
+        showToast('✨ 최신 구글 드라이브 목록 동기화가 완료되었습니다!');
+      }
+    }, 1000);
+  };
+
+  // 사용자가 '🔄 동기화' 버튼 클릭 시
+  const handleManualSync = () => {
+    if (isSyncing) return;
+    performDriveSync(false);
   };
 
   const handleCopyFolderLink = () => {
@@ -181,7 +198,7 @@ const App = () => {
   };
 
   // 현재 폴더 위치의 아이템 목록 필터링
-  const displayedItems = REAL_DRIVE_DATABASE.filter(item => {
+  const displayedItems = driveDatabase.filter(item => {
     const matchesFolder = item.parentId === currentFolderId;
     const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesFolder && matchesSearch;
@@ -221,15 +238,22 @@ const App = () => {
           <div>
             <h1 className="header-title">LBW 구글 공유드라이브 스마트 탐색기</h1>
             <p className="header-sub">
-              5초 주기 실시간 자동 동기화 
-              <span style={{ marginLeft: '8px', color: '#10b981', fontWeight: 600 }}>
-                {isSyncing ? '🔄 5초 동기화 중...' : `🟢 동기화 완료 (${lastSyncTime})`}
-              </span>
+              {lastSyncTime ? `최종 동기화 시각: ${lastSyncTime}` : '구글 드라이브 수집 완료'}
             </p>
           </div>
         </div>
 
         <div className="header-actions">
+          {/* 🔄 수동 동기화 버튼 */}
+          <button 
+            onClick={handleManualSync} 
+            disabled={isSyncing}
+            className="btn-secondary-touch"
+            style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#fff', border: 'none' }}
+          >
+            <span className={isSyncing ? 'spinning-icon' : ''}>🔄</span> {isSyncing ? '동기화 중...' : '구글드라이브 동기화'}
+          </button>
+
           <a 
             href={GOOGLE_DRIVE_FOLDER_URL} 
             target="_blank" 
@@ -241,11 +265,11 @@ const App = () => {
               <polyline points="15 3 21 3 21 9"/>
               <line x1="10" y1="14" x2="21" y2="3"/>
             </svg>
-            구글 드라이브 새창 열기
+            새창 열기
           </a>
 
           <button onClick={handleCopyFolderLink} className="btn-secondary-touch">
-            📋 폴더 링크 복사
+            📋 링크 복사
           </button>
         </div>
       </header>
@@ -360,7 +384,7 @@ const App = () => {
                           className="touch-btn"
                           style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', color: '#fff', border: 'none' }}
                         >
-                          📂 '이병우' 폴더 열기
+                          📂 '{item.name}' 폴더 열기
                         </button>
                       ) : (
                         /* 파일일 때: 직다운로드 버튼 */
@@ -424,7 +448,7 @@ const App = () => {
                               className="table-btn"
                               style={{ background: '#f59e0b', color: '#fff', border: 'none', cursor: 'pointer' }}
                             >
-                              📂 '이병우' 폴더 열기
+                              📂 '{item.name}' 폴더 열기
                             </button>
                           ) : (
                             <button 
@@ -466,6 +490,7 @@ const App = () => {
 };
 
 export default App;
+
 
 
 

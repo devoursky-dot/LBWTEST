@@ -1063,10 +1063,21 @@ body {
   background: rgba(255, 255, 255, 0.2);
 }
 
+.spinning-icon {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .file-card.folder-card {
   border-color: rgba(245, 158, 11, 0.4);
   background: radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 70%), var(--bg-card);
 }
+
 
 
 
