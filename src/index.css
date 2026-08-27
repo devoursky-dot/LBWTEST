@@ -1005,9 +1005,69 @@ body {
   color: #60a5fa;
 }
 
-.download-progress-banner.completed .progress-msg {
-  color: #34d399;
+/* Breadcrumb Navigation Bar */
+.breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem;
+  background: rgba(15, 23, 42, 0.6);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.95rem;
+  flex-wrap: wrap;
 }
+
+.breadcrumb-item {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  padding: 0.4rem 0.85rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.breadcrumb-item:hover {
+  background: rgba(59, 130, 246, 0.3);
+  color: #ffffff;
+}
+
+.breadcrumb-sep {
+  color: var(--text-muted);
+  font-size: 1.1rem;
+}
+
+.breadcrumb-active {
+  color: #f59e0b;
+  font-weight: 700;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  padding: 0.4rem 0.85rem;
+  border-radius: 8px;
+}
+
+.back-btn {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.4rem 0.85rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.file-card.folder-card {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: radial-gradient(circle at top right, rgba(245, 158, 11, 0.08), transparent 70%), var(--bg-card);
+}
+
 
 
 

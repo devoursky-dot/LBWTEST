@@ -2,21 +2,21 @@ import { useState, useRef } from 'react';
 import './App.css';
 
 const GOOGLE_DRIVE_FOLDER_URL = 'https://drive.google.com/drive/folders/1Ew38nohOksBhypc2UjHYTmi6bSjbICmn?usp=drive_link';
-const DRIVE_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
+const ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
 
-// 구글 공유드라이브 실제 파일 구조
-interface DriveFile {
+// 구글 공유드라이브 실제 파일/폴더 데이터 구조
+interface DriveItem {
   id: string;
   name: string;
-  category: 'document' | 'presentation' | 'image' | 'sheet' | 'archive' | 'folder';
+  type: 'folder' | 'document';
+  parentId: string; // 상위 폴더 ID ('root' 또는 특정 folder ID)
+  folderId?: string; // 하위 폴더인 경우 폴더 ID
   size: string;
   updatedAt: string;
-  fileId?: string;
   viewUrl: string;
   downloadUrl: string;
 }
 
-// 실시간 다운로드 상태 구조
 interface DownloadStatus {
   active: boolean;
   fileName: string;
@@ -24,48 +24,50 @@ interface DownloadStatus {
   message: string;
 }
 
-// 실제 공유드라이브 대용량 바이러스 검사 예외(confirm=t) 자동 처리 다운로드 URL
-const REAL_DRIVE_FILES: DriveFile[] = [
+// 실제 공유드라이브 계층 구조 데이터
+const REAL_DRIVE_DATABASE: DriveItem[] = [
+  // 1. 하위 폴더
   {
-    id: 'f-folder',
-    name: 'LBW 공유드라이브 전체 폴더',
-    category: 'folder',
-    size: '공유 폴더',
-    updatedAt: '2026-08-27',
-    viewUrl: GOOGLE_DRIVE_FOLDER_URL,
-    downloadUrl: GOOGLE_DRIVE_FOLDER_URL,
-  },
-  {
-    id: '1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
-    fileId: '1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
-    name: '2026 자이스토리 고2 미적분 1 - L.pdf',
-    category: 'document',
-    size: 'PDF 대용량 교재',
+    id: 'folder-sub1',
+    name: '2026 자이스토리 고2 미적분 1 - L',
+    type: 'folder',
+    parentId: 'root',
+    folderId: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
+    size: '하위 폴더',
     updatedAt: '8월 9일',
-    viewUrl: 'https://drive.google.com/file/d/1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK/view?usp=sharing',
-    // confirm=t 파라미터를 추가하여 대용량 파일 바이러스 검사 경고를 즉시 우회
-    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1CkMTYMEQWwM5KWYHPS4qlQAPPgazTFBK',
+    viewUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
+    downloadUrl: 'https://drive.google.com/drive/folders/1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ?usp=sharing',
   },
+  // 2. 루트 폴더 파일
   {
-    id: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
-    fileId: '1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
+    id: 'file-root1',
     name: '미래엔_미적분1_교과서.pdf',
-    category: 'document',
+    type: 'document',
+    parentId: 'root',
     size: 'PDF 교과서',
     updatedAt: '3월 2일',
     viewUrl: 'https://drive.google.com/file/d/1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ/view?usp=sharing',
     downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1BhPT-Z3OKUFd13m2mCfES7HWVFuscFZQ',
+  },
+  // 3. 하위 폴더(1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ) 내부 파일
+  {
+    id: 'file-sub1-1',
+    name: '요한계시록 12장.pdf',
+    type: 'document',
+    parentId: '1DI7XpWiAvPqLmRHISiuc9DJadnEjm5rZ',
+    size: 'PDF 문서',
+    updatedAt: '8월 9일',
+    viewUrl: 'https://drive.google.com/file/d/1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg/view?usp=sharing',
+    downloadUrl: 'https://drive.google.com/uc?export=download&confirm=t&id=1AJaIhx25j1ral5OGhStQHLSaTHW4Uzbg',
   }
 ];
 
 const App = () => {
-  const [files] = useState<DriveFile[]>(REAL_DRIVE_FILES);
+  const [currentFolderId, setCurrentFolderId] = useState<string>('root');
+  const [currentFolderName, setCurrentFolderName] = useState<string>('LBW 루트 공유드라이브');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [viewMode, setViewMode] = useState<'embedded' | 'grid' | 'list'>('embedded');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [showSaveModal, setShowSaveModal] = useState<boolean>(false);
-  const [activeSaveFile, setActiveSaveFile] = useState<DriveFile | null>(null);
-  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // 대용량 실시간 다운로드 상태 제어
   const [downloadProgress, setDownloadProgress] = useState<DownloadStatus>({
@@ -83,130 +85,88 @@ const App = () => {
   };
 
   const handleCopyFolderLink = () => {
-    navigator.clipboard.writeText(GOOGLE_DRIVE_FOLDER_URL);
-    showToast('✨ 구글 드라이브 링크가 복사되었습니다!');
+    const url = currentFolderId === 'root' ? GOOGLE_DRIVE_FOLDER_URL : `https://drive.google.com/drive/folders/${currentFolderId}?usp=sharing`;
+    navigator.clipboard.writeText(url);
+    showToast('✨ 해당 폴더 링크가 클립보드에 복사되었습니다!');
   };
 
-  // 실시간 다운로드 상태 알림 엔진 (시작 ➔ 다운로드 중 ➔ 완료 ➔ 메시지 자동 제거)
-  const handleSilentDownload = (file: DriveFile) => {
-    // 1단계: 다운로드 시작 안내
+  // 하위 폴더로 이동 핸들러
+  const handleOpenFolder = (folderId: string, folderName: string) => {
+    setCurrentFolderId(folderId);
+    setCurrentFolderName(folderName);
+    showToast(`📂 '${folderName}' 하위 폴더로 이동했습니다.`);
+  };
+
+  // 루트 폴더로 돌아가기
+  const handleGoRoot = () => {
+    setCurrentFolderId('root');
+    setCurrentFolderName('LBW 루트 공유드라이브');
+  };
+
+  // 실시간 다운로드 실행
+  const handleSilentDownload = (item: DriveItem) => {
+    if (item.type === 'folder') {
+      window.open(item.viewUrl, '_blank');
+      return;
+    }
+
     setDownloadProgress({
       active: true,
-      fileName: file.name,
+      fileName: item.name,
       step: 'starting',
-      message: `⏳ '${file.name}' 다운로드를 준비하고 있습니다...`
+      message: `⏳ '${item.name}' 다운로드를 준비하고 있습니다...`
     });
 
-    // 백그라운드 무음 다운로드 스트림 트리거 (바이러스 검사 우회 confirm=t 적용)
     if (iframeRef.current) {
-      iframeRef.current.src = file.downloadUrl;
+      iframeRef.current.src = item.downloadUrl;
     } else {
       const a = document.createElement('a');
-      a.href = file.downloadUrl;
+      a.href = item.downloadUrl;
       a.target = '_self';
-      a.download = file.name;
+      a.download = item.name;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
     }
 
-    // 2단계: 다운로드 진행 중 안내 (1초 후)
     setTimeout(() => {
       setDownloadProgress({
         active: true,
-        fileName: file.name,
+        fileName: item.name,
         step: 'downloading',
-        message: `🔄 내장 브라우저로 다운로드 진행 중... (대용량 바이러스 검사 자동 통과됨)`
+        message: `🔄 내장 브라우저로 다운로드 진행 중... (바이러스 검사 예외 자동 통과)`
       });
     }, 1000);
 
-    // 3단계: 다운로드 완료 안내 (4.5초 후)
     setTimeout(() => {
       setDownloadProgress({
         active: true,
-        fileName: file.name,
+        fileName: item.name,
         step: 'completed',
-        message: `✅ '${file.name}' 다운로드가 성공적으로 완료되었습니다!`
+        message: `✅ '${item.name}' 다운로드가 성공적으로 완료되었습니다!`
       });
     }, 4500);
 
-    // 4단계: 완료 2.5초 후 메시지 자동 소멸 (전체 제거)
     setTimeout(() => {
       setDownloadProgress(prev => ({ ...prev, active: false }));
     }, 7000);
   };
 
-  // 특정 폴더 지정 저장 / 강제 다운로드 핸들러
-  const handleSaveFile = async (file: DriveFile) => {
-    setActiveSaveFile(file);
-
-    // 1. 최신 File System Access API 지원 시: 폴더 선택 팝업 열기
-    if ('showSaveFilePicker' in window) {
-      try {
-        setIsSaving(true);
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName: file.name,
-          types: [{
-            description: 'PDF 문서 및 파일',
-            accept: { 'application/pdf': ['.pdf'], 'application/octet-stream': ['.*'] }
-          }]
-        });
-
-        setDownloadProgress({
-          active: true,
-          fileName: file.name,
-          step: 'downloading',
-          message: '⏳ 지정 폴더로 데이터 저장 중입니다. 잠시만 기다려주세요...'
-        });
-
-        const response = await fetch(file.downloadUrl);
-        const blob = await response.blob();
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        setIsSaving(false);
-
-        setDownloadProgress({
-          active: true,
-          fileName: file.name,
-          step: 'completed',
-          message: '🎉 지정한 폴더에 파일이 성공적으로 저장되었습니다!'
-        });
-        setTimeout(() => setDownloadProgress(prev => ({ ...prev, active: false })), 3000);
-        return;
-      } catch (err: any) {
-        setIsSaving(false);
-        if (err.name === 'AbortError') return;
-        console.warn('showSaveFilePicker fallback:', err);
-      }
-    }
-
-    // 2. 내장 브라우저 직다운로드 실행
-    handleSilentDownload(file);
-  };
-
-  const filteredFiles = files.filter(file => {
-    return file.name.toLowerCase().includes(searchTerm.toLowerCase());
+  // 현재 폴더 위치의 아이템 목록 필터링
+  const displayedItems = REAL_DRIVE_DATABASE.filter(item => {
+    const matchesFolder = item.parentId === currentFolderId;
+    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchesFolder && matchesSearch;
   });
 
-  const getCategoryIcon = (category: DriveFile['category']) => {
-    switch (category) {
-      case 'folder': return { badge: '📁 폴더', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)' };
-      case 'document': return { badge: '📄 PDF 문서', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)' };
-      case 'presentation': return { badge: '📊 PPT 발표', color: '#f97316', bg: 'rgba(249, 115, 22, 0.15)' };
-      case 'sheet': return { badge: '📈 스프레드시트', color: '#10b981', bg: 'rgba(16, 185, 129, 0.15)' };
-      case 'image': return { badge: '🖼️ 미디어', color: '#a855f7', bg: 'rgba(168, 85, 247, 0.15)' };
-      case 'archive': return { badge: '📦 압축파일', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.15)' };
-      default: return { badge: '📁 기타', color: '#64748b', bg: 'rgba(100, 116, 139, 0.15)' };
-    }
-  };
+  const activeIframeFolderId = currentFolderId === 'root' ? ROOT_FOLDER_ID : currentFolderId;
 
   return (
     <div className="explorer-container">
       {/* 안드로이드 프로그램 선택 창 우회용 숨겨진 다운로드 iframe */}
       <iframe ref={iframeRef} title="silent_download_frame" style={{ display: 'none', width: 0, height: 0 }} />
 
-      {/* 실시간 다운로드 상태 알림 플로팅 배너 (시작 ➔ 진행 중 ➔ 완료 ➔ 자동 소멸) */}
+      {/* 실시간 다운로드 상태 알림 플로팅 배너 */}
       {downloadProgress.active && (
         <div className={`download-progress-banner ${downloadProgress.step}`}>
           <div className="progress-spinner">
@@ -231,8 +191,8 @@ const App = () => {
             </svg>
           </div>
           <div>
-            <h1 className="header-title">LBW 구글 공유드라이브 실제 파일 센터</h1>
-            <p className="header-sub">대용량 바이러스검사 예외 우회 & 원스톱 스마트 다운로드 (폴더 ID: {DRIVE_FOLDER_ID})</p>
+            <h1 className="header-title">LBW 구글 공유드라이브 하위폴더 스마트 탐색기</h1>
+            <p className="header-sub">하위 폴더 지원 및 대용량 파일 원스톱 스마트 다운로드 (ID: {activeIframeFolderId})</p>
           </div>
         </div>
 
@@ -252,10 +212,26 @@ const App = () => {
           </a>
 
           <button onClick={handleCopyFolderLink} className="btn-secondary-touch">
-            📋 링크 복사
+            📋 폴더 링크 복사
           </button>
         </div>
       </header>
+
+      {/* 브레드크럼 (폴더 경로 탐색 바) */}
+      <div className="breadcrumb-bar">
+        <button className="breadcrumb-item" onClick={handleGoRoot}>
+          🏠 최상위 공유드라이브
+        </button>
+        {currentFolderId !== 'root' && (
+          <>
+            <span className="breadcrumb-sep">›</span>
+            <span className="breadcrumb-active">📂 {currentFolderName}</span>
+            <button className="back-btn" onClick={handleGoRoot}>
+              ← 상위 폴더로 이동
+            </button>
+          </>
+        )}
+      </div>
 
       {/* 툴바 */}
       <div className="explorer-toolbar">
@@ -266,21 +242,21 @@ const App = () => {
             onClick={() => setViewMode('embedded')}
             title="구글 실시간 내장 뷰어"
           >
-            🖥️ 구글 실시간 드라이브 뷰어
+            🖥️ 구글 실시간 뷰어
           </button>
           <button 
             className={`view-btn ${viewMode === 'grid' ? 'active' : ''}`}
             onClick={() => setViewMode('grid')}
-            title="개별 파일 카드"
+            title="개별 파일/폴더 카드"
           >
-            ▦ 개별 파일 카드
+            ▦ 카드형
           </button>
           <button 
             className={`view-btn ${viewMode === 'list' ? 'active' : ''}`}
             onClick={() => setViewMode('list')}
-            title="파일 목록형"
+            title="파일/폴더 목록형"
           >
-            ≡ 파일 목록형
+            ≡ 목록형
           </button>
         </div>
 
@@ -291,7 +267,7 @@ const App = () => {
           </svg>
           <input 
             type="text" 
-            placeholder="실제 파일명 검색..." 
+            placeholder="현재 폴더 내 파일/폴더 검색..." 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -304,107 +280,131 @@ const App = () => {
       {/* 메인 영역 */}
       <main className="explorer-content">
         {viewMode === 'embedded' ? (
-          /* 구글 실시간 드라이브 임베드 뷰어 */
+          /* 구글 실시간 드라이브 임베드 뷰어 (하위 폴더 연동 지원) */
           <div className="embedded-viewer-container">
             <iframe 
-              src={`https://drive.google.com/embeddedfolderview?id=${DRIVE_FOLDER_ID}#list`}
+              src={`https://drive.google.com/embeddedfolderview?id=${activeIframeFolderId}#list`}
               title="Google Drive Live Shared Folder"
               className="google-drive-iframe"
+              key={activeIframeFolderId}
             />
           </div>
         ) : viewMode === 'grid' ? (
-          /* 개별 파일 카드 뷰 */
+          /* 카드 뷰 (폴더 및 파일) */
           <div className="file-grid">
-            {filteredFiles.map(file => {
-              const meta = getCategoryIcon(file.category);
-              return (
-                <div key={file.id} className="file-card">
-                  <div className="card-top-bar">
-                    <span className="file-type-badge" style={{ backgroundColor: meta.bg, color: meta.color }}>
-                      {meta.badge}
-                    </span>
-                    <span className="file-size">{file.size}</span>
-                  </div>
+            {displayedItems.length === 0 ? (
+              <div className="empty-files-box">
+                <p>📁 이 폴더에 저장된 파일이나 하위 폴더가 없습니다.</p>
+              </div>
+            ) : (
+              displayedItems.map(item => {
+                const isFolder = item.type === 'folder';
+                return (
+                  <div key={item.id} className={`file-card ${isFolder ? 'folder-card' : ''}`}>
+                    <div className="card-top-bar">
+                      <span className="file-type-badge" style={{ 
+                        backgroundColor: isFolder ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
+                        color: isFolder ? '#f59e0b' : '#ef4444' 
+                      }}>
+                        {isFolder ? '📁 하위 폴더' : '📄 PDF 문서'}
+                      </span>
+                      <span className="file-size">{item.size}</span>
+                    </div>
 
-                  <h3 className="file-name" title={file.name}>
-                    {file.name}
-                  </h3>
+                    <h3 className="file-name" title={item.name}>
+                      {item.name}
+                    </h3>
 
-                  <div className="file-meta-date">
-                    최종 수정: {file.updatedAt}
-                  </div>
+                    <div className="file-meta-date">
+                      최종 수정: {item.updatedAt}
+                    </div>
 
-                  <div className="card-btn-group" style={{ flexDirection: 'column', gap: '0.5rem' }}>
-                    <button 
-                      onClick={() => handleSilentDownload(file)}
-                      className="touch-btn touch-btn-download"
-                      style={{ background: '#2563eb', color: '#fff', border: 'none' }}
-                    >
-                      ⚡ 대용량 우회 즉시 다운로드 (묻지 않음)
-                    </button>
+                    <div className="card-btn-group" style={{ flexDirection: 'column', gap: '0.5rem' }}>
+                      {isFolder ? (
+                        /* 폴더일 때: 탐색기 내 진입 버튼 */
+                        <button 
+                          onClick={() => handleOpenFolder(item.folderId!, item.name)}
+                          className="touch-btn"
+                          style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', color: '#fff', border: 'none' }}
+                        >
+                          📂 하위 폴더 열기 (탐색)
+                        </button>
+                      ) : (
+                        /* 파일일 때: 직다운로드 버튼 */
+                        <button 
+                          onClick={() => handleSilentDownload(item)}
+                          className="touch-btn touch-btn-download"
+                          style={{ background: '#2563eb', color: '#fff', border: 'none' }}
+                        >
+                          ⚡ 내장브라우저 즉시 다운로드
+                        </button>
+                      )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
                       <a 
-                        href={file.viewUrl} 
+                        href={item.viewUrl} 
                         target="_blank" 
                         rel="noopener noreferrer" 
                         className="touch-btn touch-btn-open"
                       >
-                        👁️ 열기
+                        👁️ 새창 열기
                       </a>
-
-                      <button 
-                        onClick={() => handleSaveFile(file)}
-                        disabled={isSaving}
-                        className="touch-btn touch-btn-open"
-                        style={{ background: 'rgba(255,255,255,0.06)', color: '#fff' }}
-                      >
-                        💾 폴더 지정
-                      </button>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         ) : (
-          /* 파일 목록 뷰 */
+          /* 리스트(목록) 뷰 */
           <div className="file-list-wrapper">
             <table className="file-list-table">
               <thead>
                 <tr>
                   <th>구분</th>
-                  <th>실제 파일명</th>
-                  <th>종류</th>
+                  <th>파일/폴더명</th>
+                  <th>크기</th>
                   <th>수정일</th>
-                  <th style={{ textAlign: 'center' }}>다운로드 / 열기</th>
+                  <th style={{ textAlign: 'center' }}>조작 (이동 / 다운로드 / 열기)</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredFiles.map(file => {
-                  const meta = getCategoryIcon(file.category);
+                {displayedItems.map(item => {
+                  const isFolder = item.type === 'folder';
                   return (
-                    <tr key={file.id}>
+                    <tr key={item.id}>
                       <td>
-                        <span className="file-type-badge" style={{ backgroundColor: meta.bg, color: meta.color }}>
-                          {meta.badge}
+                        <span className="file-type-badge" style={{ 
+                          backgroundColor: isFolder ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
+                          color: isFolder ? '#f59e0b' : '#ef4444' 
+                        }}>
+                          {isFolder ? '📁 하위 폴더' : '📄 PDF 문서'}
                         </span>
                       </td>
-                      <td className="table-filename">{file.name}</td>
-                      <td>{file.size}</td>
-                      <td>{file.updatedAt}</td>
+                      <td className="table-filename">{item.name}</td>
+                      <td>{item.size}</td>
+                      <td>{item.updatedAt}</td>
                       <td>
                         <div className="table-btn-group">
-                          <button 
-                            onClick={() => handleSilentDownload(file)}
-                            className="table-btn btn-download"
-                            style={{ background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer' }}
-                          >
-                            ⚡ 대용량 우회 즉시 다운로드
-                          </button>
+                          {isFolder ? (
+                            <button 
+                              onClick={() => handleOpenFolder(item.folderId!, item.name)}
+                              className="table-btn"
+                              style={{ background: '#f59e0b', color: '#fff', border: 'none', cursor: 'pointer' }}
+                            >
+                              📂 하위 폴더 열기
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={() => handleSilentDownload(item)}
+                              className="table-btn btn-download"
+                              style={{ background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer' }}
+                            >
+                              ⚡ 즉시 다운로드
+                            </button>
+                          )}
 
                           <a 
-                            href={file.viewUrl} 
+                            href={item.viewUrl} 
                             target="_blank" 
                             rel="noopener noreferrer" 
                             className="table-btn btn-open"
@@ -422,55 +422,6 @@ const App = () => {
         )}
       </main>
 
-      {/* 전자칠판 다운로드/저장 보완 안내 모달 */}
-      {showSaveModal && activeSaveFile && (
-        <div className="modal-overlay" onClick={() => setShowSaveModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
-            <button className="modal-close-btn" onClick={() => setShowSaveModal(false)}>✕</button>
-            
-            <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#fff', marginBottom: '0.75rem', display: 'flex', strokeLinecap: 'round', gap: '0.5rem' }}>
-              ⚡ 내장 브라우저 직접 다운로드 안내
-            </h3>
-
-            <div style={{ background: 'rgba(255,255,255,0.04)', padding: '1.25rem', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.08)', marginBottom: '1.25rem', fontSize: '0.9rem', color: '#cbd5e1', lineHeight: '1.6', textAlign: 'left' }}>
-              <p style={{ marginBottom: '0.75rem', fontWeight: 700, color: '#60a5fa' }}>
-                📌 '다른 앱으로 열기' 팝업 없이 바로 내장 브라우저에 파일 다운로드하는 방법:
-              </p>
-              
-              <ul style={{ paddingLeft: '1.25rem', margin: 0 }}>
-                <li style={{ marginBottom: '0.5rem' }}>
-                  <strong>[⚡ 내장브라우저 즉시 다운로드]</strong> 버튼을 누르시면 연결 프로그램 선택 팝업 없이 내장 브라우저의 기본 다운로드 폴더로 바로 다운로드됩니다.
-                </li>
-                <li>
-                  기존에 동일한 파일이 존재하는 경우, 브라우저가 자동으로 덮어쓰거나 최신 버전으로 즉시 다운로드를 완료합니다.
-                </li>
-              </ul>
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.75rem' }}>
-              <button 
-                onClick={() => {
-                  setShowSaveModal(false);
-                  handleSilentDownload(activeSaveFile);
-                }}
-                className="main-cta-btn"
-                style={{ flex: 1, padding: '0.875rem', fontSize: '0.95rem' }}
-              >
-                ⚡ 즉시 다운로드 실행
-              </button>
-
-              <button 
-                onClick={() => setShowSaveModal(false)}
-                className="secondary-btn"
-                style={{ padding: '0.875rem 1.25rem' }}
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 토스트 메시지 */}
       {toastMessage && (
         <div className="toast-container">
@@ -482,6 +433,7 @@ const App = () => {
 };
 
 export default App;
+
 
 
 
