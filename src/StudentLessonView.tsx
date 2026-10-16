@@ -75,7 +75,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawingRef = useRef(false);
-  const currentPointsRef = useRef<StrokePoint[]>([]);
+  const currentStrokeRef = useRef<Stroke | null>(null);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -111,6 +111,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     const width = parent.clientWidth;
     const height = parent.clientHeight;
 
+    if (canvas.width === width * dpr && canvas.height === height * dpr) {
+      return;
+    }
+
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     canvas.style.width = `${width}px`;
@@ -121,6 +125,53 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       ctx.scale(dpr, dpr);
     }
   }, []);
+
+  // 단일 스트로크 그리기 유틸리티 (삼성노트 Catmull-Rom 보간 렌더러)
+  const drawSingleStroke = (ctx: CanvasRenderingContext2D, stroke: Stroke) => {
+    if (!stroke.points || stroke.points.length === 0) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (stroke.tool === 'highlighter') {
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.size * 3.5;
+    } else if (stroke.tool === 'eraser') {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.lineWidth = stroke.size * 4;
+    } else {
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = stroke.color;
+      ctx.lineWidth = stroke.size;
+    }
+
+    if (stroke.points.length === 1) {
+      ctx.beginPath();
+      ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.size / 2, 0, Math.PI * 2);
+      ctx.fillStyle = stroke.color;
+      ctx.fill();
+    } else if (stroke.points.length === 2) {
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+
+      for (let i = 1; i < stroke.points.length - 1; i++) {
+        const midX = (stroke.points[i].x + stroke.points[i + 1].x) / 2;
+        const midY = (stroke.points[i].y + stroke.points[i + 1].y) / 2;
+        ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y, midX, midY);
+      }
+      const last = stroke.points[stroke.points.length - 1];
+      ctx.lineTo(last.x, last.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
 
   // 전체 캔버스 다시 그리기 (벡터 스트로크 렌더링)
   const renderCanvas = useCallback(() => {
@@ -154,47 +205,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
     ctx.restore();
 
-    // 스트로크 그리기
+    // 완료된 모든 스트로크 그리기
     for (const stroke of strokes) {
-      if (stroke.points.length === 0) continue;
+      drawSingleStroke(ctx, stroke);
+    }
 
-      ctx.save();
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      if (stroke.tool === 'highlighter') {
-        ctx.globalAlpha = 0.35;
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = stroke.size * 3.5;
-      } else if (stroke.tool === 'eraser') {
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.lineWidth = stroke.size * 4;
-      } else {
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = stroke.size;
-      }
-
-      if (stroke.points.length === 1) {
-        ctx.beginPath();
-        ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.size / 2, 0, Math.PI * 2);
-        ctx.fillStyle = stroke.color;
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-
-        // Catmull-Rom / Quadratic Curve 보간 (삼성노트 REA 부드러운 곡선)
-        for (let i = 1; i < stroke.points.length - 1; i++) {
-          const midX = (stroke.points[i].x + stroke.points[i + 1].x) / 2;
-          const midY = (stroke.points[i].y + stroke.points[i + 1].y) / 2;
-          ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y, midX, midY);
-        }
-        const last = stroke.points[stroke.points.length - 1];
-        ctx.lineTo(last.x, last.y);
-        ctx.stroke();
-      }
-      ctx.restore();
+    // 만약 현재 실시간 드로잉 중인 스트로크가 있다면 함께 그리기
+    if (isDrawingRef.current && currentStrokeRef.current) {
+      drawSingleStroke(ctx, currentStrokeRef.current);
     }
   }, [strokes]);
 
@@ -215,8 +233,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // [삼성노트 REA 팜리젝션 포인터 이벤트 핸들러]
   // ==========================================================================
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // 팜리젝션: S펜 전용 모드일 때 터치(손바닥, 손가락) 원천 차단
-    if (penOnlyMode && e.pointerType !== 'pen') {
+    // 팜리젝션: S펜 전용 모드일 때 마우스와 펜(스타일러스)만 허용, 손가락 터치는 100% 무시
+    if (penOnlyMode && e.pointerType !== 'pen' && e.pointerType !== 'mouse') {
       return;
     }
 
@@ -230,52 +248,104 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
+    // 포인터 캡처: 선을 빠르게 그어도 캔버스 밖으로 이탈 방지
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+
     isDrawingRef.current = true;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const pressure = e.pressure > 0 ? e.pressure : 0.5;
 
-    currentPointsRef.current = [{ x, y, pressure }];
-
     const newStroke: Stroke = {
-      id: `stroke_${Date.now()}`,
+      id: `stroke_${Date.now()}_${Math.random()}`,
       tool: tool as 'pen' | 'highlighter' | 'eraser',
       color: penColor,
       size: penSize,
       points: [{ x, y, pressure }]
     };
 
-    setStrokes(prev => [...prev, newStroke]);
-    setRedoStrokes([]);
+    currentStrokeRef.current = newStroke;
+
+    // 즉시 캔버스에 첫 점 그리기
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        drawSingleStroke(ctx, newStroke);
+      }
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDrawingRef.current) return;
-    if (penOnlyMode && e.pointerType !== 'pen') return;
+    if (!isDrawingRef.current || !currentStrokeRef.current) return;
+    if (penOnlyMode && e.pointerType !== 'pen' && e.pointerType !== 'mouse') return;
 
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const pressure = e.pressure > 0 ? e.pressure : 0.5;
 
-    currentPointsRef.current.push({ x, y, pressure });
+    const currentStroke = currentStrokeRef.current;
+    currentStroke.points.push({ x, y, pressure });
 
-    setStrokes(prev => {
-      if (prev.length === 0) return prev;
-      const updated = [...prev];
-      const lastIndex = updated.length - 1;
-      updated[lastIndex] = {
-        ...updated[lastIndex],
-        points: [...currentPointsRef.current]
-      };
-      return updated;
-    });
+    // 초고속 실시간 렌더링: 매 픽셀마다 React state를 업데이트하지 않고
+    // Canvas Context에 120Hz 속도로 즉각 반영하여 프레임 드랍 및 선 사라짐 완전 차단!
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const pts = currentStroke.points;
+        if (pts.length >= 2) {
+          ctx.save();
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+
+          if (currentStroke.tool === 'highlighter') {
+            ctx.globalAlpha = 0.35;
+            ctx.strokeStyle = currentStroke.color;
+            ctx.lineWidth = currentStroke.size * 3.5;
+          } else if (currentStroke.tool === 'eraser') {
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.lineWidth = currentStroke.size * 4;
+          } else {
+            ctx.globalAlpha = 1.0;
+            ctx.strokeStyle = currentStroke.color;
+            ctx.lineWidth = currentStroke.size;
+          }
+
+          const p1 = pts[pts.length - 2];
+          const p2 = pts[pts.length - 1];
+
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
-    currentPointsRef.current = [];
+
+    if (e) {
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+
+    const finishedStroke = currentStrokeRef.current;
+    if (finishedStroke && finishedStroke.points.length > 0) {
+      // 드로잉이 끝났을 때 React State에 1회 확정 커밋 (레이스 컨디션 100% 방지)
+      setStrokes(prev => [...prev, { ...finishedStroke, points: [...finishedStroke.points] }]);
+      setRedoStrokes([]);
+    }
+    currentStrokeRef.current = null;
   };
 
   // 실행 취소 & 다시 실행
@@ -544,8 +614,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerUp}
-          style={{ touchAction: penOnlyMode ? 'pan-x pan-y' : 'none' }}
+          onPointerCancel={handlePointerUp}
+          style={{ touchAction: 'none' }}
         />
 
         {/* 텍스트 타이핑 오버레이 레이어 */}
