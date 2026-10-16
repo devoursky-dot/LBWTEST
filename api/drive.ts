@@ -3,6 +3,8 @@ export const config = {
   runtime: 'edge', // Edge Runtime for global low-latency streaming
 };
 
+const DEFAULT_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
+
 interface DriveItem {
   id: string;
   name: string;
@@ -20,7 +22,7 @@ export async function GET(request: Request) {
   const folderId = url.searchParams.get('folderId') || url.searchParams.get('id') || '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
   const fileId = url.searchParams.get('fileId') || url.searchParams.get('id');
   const fileName = url.searchParams.get('fileName') || '수업자료.pdf';
-  const apiKey = url.searchParams.get('apiKey') || process.env.GOOGLE_API_KEY || process.env.VITE_GOOGLE_API_KEY;
+  const apiKey = url.searchParams.get('apiKey') || process.env.GOOGLE_API_KEY || process.env.VITE_GOOGLE_API_KEY || DEFAULT_API_KEY;
 
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -92,15 +94,14 @@ export async function GET(request: Request) {
   }
 
   // =========================================================================
-  // 2. 파일 목록 조회 (공식 Google Drive API v3 우선 -> 직통 뷰어 폴백)
+  // 2. [공식 API v3] 파일 목록 조회 (구글 공식 REST API 규격)
   // =========================================================================
   let items: DriveItem[] = [];
   let source = 'unknown';
 
-  // [방법 A] 공식 Google Drive API v3
   if (apiKey) {
     try {
-      const gApiUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${apiKey}`;
+      const gApiUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${apiKey}`;
       const gRes = await fetch(gApiUrl);
       if (gRes.ok) {
         const data = await gRes.json();
@@ -129,7 +130,7 @@ export async function GET(request: Request) {
               downloadUrl: `/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
             };
           });
-          source = 'google_api_v3';
+          source = 'google_official_api_v3';
         }
       }
     } catch (e) {
@@ -137,13 +138,13 @@ export async function GET(request: Request) {
     }
   }
 
-  // [방법 B] 공식 API 키가 없거나 실패한 경우: 구글 직통 임베드 수집
+  // 비상시 안전 폴백 (임베드 뷰어)
   if (items.length === 0) {
     try {
       const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
       const res = await fetch(targetUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
 
@@ -171,7 +172,7 @@ export async function GET(request: Request) {
             downloadUrl: `/api/drive?action=download&fileId=${id}&fileName=${encodeURIComponent(name)}`
           });
         }
-        source = 'google_direct_embedded';
+        source = 'google_direct_embedded_fallback';
       }
     } catch (e: any) {
       console.warn('Direct embedded fetch failed:', e);

@@ -19,6 +19,7 @@ type AuthMode = 'guest' | 'teacher' | 'admin';
 
 const DEFAULT_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
 const DEFAULT_TEACHER_PW = 'tch1234';
+const DEFAULT_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
 const ADMIN_ID = 'admin';
 const ADMIN_PW = 'admin!@#$1234';
 
@@ -32,7 +33,7 @@ export default function App() {
     return localStorage.getItem('lbw_root_folder_id') || DEFAULT_ROOT_FOLDER_ID;
   });
   const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
-    return localStorage.getItem('lbw_google_api_key') || '';
+    return localStorage.getItem('lbw_google_api_key') || DEFAULT_GOOGLE_API_KEY;
   });
 
   // --- 드라이브 탐색 상태 ---
@@ -121,7 +122,7 @@ export default function App() {
       // 3. 만약 API 키가 설정되어 있다면 클라이언트 직통 Google API v3 시도
       if (googleApiKey) {
         try {
-          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}`;
+          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}`;
           const gRes = await fetch(directUrl);
           if (gRes.ok) {
             const gData = await gRes.json();
@@ -136,7 +137,7 @@ export default function App() {
                 viewUrl: isFolder 
                   ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
                   : `https://drive.google.com/file/d/${file.id}/view?usp=sharing`,
-                downloadUrl: `https://drive.google.com/uc?export=download&confirm=t&id=${file.id}`
+                downloadUrl: `/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
               };
             });
             setItems(directItems);
