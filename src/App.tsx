@@ -74,43 +74,28 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [드라이브 폴더 데이터 실시간 로드]
+  // [드라이브 폴더 데이터 실시간 로드 (캐시 0% - 100% 실시간 동기화)]
   // ==========================================================================
   const fetchDriveItems = async (folderId: string) => {
     setIsLoading(true);
     setErrorMessage(null);
 
-    // 1. 세션 캐시 확인 (다중 교실 재방문 시 즉시 응답)
-    const cacheKey = `lbw_cache_${folderId}`;
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setItems(parsed);
-          setIsLoading(false);
-        }
-      } catch (e) {
-        sessionStorage.removeItem(cacheKey);
-      }
-    }
-
     try {
-      // 2. Vercel 통합 API 호출 (공식 Drive API v3 및 스마트 프록시)
+      // 1. Vercel 통합 API 호출 (항상 실시간 타임스탬프 & no-store 캐시 무력화)
       const queryParams = new URLSearchParams({
         action: 'list',
         folderId,
+        _t: Date.now().toString(),
         ...(googleApiKey ? { apiKey: googleApiKey } : {})
       });
 
       const endpoint = `/api/drive?${queryParams.toString()}`;
-      const res = await fetch(endpoint);
+      const res = await fetch(endpoint, { cache: 'no-store' });
 
       if (res.ok) {
         const data = await res.json();
         if (data.items && Array.isArray(data.items)) {
           setItems(data.items);
-          sessionStorage.setItem(cacheKey, JSON.stringify(data.items));
           setIsLoading(false);
           return;
         }
@@ -119,20 +104,28 @@ export default function App() {
     } catch (err: any) {
       console.warn('Vercel API fetch failed, trying direct Google API if key available:', err);
 
-      // 3. 만약 API 키가 설정되어 있다면 클라이언트 직통 Google API v3 시도
+      // 2. 만약 API 키가 설정되어 있다면 클라이언트 직통 Google API v3 실시간 시도
       if (googleApiKey) {
         try {
-          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}`;
-          const gRes = await fetch(directUrl);
+          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}&_t=${Date.now()}`;
+          const gRes = await fetch(directUrl, { cache: 'no-store' });
           if (gRes.ok) {
             const gData = await gRes.json();
             const directItems: DriveItem[] = (gData.files || []).map((file: any) => {
               const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
+              const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
+              const sizeStr = sizeBytes > 0 
+                ? sizeBytes > 1024 * 1024 
+                  ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB` 
+                  : `${(sizeBytes / 1024).toFixed(0)} KB` 
+                : '-';
+
               return {
                 id: file.id,
                 name: file.name,
                 type: isFolder ? 'folder' : 'document',
                 folderId: isFolder ? file.id : undefined,
+                size: isFolder ? '-' : sizeStr,
                 updatedAt: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('ko-KR') : '-',
                 viewUrl: isFolder 
                   ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
@@ -141,7 +134,6 @@ export default function App() {
               };
             });
             setItems(directItems);
-            sessionStorage.setItem(cacheKey, JSON.stringify(directItems));
             setIsLoading(false);
             return;
           }
@@ -150,9 +142,7 @@ export default function App() {
         }
       }
 
-      if (!cached) {
-        setErrorMessage('구글 드라이브 실시간 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
-      }
+      setErrorMessage('구글 드라이브 실시간 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
       setIsLoading(false);
     }

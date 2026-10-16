@@ -74,6 +74,7 @@ function localDriveApiPlugin(): Plugin {
           // ===================================================================
           res.setHeader('Content-Type', 'application/json; charset=utf-8');
           res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
 
           let items: any[] = [];
           let source = 'unknown';
