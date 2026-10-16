@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import QRCode from 'qrcode';
 import { StudentLessonView } from './StudentLessonView';
+import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
+import { archiveOldNotesToGoogleDrive } from './lib/archiver';
 import './index.css';
 
 // ============================================================================
@@ -171,6 +173,11 @@ export default function App() {
   const [qrLessonPdfFile, setQrLessonPdfFile] = useState<File | null>(null);
   const [activeQrLesson, setActiveQrLesson] = useState<DriveItem | null>(null);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  const [studentSubmissions, setStudentSubmissions] = useState<ClassNoteRecord[]>([]);
+  const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
+  const [isArchiving, setIsArchiving] = useState<boolean>(false);
+  const [archiveProgress, setArchiveProgress] = useState<{ current: number; total: number; name: string } | null>(null);
+  const [selectedDateFilter, setSelectedDateFilter] = useState<'today' | 'all'>('today');
   const qrPdfInputRef = useRef<HTMLInputElement>(null);
 
   // 로그인 폼 상태
@@ -272,6 +279,83 @@ export default function App() {
   useEffect(() => {
     fetchDriveItems(currentFolder.id);
   }, [currentFolder.id, googleApiKey]);
+
+  // ==========================================================================
+  // [전자칠판 라이브 대시보드: 학생 필기 실시간 수신 및 최신순 정렬 리스너]
+  // ==========================================================================
+  useEffect(() => {
+    if (activeModal !== 'qr_lesson_viewer' || !activeQrLesson) return;
+
+    const currentLessonId = activeQrLesson.folderId || activeQrLesson.id;
+
+    // 1. Supabase에서 기존 제출 목록 조회
+    const fetchExistingNotes = async () => {
+      if (supabase && isSupabaseConfigured) {
+        try {
+          const { data, error } = await supabase
+            .from('class_notes')
+            .select('*')
+            .eq('lesson_id', currentLessonId)
+            .order('updated_at', { ascending: false });
+          if (!error && data) {
+            setStudentSubmissions(data);
+          }
+        } catch (e) {
+          console.warn('Supabase fetch notes error:', e);
+        }
+      }
+    };
+    fetchExistingNotes();
+
+    // 2. Supabase Realtime 채널 구독
+    let sbChannel: any = null;
+    if (supabase && isSupabaseConfigured) {
+      try {
+        sbChannel = supabase
+          .channel(`lesson_${currentLessonId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'class_notes', filter: `lesson_id=eq.${currentLessonId}` },
+            (payload) => {
+              const newRecord = payload.new as ClassNoteRecord;
+              if (newRecord) {
+                setStudentSubmissions(prev => {
+                  const filtered = prev.filter(p => !(p.student_grade === newRecord.student_grade && p.student_class === newRecord.student_class && p.student_num === newRecord.student_num));
+                  return [newRecord, ...filtered];
+                });
+                showToast(`🔔 ${newRecord.student_grade}-${newRecord.student_class} ${newRecord.student_name} 학생이 필기를 제출했습니다!`);
+              }
+            }
+          )
+          .subscribe();
+      } catch (e) {
+        console.warn('Realtime channel error:', e);
+      }
+    }
+
+    // 3. 브라우저 로컬 브로드캐스트 채널 리스너 (동일 PC / 테스트 환경 0.01초 즉시 동기화)
+    const handleLocalMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'STUDENT_SUBMIT') {
+        const record = event.data.record as ClassNoteRecord;
+        if (record && record.lesson_id === currentLessonId) {
+          setStudentSubmissions(prev => {
+            const filtered = prev.filter(p => !(p.student_grade === record.student_grade && p.student_class === record.student_class && p.student_num === record.student_num));
+            return [record, ...filtered];
+          });
+          showToast(`🔔 ${record.student_grade}-${record.student_class} ${record.student_name} 학생이 필기를 제출했습니다!`);
+        }
+      }
+    };
+
+    if (localRealtimeChannel) {
+      localRealtimeChannel.addEventListener('message', handleLocalMessage);
+    }
+
+    return () => {
+      if (sbChannel && supabase) supabase.removeChannel(sbChannel);
+      if (localRealtimeChannel) localRealtimeChannel.removeEventListener('message', handleLocalMessage);
+    };
+  }, [activeModal, activeQrLesson]);
 
   // ==========================================================================
   // [구글 드라이브 통합 액션 실행 엔진]
@@ -516,6 +600,49 @@ export default function App() {
       setQrCodeDataUrl(qrDataUrl);
     } catch (qrErr) {
       console.error('QR 코드 생성 실패:', qrErr);
+    }
+  };
+
+  // ==========================================================================
+  // [구글 드라이브 영구 아카이빙 및 Supabase 자동 삭제(purge)]
+  // ==========================================================================
+  const handleArchiveLessonNotes = async () => {
+    if (!activeQrLesson) return;
+    const lessonFolderId = activeQrLesson.folderId || activeQrLesson.id;
+
+    if (!isSupabaseConfigured) {
+      showToast('ℹ️ Supabase 키가 설정되지 않은 로컬 브로드캐스트 상태입니다. Supabase 연동 시 자동 아카이빙이 활성화됩니다.');
+      return;
+    }
+
+    setIsArchiving(true);
+    setArchiveProgress({ current: 0, total: 0, name: '시작 중...' });
+    showToast('📦 학생 필기를 고해상도로 변환하여 구글 드라이브에 안전하게 보관합니다...');
+
+    try {
+      const res = await archiveOldNotesToGoogleDrive({
+        gasUploadUrl,
+        targetFolderId: lessonFolderId,
+        lessonId: lessonFolderId,
+        onProgress: (current, total, name) => {
+          setArchiveProgress({ current, total, name });
+        }
+      });
+
+      if (res.archivedCount > 0) {
+        showToast(`🎉 ${res.archivedCount}개의 학생 필기가 구글 드라이브에 보관되고 Supabase가 가볍게 정리되었습니다!`);
+        setStudentSubmissions([]);
+      } else if (res.errors.length > 0) {
+        showToast(`⚠️ 보관 중 일부 오류가 발생했습니다: ${res.errors[0]}`);
+      } else {
+        showToast('ℹ️ 보관할 이전 필기 내역이 없거나 이미 모두 보관되었습니다.');
+      }
+    } catch (err: any) {
+      console.error('아카이빙 실패:', err);
+      showToast(`❌ 보관 실패: ${err.message}`);
+    } finally {
+      setIsArchiving(false);
+      setArchiveProgress(null);
     }
   };
 
@@ -1520,12 +1647,60 @@ export default function App() {
 
               {/* 우측: 실시간 출석 및 필기 모니터링 영역 */}
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                  <h3 style={{ fontSize: '15px', color: '#ffffff', fontWeight: 600 }}>
-                    👥 실시간 학생 필기 모니터링
-                  </h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <h3 style={{ fontSize: '15px', color: '#ffffff', fontWeight: 600, margin: 0 }}>
+                      👥 실시간 학생 필기 모니터링
+                    </h3>
+                    <div style={{ display: 'flex', background: '#282a2c', borderRadius: '6px', padding: '2px', border: '1px solid var(--g-border)' }}>
+                      <button
+                        type="button"
+                        style={{
+                          background: selectedDateFilter === 'today' ? 'var(--g-primary-blue)' : 'transparent',
+                          color: selectedDateFilter === 'today' ? '#ffffff' : 'var(--g-text-secondary)',
+                          border: 'none',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                        onClick={() => setSelectedDateFilter('today')}
+                      >
+                        📅 오늘 수업만
+                      </button>
+                      <button
+                        type="button"
+                        style={{
+                          background: selectedDateFilter === 'all' ? 'var(--g-primary-blue)' : 'transparent',
+                          color: selectedDateFilter === 'all' ? '#ffffff' : 'var(--g-text-secondary)',
+                          border: 'none',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                          fontWeight: 600
+                        }}
+                        onClick={() => setSelectedDateFilter('all')}
+                      >
+                        📁 전체
+                      </button>
+                    </div>
+                  </div>
+
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      type="button"
+                      className="g-btn g-btn-primary"
+                      style={{ fontSize: '12px', background: '#1e8e3e', borderColor: '#1e8e3e' }}
+                      disabled={isArchiving}
+                      onClick={handleArchiveLessonNotes}
+                      title="이전 날짜 필기들을 구글 드라이브 폴더에 이미지/PDF로 자동 순차 업로드하고 Supabase 용량을 최적화(purge)합니다."
+                    >
+                      {isArchiving ? '⏳ 보관 진행 중...' : '📦 드라이브로 영구보관 & DB 정리'}
+                    </button>
                     <button 
+                      type="button"
                       className="g-btn g-btn-text" 
                       style={{ fontSize: '12px', border: '1px solid var(--g-border)' }}
                       onClick={() => handleOpenFolder(activeQrLesson.folderId || activeQrLesson.id, activeQrLesson.name)}
@@ -1535,31 +1710,167 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* 아카이빙 진행 표시 바 */}
+                {isArchiving && archiveProgress && (
+                  <div style={{ background: 'rgba(30, 142, 62, 0.15)', border: '1px solid #34a853', borderRadius: '8px', padding: '10px 14px', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: '#81c995' }}>
+                    <span>🔄 <strong>{archiveProgress.name}</strong> 학생 필기 캔버스 렌더링 및 구글 드라이브 업로드 중...</span>
+                    <span style={{ fontWeight: 700 }}>{archiveProgress.current} / {archiveProgress.total}</span>
+                  </div>
+                )}
+
                 <div style={{ background: '#1e1f20', borderRadius: '12px', border: '1px solid var(--g-border)', padding: '16px', flex: 1, minHeight: '260px', display: 'flex', flexDirection: 'column' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--g-border-subtle)', paddingBottom: '10px', marginBottom: '12px' }}>
                     <span style={{ fontSize: '12.5px', color: 'var(--g-text-secondary)' }}>
-                      최근 필기 제출순 자동 정렬
+                      최근 필기 제출순 자동 정렬 ({selectedDateFilter === 'today' ? '오늘 기준' : '전체'})
                     </span>
-                    <span style={{ fontSize: '12px', background: 'rgba(52, 168, 83, 0.15)', color: '#81c995', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
-                      ● 라이브 수신 대기 중
+                    <span style={{ fontSize: '12px', background: isSupabaseConfigured ? 'rgba(52, 168, 83, 0.15)' : 'rgba(251, 188, 4, 0.15)', color: isSupabaseConfigured ? '#81c995' : '#fdd663', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
+                      {isSupabaseConfigured ? '● Supabase 실시간 동기화' : '● 로컬 브로드캐스트 동기화'}
                     </span>
                   </div>
 
-                  {/* 학생 타일 그리드 (모의/실시간 데이터 연동 영역) */}
+                  {/* 학생 타일 그리드 (실시간 데이터 렌더링) */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px', overflowY: 'auto', maxHeight: '240px' }}>
-                    <div style={{ border: '2px dashed var(--g-border)', borderRadius: '8px', padding: '16px 8px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                      <span style={{ fontSize: '24px', marginBottom: '4px' }}>📱</span>
-                      QR코드를 스캔하면<br/>학생 아이콘이<br/>실시간 표시됩니다.
-                    </div>
+                    {(() => {
+                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const displayList = studentSubmissions.filter(sub => {
+                        if (selectedDateFilter === 'all') return true;
+                        const datePart = (sub.updated_at || sub.created_at || '').slice(0, 10);
+                        return !datePart || datePart === todayStr;
+                      });
+
+                      if (displayList.length === 0) {
+                        return (
+                          <div style={{ gridColumn: '1 / -1', border: '2px dashed var(--g-border)', borderRadius: '8px', padding: '24px 8px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12.5px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                            <span style={{ fontSize: '28px', marginBottom: '6px' }}>📱</span>
+                            {selectedDateFilter === 'today' ? '오늘' : ''} 학생들이 QR코드를 스캔하여 필기를 등록하면<br/>
+                            아이콘이 실시간으로 여기에 최신순 표시됩니다.
+                          </div>
+                        );
+                      }
+
+                      return displayList.map((sub, idx) => (
+                        <div
+                          key={`${sub.student_grade}_${sub.student_class}_${sub.student_num}`}
+                          onClick={() => setSelectedStudentNote(sub)}
+                          style={{
+                            background: idx === 0 ? 'rgba(59, 130, 246, 0.18)' : '#282a2c',
+                            border: `1px solid ${idx === 0 ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
+                            borderRadius: '8px',
+                            padding: '10px 8px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            position: 'relative'
+                          }}
+                          title="클릭하여 필기 원본 확인"
+                        >
+                          <span style={{ position: 'absolute', top: '6px', right: '6px', width: '8px', height: '8px', borderRadius: '50%', background: '#34a853' }} />
+                          <span style={{ fontSize: '24px', marginBottom: '4px' }}>👨‍🎓</span>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: '#ffffff' }}>
+                            {sub.student_grade}-{sub.student_class} {sub.student_name}
+                          </span>
+                          <span style={{ fontSize: '11px', color: idx === 0 ? '#a8c7fa' : 'var(--g-text-muted)', marginTop: '2px', fontWeight: idx === 0 ? 600 : 400 }}>
+                            {idx === 0 ? '🟢 방금 제출' : '제출 완료'}
+                          </span>
+                        </div>
+                      ));
+                    })()}
                   </div>
 
                   <div style={{ marginTop: 'auto', paddingTop: '14px', borderTop: '1px solid var(--g-border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: 'var(--g-text-muted)' }}>
-                    <span>💡 학생이 필기를 마치고 [등록]을 누르면 즉시 맨 앞으로 자동 배치됩니다.</span>
+                    <span>💡 학생 타일을 탭하면 전자칠판에서 필기 원본을 바로 확인할 수 있습니다.</span>
                     <button className="g-btn g-btn-text" style={{ fontSize: '12px' }} onClick={() => setActiveModal(null)}>
                       닫기
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          모달 1-4: 전자칠판 학생 필기 상세 확인 팝업 (클릭 시 확대 뷰어)
+          ==================================================================== */}
+      {selectedStudentNote && (
+        <div className="modal-backdrop" onClick={() => setSelectedStudentNote(null)}>
+          <div className="modal-box" style={{ maxWidth: '820px', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '20px' }}>👨‍🎓</span>
+                <h2 style={{ fontSize: '16px', margin: 0 }}>
+                  {selectedStudentNote.student_grade}학년 {selectedStudentNote.student_class}반 {selectedStudentNote.student_num}번 {selectedStudentNote.student_name} 학생의 필기
+                </h2>
+              </div>
+              <button className="modal-close-btn" onClick={() => setSelectedStudentNote(null)}>✕</button>
+            </div>
+
+            <div style={{ flex: 1, minHeight: '440px', background: '#131314', border: '1px solid var(--g-border)', borderRadius: '8px', position: 'relative', overflow: 'hidden', margin: '10px 0' }}>
+              {/* 모눈종이 배경 */}
+              <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+
+              {/* 벡터 스트로크 SVG 렌더러 */}
+              <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                {(selectedStudentNote.strokes_data?.strokes || []).map((stroke: any) => {
+                  if (!stroke.points || stroke.points.length === 0) return null;
+                  let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
+                  for (let i = 1; i < stroke.points.length; i++) {
+                    pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
+                  }
+                  return (
+                    <path
+                      key={stroke.id}
+                      d={pathData}
+                      fill="none"
+                      stroke={stroke.color}
+                      strokeWidth={stroke.size}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
+                    />
+                  );
+                })}
+              </svg>
+
+              {/* 텍스트 아이템 렌더러 */}
+              {(selectedStudentNote.strokes_data?.textItems || []).map((item: any) => (
+                <div
+                  key={item.id}
+                  style={{
+                    position: 'absolute',
+                    left: `${item.x}px`,
+                    top: `${item.y}px`,
+                    color: item.color,
+                    fontSize: `${item.fontSize}px`,
+                    fontWeight: 600,
+                    textShadow: '0 2px 4px rgba(0,0,0,0.8)'
+                  }}
+                >
+                  {item.text}
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', color: 'var(--g-text-secondary)' }}>
+                제출 시간: {selectedStudentNote.updated_at ? new Date(selectedStudentNote.updated_at).toLocaleTimeString('ko-KR') : '최근'}
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="g-btn g-btn-primary"
+                  onClick={() => {
+                    showToast(`🌟 ${selectedStudentNote.student_name} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);
+                    setSelectedStudentNote(null);
+                  }}
+                >
+                  ⭐ 참 잘했어요!
+                </button>
+                <button className="g-btn g-btn-text" onClick={() => setSelectedStudentNote(null)}>
+                  닫기
+                </button>
               </div>
             </div>
           </div>
