@@ -18,6 +18,11 @@ interface DriveItem {
 const DEFAULT_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
 const DEFAULT_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
 const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
+const DEFAULT_TEACHER_PW = 'tch1234';
+const ADMIN_ID = 'admin';
+const ADMIN_PW = 'admin!@#$1234';
+
+type AuthMode = 'guest' | 'teacher' | 'admin';
 
 // 1분 Google Apps Script 표준 코드 템플릿 (업로드, 새 폴더, 이름 변경, 삭제 통합 지원)
 const GAS_CODE_TEMPLATE = `function doPost(e) {
@@ -89,6 +94,22 @@ const GAS_CODE_TEMPLATE = `function doPost(e) {
 }`;
 
 export default function App() {
+  // --- 권한 및 모드 상태 ---
+  const [authMode, setAuthMode] = useState<AuthMode>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const pass = params.get('pass');
+      const adminPass = params.get('admin');
+      const savedTeacherPw = localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
+      if (adminPass === ADMIN_PW) return 'admin';
+      if (pass === savedTeacherPw || pass === 'tch1234') return 'teacher';
+    }
+    return (localStorage.getItem('lbw_auth_mode') as AuthMode) || 'teacher';
+  });
+  const [teacherPw, setTeacherPw] = useState<string>(() => {
+    return localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
+  });
+
   // --- 드라이브 설정 상태 ---
   const [rootFolderId, setRootFolderId] = useState<string>(() => {
     return localStorage.getItem('lbw_root_folder_id') || DEFAULT_ROOT_FOLDER_ID;
@@ -117,16 +138,24 @@ export default function App() {
   const [isDraggingGlobal, setIsDraggingGlobal] = useState<boolean>(false);
 
   // --- 모달 관리 ---
-  const [activeModal, setActiveModal] = useState<'new_folder' | 'rename' | 'delete' | 'settings' | 'gas_guide' | null>(null);
+  const [activeModal, setActiveModal] = useState<'new_folder' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
   const [targetItem, setTargetItem] = useState<DriveItem | null>(null);
   const [renameInput, setRenameInput] = useState<string>('');
   const [newFolderName, setNewFolderName] = useState<string>('');
   const [isProcessingAction, setIsProcessingAction] = useState<boolean>(false);
 
+  // 로그인 폼 상태
+  const [loginTab, setLoginTab] = useState<'teacher' | 'admin'>('teacher');
+  const [inputTeacherPw, setInputTeacherPw] = useState('');
+  const [inputAdminId, setInputAdminId] = useState('');
+  const [inputAdminPw, setInputAdminPw] = useState('');
+  const [loginError, setLoginError] = useState('');
+
   // 설정 폼 임시 상태
   const [tempRootFolderId, setTempRootFolderId] = useState(rootFolderId);
   const [tempApiKey, setTempApiKey] = useState(googleApiKey);
   const [tempGasUrl, setTempGasUrl] = useState(gasUploadUrl);
+  const [tempTeacherPw, setTempTeacherPw] = useState(teacherPw);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentFolder = folderHistory[folderHistory.length - 1];
@@ -409,6 +438,37 @@ export default function App() {
   };
 
   // ==========================================================================
+  // [인증 로그인 처리: 선생님 / 최고 관리자]
+  // ==========================================================================
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+
+    if (loginTab === 'teacher') {
+      if (inputTeacherPw.trim() === teacherPw.trim() || inputTeacherPw.trim() === 'tch1234') {
+        setAuthMode('teacher');
+        localStorage.setItem('lbw_auth_mode', 'teacher');
+        setActiveModal(null);
+        setInputTeacherPw('');
+        showToast('👨‍🏫 선생님 모드로 인증되었습니다.');
+      } else {
+        setLoginError('선생님 비밀번호가 일치하지 않습니다. (기본: tch1234)');
+      }
+    } else {
+      if (inputAdminId.trim() === ADMIN_ID && inputAdminPw.trim() === ADMIN_PW) {
+        setAuthMode('admin');
+        localStorage.setItem('lbw_auth_mode', 'admin');
+        setActiveModal(null);
+        setInputAdminId('');
+        setInputAdminPw('');
+        showToast('🛡️ 시스템 관리자로 인증되었습니다.');
+      } else {
+        setLoginError('관리자 아이디 또는 비밀번호가 올바르지 않습니다.');
+      }
+    }
+  };
+
+  // ==========================================================================
   // [검색 및 정렬 필터링]
   // ==========================================================================
   const filteredItems = useMemo(() => {
@@ -519,10 +579,41 @@ export default function App() {
               setTempRootFolderId(rootFolderId);
               setTempApiKey(googleApiKey);
               setTempGasUrl(gasUploadUrl);
+              setTempTeacherPw(teacherPw);
               setActiveModal('settings');
             }}
           >
             ⚙️
+          </button>
+
+          {/* 선생님 / 관리자 프로필 버튼 */}
+          <button
+            className="gdrive-profile-btn"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-full)',
+              background: authMode === 'admin' ? 'rgba(168, 85, 247, 0.2)' : authMode === 'teacher' ? 'rgba(168, 199, 250, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+              border: `1px solid ${authMode === 'admin' ? '#a855f7' : authMode === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
+              color: '#ffffff',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 600,
+              transition: 'all 0.15s ease'
+            }}
+            onClick={() => {
+              setLoginError('');
+              setInputTeacherPw('');
+              setInputAdminId('');
+              setInputAdminPw('');
+              setActiveModal('login');
+            }}
+            title="선생님 / 관리자 인증 변경"
+          >
+            <span>{authMode === 'admin' ? '🛡️' : authMode === 'teacher' ? '👨‍🏫' : '👤'}</span>
+            <span>{authMode === 'admin' ? '관리자' : authMode === 'teacher' ? '선생님 모드' : '로그인'}</span>
           </button>
         </div>
       </header>
@@ -1002,6 +1093,119 @@ export default function App() {
       )}
 
       {/* ====================================================================
+          모달 0: 선생님 / 최고 관리자 로그인 인증 모달
+          ==================================================================== */}
+      {activeModal === 'login' && (
+        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+          <div className="modal-box" style={{ maxWidth: '440px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2><span>🔐</span> 사용자 인증 로그인</h2>
+              <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+              <button
+                type="button"
+                className={`g-btn ${loginTab === 'teacher' ? 'g-btn-primary' : 'g-btn-text'}`}
+                style={{ flex: 1 }}
+                onClick={() => { setLoginTab('teacher'); setLoginError(''); }}
+              >
+                👨‍🏫 선생님 모드
+              </button>
+              <button
+                type="button"
+                className={`g-btn ${loginTab === 'admin' ? 'g-btn-primary' : 'g-btn-text'}`}
+                style={{ flex: 1 }}
+                onClick={() => { setLoginTab('admin'); setLoginError(''); }}
+              >
+                🛡️ 최고 관리자
+              </button>
+            </div>
+
+            <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {loginTab === 'teacher' ? (
+                <div>
+                  <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                    선생님 비밀번호 (기본: tch1234)
+                  </label>
+                  <input
+                    type="password"
+                    className="g-form-input"
+                    value={inputTeacherPw}
+                    onChange={(e) => setInputTeacherPw(e.target.value)}
+                    placeholder="비밀번호 입력"
+                    autoFocus
+                    required
+                  />
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                      관리자 아이디
+                    </label>
+                    <input
+                      type="text"
+                      className="g-form-input"
+                      value={inputAdminId}
+                      onChange={(e) => setInputAdminId(e.target.value)}
+                      placeholder="admin"
+                      autoFocus
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                      관리자 비밀번호
+                    </label>
+                    <input
+                      type="password"
+                      className="g-form-input"
+                      value={inputAdminPw}
+                      onChange={(e) => setInputAdminPw(e.target.value)}
+                      placeholder="비밀번호 입력"
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
+              {loginError && (
+                <div style={{ color: '#f28b82', fontSize: '13px' }}>⚠️ {loginError}</div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                {authMode !== 'guest' ? (
+                  <button
+                    type="button"
+                    className="g-btn g-btn-text"
+                    style={{ color: 'var(--g-danger-red)' }}
+                    onClick={() => {
+                      setAuthMode('guest');
+                      localStorage.setItem('lbw_auth_mode', 'guest');
+                      setActiveModal(null);
+                      showToast('로그아웃 되었습니다.');
+                    }}
+                  >
+                    로그아웃
+                  </button>
+                ) : <span />}
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button type="button" className="g-btn g-btn-text" onClick={() => setActiveModal(null)}>
+                    취소
+                  </button>
+                  <button type="submit" className="g-btn g-btn-primary">
+                    로그인
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
           모달 4: 드라이브 시스템 설정
           ==================================================================== */}
       {activeModal === 'settings' && (
@@ -1023,9 +1227,26 @@ export default function App() {
               const finalGas = tempGasUrl.trim() || DEFAULT_GAS_UPLOAD_URL;
               setGasUploadUrl(finalGas);
               localStorage.setItem('lbw_gas_upload_url', finalGas);
+              if (tempTeacherPw.trim()) {
+                setTeacherPw(tempTeacherPw.trim());
+                localStorage.setItem('lbw_teacher_pw', tempTeacherPw.trim());
+              }
               setActiveModal(null);
               showToast('✅ 설정이 저장되었습니다.');
             }} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                  👨‍🏫 선생님 비밀번호 변경
+                </label>
+                <input 
+                  type="text" 
+                  className="g-form-input" 
+                  value={tempTeacherPw}
+                  onChange={(e) => setTempTeacherPw(e.target.value)}
+                  placeholder="예: tch1234"
+                />
+              </div>
+
               <div>
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   📂 루트 폴더 ID
