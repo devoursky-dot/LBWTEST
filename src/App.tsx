@@ -104,11 +104,16 @@ export default function App() {
       if (adminPass === ADMIN_PW) return 'admin';
       if (pass === savedTeacherPw || pass === 'tch1234') return 'teacher';
     }
-    return (localStorage.getItem('lbw_auth_mode') as AuthMode) || 'teacher';
+    const saved = localStorage.getItem('lbw_auth_mode');
+    if (saved === 'teacher' || saved === 'admin') return saved;
+    return 'guest';
   });
   const [teacherPw, setTeacherPw] = useState<string>(() => {
     return localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
   });
+
+  // 편집 권한 (선생님/관리자만 폴더생성/수정/삭제/업로드 가능, 기본 모드는 다운로드만 가능)
+  const canEdit = authMode === 'teacher' || authMode === 'admin';
 
   // --- 드라이브 설정 상태 ---
   const [rootFolderId, setRootFolderId] = useState<string>(() => {
@@ -295,18 +300,53 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [파일 다운로드]
+  // [구형 전자칠판 내장브라우저 100% 호환 다운로드 엔진]
   // ==========================================================================
   const handleDownload = (item: DriveItem) => {
     showToast(`⚡ '${item.name}' 다운로드를 시작합니다...`);
-    const proxyUrl = `/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
-    const link = document.createElement('a');
-    link.href = proxyUrl;
-    link.setAttribute('download', item.name);
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+
+    // 1. 호스트 환경에 따른 최적 다운로드 URL 결정 (로컬/Vercel 프록시 vs GitHub Pages)
+    let proxyUrl = `/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
+    if (typeof window !== 'undefined' && window.location.hostname.includes('github.io')) {
+      proxyUrl = `https://lbwtest.vercel.app/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
+    }
+
+    // 2. 구형 전자칠판 내장 브라우저 (Android 7~10 WebKit/Chromium) 특화:
+    // 화면 이탈(화면 깜빡임 또는 빈 화면) 없이 시스템 다운로더를 트리거하는 숨겨진 iframe 활용
+    try {
+      let iframe = document.getElementById('gdrive-download-iframe') as HTMLIFrameElement;
+      if (!iframe) {
+        iframe = document.createElement('iframe');
+        iframe.id = 'gdrive-download-iframe';
+        iframe.style.display = 'none';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = '0';
+        document.body.appendChild(iframe);
+      }
+      iframe.src = proxyUrl;
+    } catch (iframeErr) {
+      console.warn('Iframe download trigger warning:', iframeErr);
+    }
+
+    // 3. 최신 브라우저를 위한 <a> 태그 다운로드 동시 트리거 (듀얼 fallback)
+    try {
+      const link = document.createElement('a');
+      link.href = proxyUrl;
+      link.setAttribute('download', item.name);
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        if (document.body.contains(link)) {
+          document.body.removeChild(link);
+        }
+      }, 300);
+    } catch (aErr) {
+      console.warn('Anchor download fallback warning:', aErr);
+    }
   };
 
   // ==========================================================================
@@ -314,6 +354,10 @@ export default function App() {
   // ==========================================================================
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEdit) {
+      showToast('⚠️ 기본 모드(다운로드 전용)입니다. 선생님 로그인 후 가능합니다.');
+      return;
+    }
     if (!newFolderName.trim()) return;
 
     setIsProcessingAction(true);
@@ -342,6 +386,10 @@ export default function App() {
   // ==========================================================================
   const handleRename = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canEdit) {
+      showToast('⚠️ 기본 모드(다운로드 전용)입니다. 선생님 로그인 후 가능합니다.');
+      return;
+    }
     if (!targetItem || !renameInput.trim()) return;
 
     if (renameInput.trim() === targetItem.name) {
@@ -375,6 +423,10 @@ export default function App() {
   // [휴지통으로 이동(삭제)]
   // ==========================================================================
   const handleDelete = async () => {
+    if (!canEdit) {
+      showToast('⚠️ 기본 모드(다운로드 전용)입니다. 삭제는 선생님 로그인 후 가능합니다.');
+      return;
+    }
     if (!targetItem) return;
 
     setIsProcessingAction(true);
@@ -414,6 +466,10 @@ export default function App() {
   };
 
   const handleUploadFiles = async (files: File[]) => {
+    if (!canEdit) {
+      showToast('⚠️ 기본 모드(다운로드 전용)입니다. 파일 업로드는 선생님 로그인 후 가능합니다.');
+      return;
+    }
     if (files.length === 0) return;
     showToast(`🚀 ${files.length}개 파일 업로드를 시작합니다...`);
 
@@ -610,10 +666,10 @@ export default function App() {
               setInputAdminPw('');
               setActiveModal('login');
             }}
-            title="선생님 / 관리자 인증 변경"
+            title={canEdit ? '인증 정보 변경 또는 로그아웃' : '기본 모드 (다운로드 전용) - 클릭 시 선생님/관리자 로그인'}
           >
             <span>{authMode === 'admin' ? '🛡️' : authMode === 'teacher' ? '👨‍🏫' : '👤'}</span>
-            <span>{authMode === 'admin' ? '관리자' : authMode === 'teacher' ? '선생님 모드' : '로그인'}</span>
+            <span>{authMode === 'admin' ? '관리자' : authMode === 'teacher' ? '선생님 모드' : '기본 모드 (다운로드)'}</span>
           </button>
         </div>
       </header>
@@ -624,59 +680,84 @@ export default function App() {
       <div className="gdrive-body">
         {/* 좌측 사이드바 */}
         <aside className="gdrive-sidebar" onClick={(e) => e.stopPropagation()}>
-          {/* [+ 새로 만들기] 버튼 */}
-          <div className="gdrive-new-btn-wrapper">
-            <button 
-              className="gdrive-new-btn"
-              onClick={() => setIsNewMenuOpen(prev => !prev)}
-            >
-              <svg width="24" height="24" viewBox="0 0 24 24">
-                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
-              </svg>
-              <span>새로 만들기</span>
-            </button>
+          {/* [+ 새로 만들기] 버튼 - 오직 선생님/관리자 모드에서만 활성화! 기본 모드는 다운로드 뱃지 표시 */}
+          {canEdit ? (
+            <div className="gdrive-new-btn-wrapper">
+              <button 
+                className="gdrive-new-btn"
+                onClick={() => setIsNewMenuOpen(prev => !prev)}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24">
+                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
+                </svg>
+                <span>새로 만들기</span>
+              </button>
 
-            {/* 새로 만들기 팝업 메뉴 */}
-            {isNewMenuOpen && (
-              <div className="gdrive-dropdown-menu">
-                <button 
-                  className="gdrive-menu-item"
-                  onClick={() => {
-                    setIsNewMenuOpen(false);
-                    setNewFolderName('새 폴더');
-                    setActiveModal('new_folder');
-                  }}
-                >
-                  <span style={{ fontSize: '18px' }}>📁</span>
-                  <span>새 폴더</span>
-                </button>
-                <div className="gdrive-menu-divider" />
-                <button 
-                  className="gdrive-menu-item"
-                  onClick={() => {
-                    setIsNewMenuOpen(false);
-                    fileInputRef.current?.click();
-                  }}
-                >
-                  <span style={{ fontSize: '18px' }}>⬆️</span>
-                  <span>파일 업로드</span>
-                </button>
+              {/* 새로 만들기 팝업 메뉴 */}
+              {isNewMenuOpen && (
+                <div className="gdrive-dropdown-menu">
+                  <button 
+                    className="gdrive-menu-item"
+                    onClick={() => {
+                      setIsNewMenuOpen(false);
+                      setNewFolderName('새 폴더');
+                      setActiveModal('new_folder');
+                    }}
+                  >
+                    <span style={{ fontSize: '18px' }}>📁</span>
+                    <span>새 폴더</span>
+                  </button>
+                  <div className="gdrive-menu-divider" />
+                  <button 
+                    className="gdrive-menu-item"
+                    onClick={() => {
+                      setIsNewMenuOpen(false);
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <span style={{ fontSize: '18px' }}>⬆️</span>
+                    <span>파일 업로드</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: '0 8px 16px 8px' }}>
+              <div 
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-full)',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  border: '1px solid var(--g-border)',
+                  color: 'var(--g-text-secondary)',
+                  fontSize: '13px',
+                  fontWeight: 500
+                }}
+                title="기본 모드: 다운로드 및 보기만 가능합니다."
+              >
+                <span>📥</span>
+                <span>자료 다운로드 모드</span>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          <input 
-            type="file" 
-            multiple 
-            ref={fileInputRef} 
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              if (e.target.files && e.target.files.length > 0) {
-                handleUploadFiles(Array.from(e.target.files));
-                e.target.value = '';
-              }
-            }}
-          />
+          {canEdit && (
+            <input 
+              type="file" 
+              multiple 
+              ref={fileInputRef} 
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleUploadFiles(Array.from(e.target.files));
+                  e.target.value = '';
+                }
+              }}
+            />
+          )}
 
           {/* 사이드바 메뉴 트리 */}
           <nav className="gdrive-nav-list">
@@ -736,25 +817,29 @@ export default function App() {
                     <span>📥</span> 다운로드
                   </button>
                 )}
-                <button 
-                  className="gdrive-action-chip"
-                  onClick={() => {
-                    setTargetItem(selectedItem);
-                    setRenameInput(selectedItem.name);
-                    setActiveModal('rename');
-                  }}
-                >
-                  <span>✏️</span> 이름 바꾸기
-                </button>
-                <button 
-                  className="gdrive-action-chip danger"
-                  onClick={() => {
-                    setTargetItem(selectedItem);
-                    setActiveModal('delete');
-                  }}
-                >
-                  <span>🗑️</span> 삭제
-                </button>
+                {canEdit && (
+                  <>
+                    <button 
+                      className="gdrive-action-chip"
+                      onClick={() => {
+                        setTargetItem(selectedItem);
+                        setRenameInput(selectedItem.name);
+                        setActiveModal('rename');
+                      }}
+                    >
+                      <span>✏️</span> 이름 바꾸기
+                    </button>
+                    <button 
+                      className="gdrive-action-chip danger"
+                      onClick={() => {
+                        setTargetItem(selectedItem);
+                        setActiveModal('delete');
+                      }}
+                    >
+                      <span>🗑️</span> 삭제
+                    </button>
+                  </>
+                )}
                 <a 
                   href={selectedItem.viewUrl} 
                   target="_blank" 
@@ -885,29 +970,33 @@ export default function App() {
                                 📥
                               </button>
                             )}
-                            <button 
-                              className="gdrive-icon-btn" 
-                              style={{ width: '32px', height: '32px', fontSize: '15px' }}
-                              title="이름 바꾸기"
-                              onClick={() => {
-                                setTargetItem(item);
-                                setRenameInput(item.name);
-                                setActiveModal('rename');
-                              }}
-                            >
-                              ✏️
-                            </button>
-                            <button 
-                              className="gdrive-icon-btn" 
-                              style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-danger-red)' }}
-                              title="삭제"
-                              onClick={() => {
-                                setTargetItem(item);
-                                setActiveModal('delete');
-                              }}
-                            >
-                              🗑️
-                            </button>
+                            {canEdit && (
+                              <>
+                                <button 
+                                  className="gdrive-icon-btn" 
+                                  style={{ width: '32px', height: '32px', fontSize: '15px' }}
+                                  title="이름 바꾸기"
+                                  onClick={() => {
+                                    setTargetItem(item);
+                                    setRenameInput(item.name);
+                                    setActiveModal('rename');
+                                  }}
+                                >
+                                  ✏️
+                                </button>
+                                <button 
+                                  className="gdrive-icon-btn" 
+                                  style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-danger-red)' }}
+                                  title="삭제"
+                                  onClick={() => {
+                                    setTargetItem(item);
+                                    setActiveModal('delete');
+                                  }}
+                                >
+                                  🗑️
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -936,19 +1025,21 @@ export default function App() {
                             <span style={{ fontSize: '20px' }}>📁</span>
                             <span className="gdrive-card-title">{folder.name}</span>
                           </div>
-                          <button 
-                            className="gdrive-icon-btn"
-                            style={{ width: '28px', height: '28px', fontSize: '13px' }}
-                            title="더보기"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setTargetItem(folder);
-                              setRenameInput(folder.name);
-                              setActiveModal('rename');
-                            }}
-                          >
-                            ✏️
-                          </button>
+                          {canEdit && (
+                            <button 
+                              className="gdrive-icon-btn"
+                              style={{ width: '28px', height: '28px', fontSize: '13px' }}
+                              title="이름 바꾸기"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTargetItem(folder);
+                                setRenameInput(folder.name);
+                                setActiveModal('rename');
+                              }}
+                            >
+                              ✏️
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -988,8 +1079,12 @@ export default function App() {
           {/* 전역 드래그 앤 드롭 오버레이 */}
           {isDraggingGlobal && (
             <div className="gdrive-drop-overlay">
-              <span style={{ fontSize: '48px' }}>⬆️</span>
-              <h3>드라이브에 파일을 업로드하려면 여기에 놓으세요</h3>
+              <span style={{ fontSize: '48px' }}>{canEdit ? '⬆️' : '🔒'}</span>
+              <h3>
+                {canEdit 
+                  ? '드라이브에 파일을 업로드하려면 여기에 놓으세요' 
+                  : '기본 모드(다운로드 전용)입니다. 업로드는 선생님 로그인 후 가능합니다.'}
+              </h3>
             </div>
           )}
         </main>
@@ -1102,6 +1197,22 @@ export default function App() {
               <h2><span>🔐</span> 사용자 인증 로그인</h2>
               <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
             </div>
+
+            {authMode === 'guest' && (
+              <div style={{
+                background: 'rgba(168, 199, 250, 0.08)',
+                border: '1px solid rgba(168, 199, 250, 0.25)',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                marginBottom: '16px',
+                fontSize: '12.5px',
+                color: 'var(--g-text-secondary)',
+                lineHeight: 1.5
+              }}>
+                <span style={{ color: 'var(--g-primary-blue)', fontWeight: 600 }}>💡 현재 전자칠판 기본 모드 (다운로드 전용)</span><br/>
+                기본 모드에서는 자료 열람 및 다운로드만 가능합니다. 파일 수정/삭제/업로드 또는 새 폴더 생성이 필요하시면 선생님 모드로 로그인해주세요.
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
               <button
@@ -1390,6 +1501,14 @@ export default function App() {
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {/* 구형 전자칠판 내장브라우저 전용 백그라운드 다운로드 숨김 iframe (화면 이탈 및 먹통 100% 방지) */}
+      <iframe 
+        id="gdrive-download-iframe" 
+        style={{ display: 'none', width: 0, height: 0, border: 0 }} 
+        aria-hidden="true" 
+        title="gdrive-download-iframe"
+      />
     </div>
   );
 }
