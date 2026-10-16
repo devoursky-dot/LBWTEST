@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import QRCode from 'qrcode';
+import { StudentLessonView } from './StudentLessonView';
 import './index.css';
 
 // ============================================================================
@@ -13,6 +15,7 @@ interface DriveItem {
   updatedAt: string;
   viewUrl: string;
   downloadUrl: string;
+  isQrLesson?: boolean;
 }
 
 const DEFAULT_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
@@ -115,6 +118,19 @@ export default function App() {
   // 편집 권한 (선생님/관리자만 폴더생성/수정/삭제/업로드 가능, 기본 모드는 다운로드만 가능)
   const canEdit = authMode === 'teacher' || authMode === 'admin';
 
+  // --- 학생 QR 수업 모드 감지 (?lessonId=...) ---
+  const [studentLessonParam] = useState<{ lessonId: string; title: string } | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const lessonId = params.get('lessonId');
+      const title = params.get('title') || '';
+      if (lessonId) {
+        return { lessonId, title: decodeURIComponent(title) };
+      }
+    }
+    return null;
+  });
+
   // --- 드라이브 설정 상태 ---
   const [rootFolderId, setRootFolderId] = useState<string>(() => {
     return localStorage.getItem('lbw_root_folder_id') || DEFAULT_ROOT_FOLDER_ID;
@@ -143,11 +159,19 @@ export default function App() {
   const [isDraggingGlobal, setIsDraggingGlobal] = useState<boolean>(false);
 
   // --- 모달 관리 ---
-  const [activeModal, setActiveModal] = useState<'new_folder' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
+  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'qr_lesson_viewer' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
   const [targetItem, setTargetItem] = useState<DriveItem | null>(null);
   const [renameInput, setRenameInput] = useState<string>('');
   const [newFolderName, setNewFolderName] = useState<string>('');
   const [isProcessingAction, setIsProcessingAction] = useState<boolean>(false);
+
+  // --- QR 수업 관리 상태 ---
+  const [qrLessonTitle, setQrLessonTitle] = useState<string>('');
+  const [qrLessonPin, setQrLessonPin] = useState<string>('1234');
+  const [qrLessonPdfFile, setQrLessonPdfFile] = useState<File | null>(null);
+  const [activeQrLesson, setActiveQrLesson] = useState<DriveItem | null>(null);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  const qrPdfInputRef = useRef<HTMLInputElement>(null);
 
   // 로그인 폼 상태
   const [loginTab, setLoginTab] = useState<'teacher' | 'admin'>('teacher');
@@ -382,6 +406,120 @@ export default function App() {
   };
 
   // ==========================================================================
+  // [QR 수업 판별 헬퍼]
+  // ==========================================================================
+  const isQrLessonItem = (item: DriveItem) => {
+    return item.type === 'folder' && (item.name.startsWith('[QR수업]') || item.name.includes('[QR수업]'));
+  };
+
+  // ==========================================================================
+  // [QR코드 수업 만들기: 폴더 생성 + lesson_config.json + 선택적 PDF 업로드]
+  // ==========================================================================
+  const handleCreateQrLesson = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEdit) {
+      showToast('⚠️ 기본 모드(다운로드 전용)입니다. 선생님 로그인 후 가능합니다.');
+      return;
+    }
+    const cleanTitle = qrLessonTitle.trim();
+    if (!cleanTitle) {
+      showToast('⚠️ 수업 제목을 입력해 주세요.');
+      return;
+    }
+
+    setIsProcessingAction(true);
+    const folderName = `[QR수업] ${cleanTitle}`;
+    showToast(`📱 '${folderName}' 수업 폴더를 생성합니다...`);
+
+    try {
+      // 1. 구글 드라이브에 수업 전용 폴더 생성
+      const folderRes = await executeDriveAction({
+        action: 'createFolder',
+        folderId: currentFolder.id,
+        name: folderName
+      });
+
+      const lessonFolderId = folderRes.folderId;
+      const lessonId = `lesson_${Date.now()}`;
+      let pdfFileId: string | undefined = undefined;
+      let pdfFileName: string | undefined = undefined;
+
+      // 2. 학습지 PDF가 첨부되었으면 폴더 내에 업로드
+      if (qrLessonPdfFile) {
+        showToast(`📄 학습지 '${qrLessonPdfFile.name}' 업로드 중...`);
+        const pdfBase64 = await fileToBase64(qrLessonPdfFile);
+        const uploadPdfRes = await executeDriveAction({
+          action: 'upload',
+          folderId: lessonFolderId,
+          name: qrLessonPdfFile.name,
+          mimeType: 'application/pdf',
+          base64: pdfBase64
+        });
+        pdfFileId = uploadPdfRes.id;
+        pdfFileName = qrLessonPdfFile.name;
+      }
+
+      // 3. 수업 설정(Config) JSON 데이터 생성 및 업로드
+      const lessonConfig = {
+        lessonId,
+        title: cleanTitle,
+        folderId: lessonFolderId,
+        teacherPin: qrLessonPin.trim() || '1234',
+        createdAt: new Date().toISOString(),
+        pdfFileId,
+        pdfFileName
+      };
+
+      const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
+      await executeDriveAction({
+        action: 'upload',
+        folderId: lessonFolderId,
+        name: 'lesson_config.json',
+        mimeType: 'application/json',
+        base64: configJsonBase64
+      });
+
+      showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다!`);
+      setActiveModal(null);
+      setQrLessonTitle('');
+      setQrLessonPin('1234');
+      setQrLessonPdfFile(null);
+      fetchDriveItems(currentFolder.id);
+    } catch (err: any) {
+      console.error('QR 수업 생성 오류:', err);
+      showToast(`❌ 수업 생성 실패: ${err.message}`);
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // ==========================================================================
+  // [QR 수업 대화형 실행 (전자칠판 뷰어 열기)]
+  // ==========================================================================
+  const handleOpenQrLesson = async (item: DriveItem) => {
+    setActiveQrLesson(item);
+    setActiveModal('qr_lesson_viewer');
+
+    const cleanTitle = item.name.replace('[QR수업]', '').trim();
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const studentUrl = `${origin}/?lessonId=${item.folderId || item.id}&title=${encodeURIComponent(cleanTitle)}`;
+
+    try {
+      const qrDataUrl = await QRCode.toDataURL(studentUrl, {
+        width: 320,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      });
+      setQrCodeDataUrl(qrDataUrl);
+    } catch (qrErr) {
+      console.error('QR 코드 생성 실패:', qrErr);
+    }
+  };
+
+  // ==========================================================================
   // [이름 바꾸기]
   // ==========================================================================
   const handleRename = async (e: React.FormEvent) => {
@@ -555,6 +693,19 @@ export default function App() {
     return '📄';
   };
 
+  // 학생 QR 수업 모드 진입인 경우 학생 전용 삼성노트 REA 필기 뷰어 렌더링
+  if (studentLessonParam) {
+    return (
+      <StudentLessonView
+        lessonId={studentLessonParam.lessonId}
+        lessonTitle={studentLessonParam.title}
+        onExit={() => {
+          window.location.href = window.location.pathname;
+        }}
+      />
+    );
+  }
+
   return (
     <div 
       className="gdrive-app"
@@ -707,6 +858,19 @@ export default function App() {
                     <span style={{ fontSize: '18px' }}>📁</span>
                     <span>새 폴더</span>
                   </button>
+                  <button 
+                    className="gdrive-menu-item"
+                    onClick={() => {
+                      setIsNewMenuOpen(false);
+                      setQrLessonTitle('');
+                      setQrLessonPin('1234');
+                      setQrLessonPdfFile(null);
+                      setActiveModal('new_qr_lesson');
+                    }}
+                  >
+                    <span style={{ fontSize: '18px' }}>📱</span>
+                    <span>QR코드 수업 만들기</span>
+                  </button>
                   <div className="gdrive-menu-divider" />
                   <button 
                     className="gdrive-menu-item"
@@ -809,13 +973,38 @@ export default function App() {
             {selectedItem ? (
               <div className="gdrive-selection-actions">
                 <span className="gdrive-selection-count">1개 선택됨</span>
-                {selectedItem.type !== 'folder' && (
-                  <button 
-                    className="gdrive-action-chip" 
-                    onClick={() => handleDownload(selectedItem)}
-                  >
-                    <span>📥</span> 다운로드
-                  </button>
+                {isQrLessonItem(selectedItem) ? (
+                  <>
+                    <button 
+                      className="gdrive-action-chip"
+                      style={{ background: 'var(--g-primary-blue)', color: '#041e49', fontWeight: 700 }}
+                      onClick={() => handleOpenQrLesson(selectedItem)}
+                    >
+                      <span>▶️</span> 수업 실행
+                    </button>
+                    <button 
+                      className="gdrive-action-chip"
+                      onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
+                    >
+                      <span>📁</span> 폴더 열기
+                    </button>
+                  </>
+                ) : (
+                  selectedItem.type === 'folder' ? (
+                    <button 
+                      className="gdrive-action-chip"
+                      onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
+                    >
+                      <span>📁</span> 열기
+                    </button>
+                  ) : (
+                    <button 
+                      className="gdrive-action-chip" 
+                      onClick={() => handleDownload(selectedItem)}
+                    >
+                      <span>📥</span> 다운로드
+                    </button>
+                  )
                 )}
                 {canEdit && (
                   <>
@@ -929,16 +1118,19 @@ export default function App() {
                 <tbody>
                   {filteredItems.map(item => {
                     const isSelected = selectedItemId === item.id;
+                    const isQr = isQrLessonItem(item);
                     return (
                       <tr 
                         key={item.id}
-                        className={`gdrive-row ${item.type} ${isSelected ? 'selected' : ''}`}
+                        className={`gdrive-row ${item.type} ${isQr ? 'qr-lesson-row' : ''} ${isSelected ? 'selected' : ''}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedItemId(item.id);
                         }}
                         onDoubleClick={() => {
-                          if (item.type === 'folder') {
+                          if (isQr) {
+                            handleOpenQrLesson(item);
+                          } else if (item.type === 'folder') {
                             handleOpenFolder(item.folderId || item.id, item.name);
                           } else {
                             handleDownload(item);
@@ -948,27 +1140,43 @@ export default function App() {
                         <td>
                           <div className="gdrive-name-cell">
                             <span className="gdrive-item-icon">{getItemIcon(item)}</span>
-                            <span className="gdrive-item-name" title={item.name}>{item.name}</span>
+                            <span className="gdrive-item-name" title={item.name}>
+                              {isQr ? item.name.replace('[QR수업]', '').trim() : item.name}
+                            </span>
+                            {isQr && (
+                              <span className="gdrive-qr-badge">📱 QR 대화형 수업</span>
+                            )}
                           </div>
                         </td>
                         <td style={{ color: 'var(--g-text-secondary)', fontSize: '13px' }}>
                           {item.updatedAt}
                         </td>
                         <td style={{ color: 'var(--g-text-muted)', fontSize: '13px' }}>
-                          {item.size}
+                          {isQr ? '수업 앱' : item.size}
                         </td>
                         <td>
                           {/* 마우스 호버 시 나타나는 빠른 액션 */}
                           <div className="gdrive-row-actions" onClick={(e) => e.stopPropagation()}>
-                            {item.type !== 'folder' && (
+                            {isQr ? (
                               <button 
                                 className="gdrive-icon-btn" 
-                                style={{ width: '32px', height: '32px', fontSize: '15px' }}
-                                title="다운로드"
-                                onClick={() => handleDownload(item)}
+                                style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-primary-blue)' }}
+                                title="수업 실행"
+                                onClick={() => handleOpenQrLesson(item)}
                               >
-                                📥
+                                ▶️
                               </button>
+                            ) : (
+                              item.type !== 'folder' && (
+                                <button 
+                                  className="gdrive-icon-btn" 
+                                  style={{ width: '32px', height: '32px', fontSize: '15px' }}
+                                  title="다운로드"
+                                  onClick={() => handleDownload(item)}
+                                >
+                                  📥
+                                </button>
+                              )
                             )}
                             {canEdit && (
                               <>
@@ -1011,37 +1219,63 @@ export default function App() {
                   <div>
                     <div className="gdrive-grid-section-title">폴더</div>
                     <div className="gdrive-folder-grid">
-                      {filteredItems.filter(i => i.type === 'folder').map(folder => (
-                        <div 
-                          key={folder.id}
-                          className={`gdrive-folder-card ${selectedItemId === folder.id ? 'selected' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedItemId(folder.id);
-                          }}
-                          onDoubleClick={() => handleOpenFolder(folder.folderId || folder.id, folder.name)}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                            <span style={{ fontSize: '20px' }}>📁</span>
-                            <span className="gdrive-card-title">{folder.name}</span>
+                      {filteredItems.filter(i => i.type === 'folder').map(folder => {
+                        const isQr = isQrLessonItem(folder);
+                        return (
+                          <div 
+                            key={folder.id}
+                            className={`gdrive-folder-card ${isQr ? 'qr-lesson-card' : ''} ${selectedItemId === folder.id ? 'selected' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedItemId(folder.id);
+                            }}
+                            onDoubleClick={() => {
+                              if (isQr) {
+                                handleOpenQrLesson(folder);
+                              } else {
+                                handleOpenFolder(folder.folderId || folder.id, folder.name);
+                              }
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                              <span style={{ fontSize: '20px' }}>{isQr ? '📱' : '📁'}</span>
+                              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                <span className="gdrive-card-title">{isQr ? folder.name.replace('[QR수업]', '').trim() : folder.name}</span>
+                                {isQr && <span style={{ fontSize: '11px', color: 'var(--g-primary-blue)', fontWeight: 600 }}>대화형 수업 앱</span>}
+                              </div>
+                            </div>
+                            {isQr ? (
+                              <button 
+                                className="gdrive-icon-btn"
+                                style={{ width: '28px', height: '28px', fontSize: '13px', color: 'var(--g-primary-blue)' }}
+                                title="수업 실행"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenQrLesson(folder);
+                                }}
+                              >
+                                ▶️
+                              </button>
+                            ) : (
+                              canEdit && (
+                                <button 
+                                  className="gdrive-icon-btn"
+                                  style={{ width: '28px', height: '28px', fontSize: '13px' }}
+                                  title="이름 바꾸기"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTargetItem(folder);
+                                    setRenameInput(folder.name);
+                                    setActiveModal('rename');
+                                  }}
+                                >
+                                  ✏️
+                                </button>
+                              )
+                            )}
                           </div>
-                          {canEdit && (
-                            <button 
-                              className="gdrive-icon-btn"
-                              style={{ width: '28px', height: '28px', fontSize: '13px' }}
-                              title="이름 바꾸기"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setTargetItem(folder);
-                                setRenameInput(folder.name);
-                                setActiveModal('rename');
-                              }}
-                            >
-                              ✏️
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -1119,6 +1353,215 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          모달 1-2: QR코드 수업 만들기
+          ==================================================================== */}
+      {activeModal === 'new_qr_lesson' && (
+        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+          <div className="modal-box" style={{ maxWidth: '520px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2><span>📱</span> QR코드 수업 만들기</h2>
+              <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
+            </div>
+            <form onSubmit={handleCreateQrLesson} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              <div style={{ background: 'rgba(168, 199, 250, 0.08)', border: '1px solid rgba(168, 199, 250, 0.25)', padding: '12px 14px', borderRadius: '8px', fontSize: '13px', color: 'var(--g-text-secondary)', lineHeight: 1.5 }}>
+                <strong style={{ color: 'var(--g-primary-blue)' }}>💡 앱시트 스타일 QR 수업</strong><br/>
+                드라이브에 <strong>[QR수업] 폴더</strong>가 생성되고, 그 안에 수업 설정과 학생들의 필기 누가기록이 자동 보관됩니다. 화면에서는 독립 실행형 수업 앱 카드로 렌더링됩니다.
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                  수업 제목 <span style={{ color: 'var(--g-danger-red)' }}>*</span>
+                </label>
+                <input 
+                  type="text" 
+                  className="g-form-input" 
+                  value={qrLessonTitle}
+                  onChange={(e) => setQrLessonTitle(e.target.value)}
+                  placeholder="예: 3학년 1반 수학 삼각비의 활용"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                  선생님 PIN 번호 (4자리)
+                </label>
+                <input 
+                  type="text" 
+                  maxLength={4}
+                  className="g-form-input" 
+                  value={qrLessonPin}
+                  onChange={(e) => setQrLessonPin(e.target.value)}
+                  placeholder="1234"
+                  required
+                />
+                <span style={{ fontSize: '11.5px', color: 'var(--g-text-muted)', marginTop: '4px', display: 'block' }}>
+                  전자칠판에서 수업 대시보드 관리 시 본인 확인용으로 사용됩니다.
+                </span>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                  수업용 학습지 PDF 첨부 (선택 사항)
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button 
+                    type="button" 
+                    className="g-btn g-btn-text" 
+                    style={{ border: '1px solid var(--g-border)' }}
+                    onClick={() => qrPdfInputRef.current?.click()}
+                  >
+                    📄 {qrLessonPdfFile ? 'PDF 변경' : 'PDF 파일 선택'}
+                  </button>
+                  <span style={{ fontSize: '12.5px', color: qrLessonPdfFile ? '#a8c7fa' : 'var(--g-text-muted)' }}>
+                    {qrLessonPdfFile ? qrLessonPdfFile.name : '미선택 시 빈 스마트 노트로 진행'}
+                  </span>
+                </div>
+                <input 
+                  type="file" 
+                  accept="application/pdf"
+                  ref={qrPdfInputRef}
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files.length > 0) {
+                      setQrLessonPdfFile(e.target.files[0]);
+                    }
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+                <button type="button" className="g-btn g-btn-text" onClick={() => setActiveModal(null)}>
+                  취소
+                </button>
+                <button type="submit" className="g-btn g-btn-primary" disabled={isProcessingAction}>
+                  {isProcessingAction ? '수업 개설 중...' : '📱 수업 생성하기'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          모달 1-3: 전자칠판용 대화형 QR 수업 실행 대시보드 뷰어
+          ==================================================================== */}
+      {activeModal === 'qr_lesson_viewer' && activeQrLesson && (
+        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+          <div className="modal-box" style={{ maxWidth: '900px', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '24px' }}>📱</span>
+                <div>
+                  <h2 style={{ fontSize: '18px', margin: 0 }}>
+                    {activeQrLesson.name.replace('[QR수업]', '').trim()}
+                  </h2>
+                  <span style={{ fontSize: '12px', color: 'var(--g-text-secondary)' }}>
+                    대화형 전자칠판 라이브 수업 세션
+                  </span>
+                </div>
+              </div>
+              <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 320px) 1fr', gap: '24px', marginTop: '10px' }}>
+              {/* 좌측: 초대형 QR코드 영역 */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#1e1f20', padding: '20px', borderRadius: '12px', border: '1px solid var(--g-border)' }}>
+                <h3 style={{ fontSize: '14px', color: 'var(--g-primary-blue)', marginBottom: '12px', fontWeight: 600 }}>
+                  📷 학생 참여 QR코드
+                </h3>
+                {qrCodeDataUrl ? (
+                  <div style={{ background: '#ffffff', padding: '12px', borderRadius: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }}>
+                    <img src={qrCodeDataUrl} alt="QR Code" style={{ width: '220px', height: '220px', display: 'block' }} />
+                  </div>
+                ) : (
+                  <div style={{ width: '220px', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--g-text-muted)' }}>
+                    QR 생성 중...
+                  </div>
+                )}
+                <p style={{ fontSize: '12px', color: 'var(--g-text-secondary)', textAlign: 'center', marginTop: '14px', lineHeight: 1.5 }}>
+                  태블릿/스마트폰 카메라로<br />QR코드를 스캔하여 수업에 참여하세요.
+                </p>
+
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px', width: '100%' }}>
+                  <button
+                    type="button"
+                    className="g-btn g-btn-text"
+                    style={{ flex: 1, fontSize: '12px', border: '1px solid var(--g-border)' }}
+                    onClick={() => {
+                      const cleanTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
+                      const url = `${window.location.origin}/?lessonId=${activeQrLesson.folderId || activeQrLesson.id}&title=${encodeURIComponent(cleanTitle)}`;
+                      navigator.clipboard.writeText(url);
+                      showToast('✅ 학생 접속 URL이 복사되었습니다.');
+                    }}
+                  >
+                    🔗 주소 복사
+                  </button>
+                  <button
+                    type="button"
+                    className="g-btn g-btn-primary"
+                    style={{ flex: 1, fontSize: '12px' }}
+                    onClick={() => {
+                      const cleanTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
+                      const url = `${window.location.origin}/?lessonId=${activeQrLesson.folderId || activeQrLesson.id}&title=${encodeURIComponent(cleanTitle)}`;
+                      window.open(url, '_blank');
+                    }}
+                  >
+                    🚀 학생 창 열기
+                  </button>
+                </div>
+              </div>
+
+              {/* 우측: 실시간 출석 및 필기 모니터링 영역 */}
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                  <h3 style={{ fontSize: '15px', color: '#ffffff', fontWeight: 600 }}>
+                    👥 실시간 학생 필기 모니터링
+                  </h3>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button 
+                      className="g-btn g-btn-text" 
+                      style={{ fontSize: '12px', border: '1px solid var(--g-border)' }}
+                      onClick={() => handleOpenFolder(activeQrLesson.folderId || activeQrLesson.id, activeQrLesson.name)}
+                    >
+                      📁 드라이브 폴더 열기
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ background: '#1e1f20', borderRadius: '12px', border: '1px solid var(--g-border)', padding: '16px', flex: 1, minHeight: '260px', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--g-border-subtle)', paddingBottom: '10px', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '12.5px', color: 'var(--g-text-secondary)' }}>
+                      최근 필기 제출순 자동 정렬
+                    </span>
+                    <span style={{ fontSize: '12px', background: 'rgba(52, 168, 83, 0.15)', color: '#81c995', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
+                      ● 라이브 수신 대기 중
+                    </span>
+                  </div>
+
+                  {/* 학생 타일 그리드 (모의/실시간 데이터 연동 영역) */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px', overflowY: 'auto', maxHeight: '240px' }}>
+                    <div style={{ border: '2px dashed var(--g-border)', borderRadius: '8px', padding: '16px 8px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: '24px', marginBottom: '4px' }}>📱</span>
+                      QR코드를 스캔하면<br/>학생 아이콘이<br/>실시간 표시됩니다.
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 'auto', paddingTop: '14px', borderTop: '1px solid var(--g-border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: 'var(--g-text-muted)' }}>
+                    <span>💡 학생이 필기를 마치고 [등록]을 누르면 즉시 맨 앞으로 자동 배치됩니다.</span>
+                    <button className="g-btn g-btn-text" style={{ fontSize: '12px' }} onClick={() => setActiveModal(null)}>
+                      닫기
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

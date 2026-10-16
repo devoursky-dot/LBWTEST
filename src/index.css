@@ -766,3 +766,234 @@ body {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ==========================================================================
+   6. [앱시트 스타일] QR 대화형 수업 전용 뱃지 & 카드 디자인
+   ========================================================================== */
+
+/* 목록 뷰 QR 수업 뱃지 */
+.gdrive-qr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(59, 130, 246, 0.25));
+  border: 1px solid rgba(168, 85, 247, 0.5);
+  color: #d8b4fe;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  margin-left: 8px;
+  letter-spacing: 0.2px;
+}
+
+/* 목록 뷰 QR 수업 행 */
+.gdrive-row.qr-lesson-row {
+  background-color: rgba(168, 85, 247, 0.04);
+}
+
+.gdrive-row.qr-lesson-row:hover {
+  background-color: rgba(168, 85, 247, 0.09);
+}
+
+.gdrive-row.qr-lesson-row .gdrive-item-name {
+  color: #f3e8ff !important;
+  font-weight: 600;
+}
+
+/* 그리드 뷰 QR 수업 앱 카드 (AppSheet Style) */
+.gdrive-folder-card.qr-lesson-card {
+  height: 62px;
+  background: linear-gradient(135deg, #252233 0%, #1e2433 100%);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  position: relative;
+  overflow: hidden;
+}
+
+.gdrive-folder-card.qr-lesson-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: linear-gradient(to bottom, #a855f7, #3b82f6);
+}
+
+.gdrive-folder-card.qr-lesson-card:hover {
+  background: linear-gradient(135deg, #2f2a42 0%, #242c40 100%);
+  border-color: #a855f7;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.2);
+  transform: translateY(-1px);
+}
+
+.gdrive-folder-card.qr-lesson-card .gdrive-card-title {
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+/* ==========================================================================
+   7. [학생용] 삼성노트 REA 팜리젝션 벡터 필기 웹앱 스타일
+   ========================================================================== */
+
+.student-app-container {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  background-color: #131314;
+  color: #f1f3f4;
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+
+.student-header {
+  height: 52px;
+  background-color: #1e1f20;
+  border-bottom: 1px solid var(--g-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 100;
+}
+
+.student-badge-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--g-border);
+  color: #ffffff;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.student-badge-btn.warning {
+  background: rgba(242, 139, 130, 0.15);
+  border-color: #f28b82;
+  color: #f28b82;
+}
+
+.student-toolbar {
+  height: 48px;
+  background-color: #232528;
+  border-bottom: 1px solid var(--g-border);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  overflow-x: auto;
+  z-index: 90;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--g-border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.student-tool-btn {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--g-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.student-tool-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.student-tool-btn.active {
+  background-color: var(--g-primary-blue);
+  color: #041e49;
+}
+
+.student-tool-btn.active-pen-mode {
+  background: linear-gradient(135deg, rgba(52, 168, 83, 0.25), rgba(66, 133, 244, 0.25));
+  border-color: #81c995;
+  color: #81c995;
+  font-weight: 700;
+}
+
+.student-tool-btn.danger:hover {
+  background-color: rgba(234, 67, 53, 0.15);
+  color: #f28b82;
+}
+
+.color-dot-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.color-dot-btn.selected {
+  transform: scale(1.2);
+  border-color: #ffffff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.5);
+}
+
+.size-dot-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.size-dot-btn.selected {
+  background-color: var(--g-primary-blue);
+}
+
+.student-canvas-wrapper {
+  flex: 1;
+  position: relative;
+  background-color: #1a1b1d;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.student-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.student-text-input {
+  background: rgba(30, 31, 32, 0.85);
+  border: 1px dashed var(--g-primary-blue);
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  font-family: inherit;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
