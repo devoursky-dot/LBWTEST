@@ -48,7 +48,19 @@ const GAS_CODE_TEMPLATE = `function doPost(e) {
 
 export default function App() {
   // --- 권한 및 시스템 설정 상태 ---
-  const [authMode, setAuthMode] = useState<AuthMode>('guest');
+  const [authMode, setAuthMode] = useState<AuthMode>(() => {
+    // URL 쿼리에 ?pass=tch1234 또는 ?admin=admin!@#$1234 가 있으면 자동 로그인 지원!
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const pass = params.get('pass');
+      const adminPass = params.get('admin');
+      const savedTeacherPw = localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
+      
+      if (adminPass === ADMIN_PW) return 'admin';
+      if (pass === savedTeacherPw || pass === 'tch1234') return 'teacher';
+    }
+    return 'guest';
+  });
   const [teacherPw, setTeacherPw] = useState<string>(() => {
     return localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
   });
