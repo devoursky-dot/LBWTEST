@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import QRCode from 'qrcode';
 import { StudentLessonView } from './StudentLessonView';
+import { PortalLoginView } from './PortalLoginView';
+import { AdminDashboardModal } from './AdminDashboardModal';
+import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { archiveOldNotesToGoogleDrive } from './lib/archiver';
 import './index.css';
@@ -99,25 +102,24 @@ const GAS_CODE_TEMPLATE = `function doPost(e) {
 }`;
 
 export default function App() {
+  // --- 통합 포털 세션 (전자칠판, 선생님, 학생, 관리자) ---
+  const [currentSession, setCurrentSessionState] = useState<UserSession | null>(() => {
+    return getCurrentSession();
+  });
+  const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState<boolean>(false);
+
   // --- 권한 및 모드 상태 ---
   const [authMode, setAuthMode] = useState<AuthMode>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const pass = params.get('pass');
-      const adminPass = params.get('admin');
-      const savedTeacherPw = localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
-      if (adminPass === ADMIN_PW) return 'admin';
-      if (pass === savedTeacherPw || pass === 'tch1234') return 'teacher';
-    }
-    const saved = localStorage.getItem('lbw_auth_mode');
-    if (saved === 'teacher' || saved === 'admin') return saved;
+    const initialSession = getCurrentSession();
+    if (initialSession?.role === 'admin') return 'admin';
+    if (initialSession?.role === 'teacher') return 'teacher';
     return 'guest';
   });
   const [teacherPw, setTeacherPw] = useState<string>(() => {
     return localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
   });
 
-  // 편집 권한 (선생님/관리자만 폴더생성/수정/삭제/업로드 가능, 기본 모드는 다운로드만 가능)
+  // 편집 권한 (선생님/관리자만 폴더생성/수정/삭제/업로드 가능, 기본 전자칠판 모드는 다운로드만 가능)
   const canEdit = authMode === 'teacher' || authMode === 'admin';
 
   // --- 학생 QR 수업 모드 감지 (?lessonId=...) ---
@@ -204,6 +206,37 @@ export default function App() {
     setTimeout(() => {
       setToastMessage(prev => (prev === msg ? null : prev));
     }, 3500);
+  };
+
+  // 선생님 폴더 이름 목록 (구글 드라이브 최상위 폴더 스캔 기반)
+  const driveTeacherFolders = useMemo(() => {
+    return items
+      .filter(item => item.type === 'folder' && !item.name.startsWith('[QR수업]'))
+      .map(item => item.name);
+  }, [items]);
+
+  const handlePortalLoginSuccess = (session: UserSession) => {
+    setCurrentSessionState(session);
+    if (session.role === 'admin') {
+      setAuthMode('admin');
+      localStorage.setItem('lbw_auth_mode', 'admin');
+    } else if (session.role === 'teacher') {
+      setAuthMode('teacher');
+      localStorage.setItem('lbw_auth_mode', 'teacher');
+    } else {
+      setAuthMode('guest');
+      localStorage.setItem('lbw_auth_mode', 'guest');
+    }
+    showToast(`🎉 ${session.name}님으로 로그인되었습니다.`);
+  };
+
+  const handlePortalLogout = () => {
+    setCurrentSession(null);
+    setWhiteboardPermanentAuth(false);
+    setCurrentSessionState(null);
+    setAuthMode('guest');
+    localStorage.removeItem('lbw_auth_mode');
+    showToast('👋 로그아웃되었습니다.');
   };
 
   // ==========================================================================
@@ -833,6 +866,17 @@ export default function App() {
     );
   }
 
+  // 첫 화면: 인증 세션이 없으면 통합 포털 로그인 게이트웨이 렌더링
+  // (전자칠판에서 tch1234를 1회 입력해 두었다면 자동 통과)
+  if (!currentSession) {
+    return (
+      <PortalLoginView
+        driveTeacherFolders={driveTeacherFolders}
+        onLoginSuccess={handlePortalLoginSuccess}
+      />
+    );
+  }
+
   return (
     <div 
       className="gdrive-app"
@@ -920,35 +964,54 @@ export default function App() {
             ⚙️
           </button>
 
-          {/* 선생님 / 관리자 프로필 버튼 */}
-          <button
-            className="gdrive-profile-btn"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-full)',
-              background: authMode === 'admin' ? 'rgba(168, 85, 247, 0.2)' : authMode === 'teacher' ? 'rgba(168, 199, 250, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-              border: `1px solid ${authMode === 'admin' ? '#a855f7' : authMode === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
-              color: '#ffffff',
-              cursor: 'pointer',
-              fontSize: '13px',
-              fontWeight: 600,
-              transition: 'all 0.15s ease'
-            }}
-            onClick={() => {
-              setLoginError('');
-              setInputTeacherPw('');
-              setInputAdminId('');
-              setInputAdminPw('');
-              setActiveModal('login');
-            }}
-            title={canEdit ? '인증 정보 변경 또는 로그아웃' : '기본 모드 (다운로드 전용) - 클릭 시 선생님/관리자 로그인'}
-          >
-            <span>{authMode === 'admin' ? '🛡️' : authMode === 'teacher' ? '👨‍🏫' : '👤'}</span>
-            <span>{authMode === 'admin' ? '관리자' : authMode === 'teacher' ? '선생님 모드' : '기본 모드 (다운로드)'}</span>
-          </button>
+          {/* 관리자일 경우 비번 관리 센터 원클릭 바로가기 버튼 */}
+          {currentSession?.role === 'admin' && (
+            <button
+              className="g-btn g-btn-primary"
+              style={{
+                fontSize: '12px',
+                background: 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
+                color: '#1e293b',
+                fontWeight: 700,
+                border: 'none',
+                padding: '6px 12px'
+              }}
+              onClick={() => setIsAdminDashboardOpen(true)}
+              title="전자칠판, 선생님, 1101~3830 학생 비밀번호 관리 센터"
+            >
+              🛡️ 계정/비번 관리 센터
+            </button>
+          )}
+
+          {/* 현재 로그인 프로필 및 로그아웃 버튼 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-full)',
+                background: currentSession?.role === 'admin' ? 'rgba(234, 179, 8, 0.15)' : currentSession?.role === 'teacher' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                border: `1px solid ${currentSession?.role === 'admin' ? '#eab308' : currentSession?.role === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
+                color: '#ffffff',
+                fontSize: '12.5px',
+                fontWeight: 600
+              }}
+            >
+              <span>{currentSession?.role === 'admin' ? '🛡️' : currentSession?.role === 'teacher' ? '👨‍🏫' : currentSession?.role === 'student' ? '👨‍🎓' : '🖥️'}</span>
+              <span>{currentSession?.name || '전자칠판 (기본모드)'}</span>
+            </div>
+
+            <button
+              className="g-btn g-btn-text"
+              style={{ fontSize: '12px', border: '1px solid var(--g-border)', padding: '5px 10px' }}
+              onClick={handlePortalLogout}
+              title="로그아웃하고 첫 화면(로그인 게이트)으로 돌아갑니다."
+            >
+              🚪 로그아웃
+            </button>
+          </div>
         </div>
       </header>
 
@@ -2246,6 +2309,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 관리자 계정 & 비밀번호 통합 관리 대시보드 모달 */}
+      {isAdminDashboardOpen && (
+        <AdminDashboardModal
+          driveFolderNames={driveTeacherFolders}
+          onClose={() => setIsAdminDashboardOpen(false)}
+          onToast={showToast}
+        />
       )}
 
       {/* 하단 토스트 알림 */}
