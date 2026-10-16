@@ -196,3 +196,43 @@ export async function GET(request: Request) {
     }
   });
 }
+
+const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
+
+export async function POST(request: Request) {
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+
+  try {
+    const body = await request.json();
+    const gasUrl = body.gasUrl || process.env.VITE_GAS_UPLOAD_URL || DEFAULT_GAS_URL;
+
+    if (!gasUrl) {
+      return new Response(JSON.stringify({ success: false, error: 'Google Apps Script 웹 앱 URL이 설정되지 않았습니다.' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    }
+
+    const gasRes = await fetch(gasUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body)
+    });
+
+    const data = await gasRes.json();
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' }
+    });
+  } catch (err: any) {
+    return new Response(JSON.stringify({ success: false, error: err.message || '요청 처리 실패' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' }
+    });
+  }
+}
+

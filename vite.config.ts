@@ -19,6 +19,42 @@ function localDriveApiPlugin(): Plugin {
           const apiKey = urlObj.searchParams.get('apiKey') || process.env.GOOGLE_API_KEY || process.env.VITE_GOOGLE_API_KEY || DEFAULT_API_KEY;
 
           // ===================================================================
+          // 0. [로컬] POST 요청 (업로드, 새 폴더, 이름 변경, 삭제 중계 프록시)
+          // ===================================================================
+          if (req.method === 'POST') {
+            try {
+              let bodyStr = '';
+              req.on('data', chunk => { bodyStr += chunk; });
+              req.on('end', async () => {
+                try {
+                  const body = JSON.parse(bodyStr || '{}');
+                  const targetGasUrl = body.gasUrl || process.env.VITE_GAS_UPLOAD_URL || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
+                  
+                  const gasRes = await fetch(targetGasUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(body)
+                  });
+                  const json = await gasRes.json();
+                  res.writeHead(200, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Access-Control-Allow-Origin': '*'
+                  });
+                  res.end(JSON.stringify(json));
+                } catch (subErr: any) {
+                  res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                  res.end(JSON.stringify({ success: false, error: subErr.message || 'GAS 프록시 요청 실패' }));
+                }
+              });
+              return;
+            } catch (postErr: any) {
+              res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(JSON.stringify({ success: false, error: postErr.message }));
+              return;
+            }
+          }
+
+          // ===================================================================
           // 1. [로컬] 다운로드 완전 바이트 스트리밍
           // ===================================================================
           if (action === 'download' && fileId) {
