@@ -182,40 +182,22 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [전자칠판 안전 다운로드 핸들러 (100MB+ 바이러스 경고 자동 우회)]
+  // [전자칠판 100% 안전 스트리밍 다운로드 (구글 로그인 / 바이러스 경고 100% 원천 차단)]
   // ==========================================================================
-  const handleSmartDownload = async (item: DriveItem) => {
-    showToast(`⚡ '${item.name}' 다운로드를 준비합니다...`);
+  const handleSmartDownload = (item: DriveItem) => {
+    showToast(`⚡ '${item.name}' 다운로드를 시작합니다...`);
 
-    const standardDownloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${item.id}`;
+    // 우리 서버의 완전 바이트 스트리밍 엔드포인트 (구글 도메인으로 직접 이동하지 않음!)
+    const proxyUrl = `/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
 
-    try {
-      // 1. 대용량 파일 바이러스 검사 경고(UUID, confirm=t) 토큰 추출 시도
-      const pageUrl = `https://drive.google.com/uc?export=download&id=${item.id}`;
-      const res = await fetch(pageUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-      });
-
-      if (res.ok) {
-        const html = await res.text();
-        const uuidMatch = html.match(/uuid=([^&"']+)/i) || html.match(/name="uuid" value="([^"]+)"/i);
-        const confirmMatch = html.match(/confirm=([^&"']+)/i) || html.match(/name="confirm" value="([^"]+)"/i);
-
-        if (uuidMatch) {
-          const uuid = uuidMatch[1];
-          const confirm = confirmMatch ? confirmMatch[1] : 't';
-          const bypassUrl = `https://drive.usercontent.google.com/download?id=${item.id}&export=download&confirm=${confirm}&uuid=${uuid}`;
-          showToast(`🚀 대용량 바이러스 검사 우회 적용 완료! 다운로드를 시작합니다.`);
-          window.location.href = bypassUrl;
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn('Smart token check bypassed to fallback:', e);
-    }
-
-    // 2. 일반 다이렉트 다운로드
-    window.location.href = standardDownloadUrl;
+    // 숨겨진 앵커 태그로 전자칠판 화면 먹통/이탈 없이 즉시 백그라운드 다운로드 트리거
+    const link = document.createElement('a');
+    link.href = proxyUrl;
+    link.setAttribute('download', item.name);
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // ==========================================================================

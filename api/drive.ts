@@ -1,6 +1,6 @@
-// Vercel Serverless Function: Google Drive Unified API
+// Vercel Serverless Function: Google Drive Unified API (Edge Runtime)
 export const config = {
-  runtime: 'edge', // Edge Runtime for ultra-low latency & global CDN caching
+  runtime: 'edge', // Edge Runtime for global low-latency streaming
 };
 
 interface DriveItem {
@@ -19,6 +19,7 @@ export async function GET(request: Request) {
   const action = url.searchParams.get('action') || 'list';
   const folderId = url.searchParams.get('folderId') || url.searchParams.get('id') || '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
   const fileId = url.searchParams.get('fileId') || url.searchParams.get('id');
+  const fileName = url.searchParams.get('fileName') || '수업자료.pdf';
   const apiKey = url.searchParams.get('apiKey') || process.env.GOOGLE_API_KEY || process.env.VITE_GOOGLE_API_KEY;
 
   const corsHeaders = {
@@ -32,32 +33,58 @@ export async function GET(request: Request) {
   }
 
   // =========================================================================
-  // 1. 다운로드 스마트 바이패스 프록시 (전자칠판 안전 다운로드)
+  // 1. [핵심] 완전 백엔드 바이트 스트리밍 다운로드 (전자칠판 구글로그인/경고창 100% 원천 차단)
   // =========================================================================
   if (action === 'download' && fileId) {
     try {
-      // 1-1. 바이러스 검사 경고 페이지 토큰 검사
-      const checkUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-      const pageRes = await fetch(checkUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        redirect: 'follow',
+      // 1-1. 대용량 바이러스 경고 페이지에서 동적 uuid 및 confirm 값 추출
+      const pageUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+      const checkRes = await fetch(pageUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
       });
+      const checkHtml = await checkRes.text();
 
-      const pageHtml = await pageRes.text();
-      const uuidMatch = pageHtml.match(/uuid=([^&"']+)/i) || pageHtml.match(/name="uuid" value="([^"]+)"/i);
-      const confirmMatch = pageHtml.match(/confirm=([^&"']+)/i) || pageHtml.match(/name="confirm" value="([^"]+)"/i);
+      const uuidMatch = checkHtml.match(/uuid=([^&"']+)/i) || checkHtml.match(/name="uuid" value="([^"]+)"/i);
+      const confirmMatch = checkHtml.match(/confirm=([^&"']+)/i) || checkHtml.match(/name="confirm" value="([^"]+)"/i);
 
-      let targetDownloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${fileId}`;
+      let realDownloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${fileId}`;
       if (uuidMatch) {
         const uuid = uuidMatch[1];
         const confirm = confirmMatch ? confirmMatch[1] : 't';
-        targetDownloadUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=${confirm}&uuid=${uuid}`;
+        realDownloadUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=${confirm}&uuid=${uuid}`;
       }
 
-      // 1-2. 클라이언트로 직접 리다이렉트 또는 다운로드 헤더 반환
-      return Response.redirect(targetDownloadUrl, 302);
+      // 1-2. 구글 파일 스트림 직접 수신 (브라우저를 구글 도메인으로 리다이렉트하지 않음!)
+      const googleStreamRes = await fetch(realDownloadUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+      });
+
+      if (!googleStreamRes.ok) {
+        throw new Error(`Google stream error: ${googleStreamRes.statusText}`);
+      }
+
+      // 1-3. 한글 파일명 및 강제 다운로드 헤더 설정
+      const safeFilename = encodeURIComponent(fileName);
+      const headers = new Headers({
+        ...corsHeaders,
+        'Content-Type': googleStreamRes.headers.get('content-type') || 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${safeFilename}"; filename*=UTF-8''${safeFilename}`,
+      });
+
+      const contentLength = googleStreamRes.headers.get('content-length');
+      if (contentLength) {
+        headers.set('Content-Length', contentLength);
+      }
+
+      // 1-4. 순수 바이너리 스트림 파이핑 반환 (구글 로그인 창, 바이러스 경고 화면 0%)
+      return new Response(googleStreamRes.body, {
+        status: 200,
+        headers,
+      });
+
     } catch (e: any) {
-      return new Response(JSON.stringify({ error: 'Download failed', message: e.message }), {
+      console.error('Download streaming error:', e);
+      return new Response(JSON.stringify({ error: 'Download stream failed', message: e.message }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -65,12 +92,12 @@ export async function GET(request: Request) {
   }
 
   // =========================================================================
-  // 2. 파일 목록 조회 (공식 Google Drive API v3 우선 -> 폴백 지원)
+  // 2. 파일 목록 조회 (공식 Google Drive API v3 우선 -> 직통 뷰어 폴백)
   // =========================================================================
   let items: DriveItem[] = [];
   let source = 'unknown';
 
-  // [방법 A] 공식 Google Drive API v3 (API Key가 유효할 때)
+  // [방법 A] 공식 Google Drive API v3
   if (apiKey) {
     try {
       const gApiUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${apiKey}`;
@@ -99,20 +126,18 @@ export async function GET(request: Request) {
               viewUrl: isFolder 
                 ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
                 : `https://drive.google.com/file/d/${file.id}/view?usp=sharing`,
-              downloadUrl: isFolder 
-                ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
-                : `https://drive.google.com/uc?export=download&confirm=t&id=${file.id}`
+              downloadUrl: `/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
             };
           });
           source = 'google_api_v3';
         }
       }
     } catch (e) {
-      console.warn('Google API v3 fetch failed, falling back to proxy:', e);
+      console.warn('Google API v3 fetch failed, falling back:', e);
     }
   }
 
-  // [방법 B] 공식 API 키가 없거나 실패한 경우: 구글 직통 임베드 프록시 (외부 불안정 프록시 제거)
+  // [방법 B] 공식 API 키가 없거나 실패한 경우: 구글 직통 임베드 수집
   if (items.length === 0) {
     try {
       const targetUrl = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;
@@ -143,9 +168,7 @@ export async function GET(request: Request) {
             viewUrl: isFolder 
               ? `https://drive.google.com/drive/folders/${id}?usp=sharing` 
               : `https://drive.google.com/file/d/${id}/view?usp=sharing`,
-            downloadUrl: isFolder 
-              ? `https://drive.google.com/drive/folders/${id}?usp=sharing` 
-              : `https://drive.google.com/uc?export=download&confirm=t&id=${id}`
+            downloadUrl: `/api/drive?action=download&fileId=${id}&fileName=${encodeURIComponent(name)}`
           });
         }
         source = 'google_direct_embedded';
@@ -166,7 +189,7 @@ export async function GET(request: Request) {
     headers: {
       ...corsHeaders,
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 's-maxage=30, stale-while-revalidate=120', // Edge CDN Caching
+      'Cache-Control': 's-maxage=30, stale-while-revalidate=120',
     }
   });
 }
