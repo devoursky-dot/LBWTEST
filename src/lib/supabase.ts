@@ -2,10 +2,10 @@ import { createClient } from '@supabase/supabase-js';
 
 // 선생님의 Supabase 프로젝트 lbw_trans URL
 const DEFAULT_SUPABASE_URL = 'https://pfaxpqkmnrpocuamtnot.supabase.co';
-const DEFAULT_SUPABASE_KEY = '';
+const DEFAULT_SUPABASE_KEY = 'sb_publishable_qbInPtEifr7EmUgn8NjhRw_F1jBdsNm';
 
-export const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || DEFAULT_SUPABASE_URL;
-export const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || DEFAULT_SUPABASE_KEY;
+export const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string) || (import.meta.env.NEXT_PUBLIC_SUPABASE_URL as string) || DEFAULT_SUPABASE_URL;
+export const SUPABASE_ANON_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || (import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY as string) || DEFAULT_SUPABASE_KEY;
 
 export interface ClassNoteRecord {
   id?: string;
