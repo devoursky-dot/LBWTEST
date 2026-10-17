@@ -5,7 +5,7 @@ import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
 import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
-import { archiveOldNotesToGoogleDrive } from './lib/archiver';
+import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import './index.css';
 
 // ============================================================================
@@ -163,7 +163,7 @@ export default function App() {
   const [isDraggingGlobal, setIsDraggingGlobal] = useState<boolean>(false);
 
   // --- 모달 관리 ---
-  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'qr_lesson_viewer' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
+  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'qr_lesson_viewer' | 'save_pdf_modal' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
   const [targetItem, setTargetItem] = useState<DriveItem | null>(null);
   const [renameInput, setRenameInput] = useState<string>('');
   const [newFolderName, setNewFolderName] = useState<string>('');
@@ -177,9 +177,16 @@ export default function App() {
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [studentSubmissions, setStudentSubmissions] = useState<ClassNoteRecord[]>([]);
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
-  const [isArchiving, setIsArchiving] = useState<boolean>(false);
-  const [archiveProgress, setArchiveProgress] = useState<{ current: number; total: number; name: string } | null>(null);
   const [selectedDateFilter, setSelectedDateFilter] = useState<'today' | 'all'>('today');
+
+  // --- 통합 PDF 모음집 생성 상태 ---
+  const [pdfCompilationTitle, setPdfCompilationTitle] = useState<string>('');
+  const [pdfSaveToDrive, setPdfSaveToDrive] = useState<boolean>(true);
+  const [pdfDownloadLocal, setPdfDownloadLocal] = useState<boolean>(true);
+  const [pdfPurgeSupabase, setPdfPurgeSupabase] = useState<boolean>(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
+  const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number; name: string } | null>(null);
+
   const qrPdfInputRef = useRef<HTMLInputElement>(null);
 
   // 로그인 폼 상태
@@ -636,46 +643,89 @@ export default function App() {
     }
   };
 
+
+
   // ==========================================================================
-  // [구글 드라이브 영구 아카이빙 및 Supabase 자동 삭제(purge)]
+  // [전체 학생 필기 모음집 단일 PDF 생성 및 구글드라이브 업로드]
   // ==========================================================================
-  const handleArchiveLessonNotes = async () => {
+  const handleCompileAndSavePdf = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!activeQrLesson) return;
     const lessonFolderId = activeQrLesson.folderId || activeQrLesson.id;
+    const cleanLessonTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
 
-    if (!isSupabaseConfigured) {
-      showToast('ℹ️ Supabase 키가 설정되지 않은 로컬 브로드캐스트 상태입니다. Supabase 연동 시 자동 아카이빙이 활성화됩니다.');
+    // 오늘 날짜 또는 전체 필터에 맞춘 제출 학생 목록
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const targetNotes = studentSubmissions.filter(sub => {
+      if (selectedDateFilter === 'all') return true;
+      const datePart = (sub.updated_at || sub.created_at || '').slice(0, 10);
+      return !datePart || datePart === todayStr;
+    });
+
+    if (targetNotes.length === 0) {
+      showToast('⚠️ 모음집으로 저장할 학생 필기 제출 내역이 없습니다.');
       return;
     }
 
-    setIsArchiving(true);
-    setArchiveProgress({ current: 0, total: 0, name: '시작 중...' });
-    showToast('📦 학생 필기를 고해상도로 변환하여 구글 드라이브에 안전하게 보관합니다...');
+    setIsGeneratingPdf(true);
+    setPdfProgress({ current: 0, total: targetNotes.length, name: 'PDF 생성 시작...' });
+    showToast(`📄 ${targetNotes.length}명 학생 필기를 하나의 통합 PDF로 모으는 중...`);
 
     try {
-      const res = await archiveOldNotesToGoogleDrive({
-        gasUploadUrl,
-        targetFolderId: lessonFolderId,
-        lessonId: lessonFolderId,
+      const result = await generateClassSubmissionPdf({
+        lessonTitle: cleanLessonTitle,
+        customTitle: pdfCompilationTitle.trim() || cleanLessonTitle,
+        notes: targetNotes,
         onProgress: (current, total, name) => {
-          setArchiveProgress({ current, total, name });
+          setPdfProgress({ current, total, name });
         }
       });
 
-      if (res.archivedCount > 0) {
-        showToast(`🎉 ${res.archivedCount}개의 학생 필기가 구글 드라이브에 보관되고 Supabase가 가볍게 정리되었습니다!`);
-        setStudentSubmissions([]);
-      } else if (res.errors.length > 0) {
-        showToast(`⚠️ 보관 중 일부 오류가 발생했습니다: ${res.errors[0]}`);
-      } else {
-        showToast('ℹ️ 보관할 이전 필기 내역이 없거나 이미 모두 보관되었습니다.');
+      // 1. 내 컴퓨터로 즉시 다운로드 (옵션)
+      if (pdfDownloadLocal) {
+        const url = URL.createObjectURL(result.pdfBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = result.fileName;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 500);
       }
+
+      // 2. 구글 드라이브 해당 수업 폴더로 단 1회 안전 업로드 (옵션)
+      if (pdfSaveToDrive) {
+        showToast(`☁️ 구글 드라이브에 '${result.fileName}' 업로드 중...`);
+        await executeDriveAction({
+          action: 'upload',
+          folderId: lessonFolderId,
+          name: result.fileName,
+          mimeType: 'application/pdf',
+          base64: result.pdfBase64
+        });
+        fetchDriveItems(currentFolder.id);
+      }
+
+      // 3. Supabase 임시 제출 내역 정리 (선택 옵션)
+      if (pdfPurgeSupabase && supabase && isSupabaseConfigured) {
+        try {
+          await supabase.from('class_notes').delete().eq('lesson_id', lessonFolderId);
+          setStudentSubmissions([]);
+        } catch (e) {
+          console.warn('Supabase purge error:', e);
+        }
+      }
+
+      showToast(`🎉 '${result.fileName}' (${targetNotes.length}명) 수업 모음집 PDF가 저장되었습니다!`);
+      setActiveModal('qr_lesson_viewer');
     } catch (err: any) {
-      console.error('아카이빙 실패:', err);
-      showToast(`❌ 보관 실패: ${err.message}`);
+      console.error('PDF 컴파일 오류:', err);
+      showToast(`❌ PDF 생성 실패: ${err.message}`);
     } finally {
-      setIsArchiving(false);
-      setArchiveProgress(null);
+      setIsGeneratingPdf(false);
+      setPdfProgress(null);
     }
   };
 
@@ -1755,12 +1805,16 @@ export default function App() {
                     <button
                       type="button"
                       className="g-btn g-btn-primary"
-                      style={{ fontSize: '12px', background: '#1e8e3e', borderColor: '#1e8e3e' }}
-                      disabled={isArchiving}
-                      onClick={handleArchiveLessonNotes}
-                      title="이전 날짜 필기들을 구글 드라이브 폴더에 이미지/PDF로 자동 순차 업로드하고 Supabase 용량을 최적화(purge)합니다."
+                      style={{ fontSize: '12px', background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', borderColor: '#3b82f6', fontWeight: 700 }}
+                      disabled={isGeneratingPdf}
+                      onClick={() => {
+                        const clean = activeQrLesson.name.replace('[QR수업]', '').trim();
+                        setPdfCompilationTitle(clean);
+                        setActiveModal('save_pdf_modal');
+                      }}
+                      title="제출된 전체 학생들의 필기를 모아 하나의 고화질 멀티페이지 PDF 파일로 만들어 구글 드라이브에 저장합니다."
                     >
-                      {isArchiving ? '⏳ 보관 진행 중...' : '📦 드라이브로 영구보관 & DB 정리'}
+                      {isGeneratingPdf ? '⏳ PDF 모음집 생성 중...' : '📑 학생 필기 모음집 PDF로 저장'}
                     </button>
                     <button 
                       type="button"
@@ -1773,11 +1827,11 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 아카이빙 진행 표시 바 */}
-                {isArchiving && archiveProgress && (
-                  <div style={{ background: 'rgba(30, 142, 62, 0.15)', border: '1px solid #34a853', borderRadius: '8px', padding: '10px 14px', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: '#81c995' }}>
-                    <span>🔄 <strong>{archiveProgress.name}</strong> 학생 필기 캔버스 렌더링 및 구글 드라이브 업로드 중...</span>
-                    <span style={{ fontWeight: 700 }}>{archiveProgress.current} / {archiveProgress.total}</span>
+                {/* PDF 모음집 생성 진행 바 */}
+                {isGeneratingPdf && pdfProgress && (
+                  <div style={{ background: 'rgba(37, 99, 235, 0.15)', border: '1px solid #3b82f6', borderRadius: '8px', padding: '10px 14px', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: '#93c5fd' }}>
+                    <span>🔄 <strong>{pdfProgress.name}</strong> 학생 필기 고해상도 렌더링 및 PDF 병합 중...</span>
+                    <span style={{ fontWeight: 700 }}>{pdfProgress.current} / {pdfProgress.total}</span>
                   </div>
                 )}
 
@@ -1936,6 +1990,133 @@ export default function App() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          모달 1-5: 학생 필기 모음집 단일 PDF 저장 및 구글드라이브 업로드
+          ==================================================================== */}
+      {activeModal === 'save_pdf_modal' && activeQrLesson && (
+        <div className="modal-backdrop" onClick={() => !isGeneratingPdf && setActiveModal('qr_lesson_viewer')}>
+          <div className="modal-box" style={{ maxWidth: '540px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '22px' }}>📑</span>
+                <h2 style={{ fontSize: '17px', margin: 0, fontWeight: 700 }}>
+                  수업 필기 모음집 PDF로 저장
+                </h2>
+              </div>
+              <button
+                className="modal-close-btn"
+                onClick={() => !isGeneratingPdf && setActiveModal('qr_lesson_viewer')}
+                disabled={isGeneratingPdf}
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCompileAndSavePdf} style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '10px' }}>
+              <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', borderRadius: '12px', padding: '12px 14px', fontSize: '12.5px', color: '#93c5fd', lineHeight: 1.5 }}>
+                💡 <strong>단일 PDF 통합 저장:</strong> 제출된 모든 학생들의 필기와 학번/이름을 페이지별로 모아 <strong>하나의 통합 PDF 파일</strong>로 제작하여 구글 드라이브에 저장합니다.
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px', fontWeight: 600 }}>
+                  저장할 수업 모음집 제목
+                </label>
+                <input
+                  type="text"
+                  className="g-form-input"
+                  value={pdfCompilationTitle}
+                  onChange={(e) => setPdfCompilationTitle(e.target.value)}
+                  placeholder="예: 삼각비 형성평가, 1교시 수학필기"
+                  required
+                  autoFocus
+                  disabled={isGeneratingPdf}
+                />
+              </div>
+
+              {/* 파일명 미리보기 */}
+              <div style={{ background: '#1c1f26', padding: '10px 14px', borderRadius: '8px', border: '1px solid var(--g-border)' }}>
+                <span style={{ fontSize: '11px', color: 'var(--g-text-muted)' }}>생성될 파일명 미리보기</span>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#38bdf8', marginTop: '3px', wordBreak: 'break-all' }}>
+                  {(() => {
+                    const now = new Date();
+                    const dStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+                    const base = pdfCompilationTitle.trim() || activeQrLesson.name.replace('[QR수업]', '').trim();
+                    return `${base}_${dStr}.pdf`;
+                  })()}
+                </div>
+              </div>
+
+              {/* 저장 옵션 체크박스 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(255, 255, 255, 0.03)', padding: '12px', borderRadius: '10px', border: '1px solid var(--g-border-subtle)' }}>
+                <span style={{ fontSize: '12px', color: '#ffffff', fontWeight: 600, marginBottom: '2px' }}>
+                  저장 대상 학생: {studentSubmissions.length}명
+                </span>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#cbd5e1', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pdfSaveToDrive}
+                    onChange={(e) => setPdfSaveToDrive(e.target.checked)}
+                    style={{ accentColor: 'var(--g-primary-blue)', width: '16px', height: '16px' }}
+                    disabled={isGeneratingPdf}
+                  />
+                  <span>☁️ 구글 드라이브 <code>{activeQrLesson.name}</code> 폴더에 자동 업로드</span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#cbd5e1', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pdfDownloadLocal}
+                    onChange={(e) => setPdfDownloadLocal(e.target.checked)}
+                    style={{ accentColor: 'var(--g-primary-blue)', width: '16px', height: '16px' }}
+                    disabled={isGeneratingPdf}
+                  />
+                  <span>💾 내 컴퓨터에도 PDF 파일 즉시 다운로드 받기</span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: '#cbd5e1', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pdfPurgeSupabase}
+                    onChange={(e) => setPdfPurgeSupabase(e.target.checked)}
+                    style={{ accentColor: '#ef4444', width: '16px', height: '16px' }}
+                    disabled={isGeneratingPdf}
+                  />
+                  <span>🧹 저장 완료 후 Supabase 임시 필기 목록 정리 (용량 절약)</span>
+                </label>
+              </div>
+
+              {/* 진행 상태 바 */}
+              {isGeneratingPdf && pdfProgress && (
+                <div style={{ background: 'rgba(37, 99, 235, 0.15)', border: '1px solid #3b82f6', borderRadius: '8px', padding: '10px 14px', fontSize: '12px', color: '#93c5fd', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>🔄 <strong>{pdfProgress.name}</strong> 학생 페이지 변환 중...</span>
+                  <span style={{ fontWeight: 700 }}>{pdfProgress.current} / {pdfProgress.total}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+                <button
+                  type="button"
+                  className="g-btn g-btn-text"
+                  onClick={() => setActiveModal('qr_lesson_viewer')}
+                  disabled={isGeneratingPdf}
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="g-btn g-btn-primary"
+                  style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', fontWeight: 700 }}
+                  disabled={isGeneratingPdf || studentSubmissions.length === 0}
+                >
+                  {isGeneratingPdf ? '⏳ PDF 생성 및 업로드 중...' : '🚀 하나의 PDF로 저장 시작'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

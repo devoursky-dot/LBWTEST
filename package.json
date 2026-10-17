@@ -15,6 +15,7 @@
     "@supabase/supabase-js": "^2.99.0",
     "@types/qrcode": "^1.5.6",
     "fabric": "^7.2.0",
+    "jspdf": "^4.2.1",
     "katex": "^0.16.38",
     "pdfjs-dist": "^2.16.105",
     "qrcode": "^1.5.4",
