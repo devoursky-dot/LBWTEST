@@ -847,7 +847,13 @@ body {
   color: #f1f3f4;
   overflow: hidden;
   user-select: none;
-  touch-action: none;
+  touch-action: auto;
+}
+
+.student-header,
+.student-toolbar,
+.student-tool-btn {
+  touch-action: manipulation;
 }
 
 .student-header {

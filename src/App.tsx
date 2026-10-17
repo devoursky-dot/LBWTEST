@@ -177,6 +177,7 @@ export default function App() {
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [studentSubmissions, setStudentSubmissions] = useState<ClassNoteRecord[]>([]);
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
+  const [selectedStudentNotePageIdx, setSelectedStudentNotePageIdx] = useState<number>(0);
   const [selectedDateFilter, setSelectedDateFilter] = useState<'today' | 'all'>('today');
 
   // --- 통합 PDF 모음집 생성 상태 ---
@@ -1868,7 +1869,10 @@ export default function App() {
                       return displayList.map((sub, idx) => (
                         <div
                           key={`${sub.student_grade}_${sub.student_class}_${sub.student_num}`}
-                          onClick={() => setSelectedStudentNote(sub)}
+                          onClick={() => {
+                            setSelectedStudentNote(sub);
+                            setSelectedStudentNotePageIdx(0);
+                          }}
                           style={{
                             background: idx === 0 ? 'rgba(59, 130, 246, 0.18)' : '#282a2c',
                             border: `1px solid ${idx === 0 ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
@@ -1910,89 +1914,154 @@ export default function App() {
       )}
 
       {/* ====================================================================
-          모달 1-4: 전자칠판 학생 필기 상세 확인 팝업 (클릭 시 확대 뷰어)
+          모달 1-4: 전자칠판 학생 필기 상세 확인 팝업 (클릭 시 확대 뷰어 + 멀티페이지)
           ==================================================================== */}
-      {selectedStudentNote && (
-        <div className="modal-backdrop" onClick={() => setSelectedStudentNote(null)}>
-          <div className="modal-box" style={{ maxWidth: '820px', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '20px' }}>👨‍🎓</span>
-                <h2 style={{ fontSize: '16px', margin: 0 }}>
-                  {selectedStudentNote.student_grade}학년 {selectedStudentNote.student_class}반 {selectedStudentNote.student_num}번 {selectedStudentNote.student_name} 학생의 필기
-                </h2>
-              </div>
-              <button className="modal-close-btn" onClick={() => setSelectedStudentNote(null)}>✕</button>
-            </div>
+      {selectedStudentNote && (() => {
+        const studentPages = (Array.isArray(selectedStudentNote.strokes_data?.pages) && selectedStudentNote.strokes_data.pages.length > 0)
+          ? selectedStudentNote.strokes_data.pages
+          : [{
+              strokes: selectedStudentNote.strokes_data?.strokes || [],
+              textItems: selectedStudentNote.strokes_data?.textItems || []
+            }];
+        const validPageIdx = Math.min(Math.max(0, selectedStudentNotePageIdx), studentPages.length - 1);
+        const currentNotePage = studentPages[validPageIdx] || { strokes: [], textItems: [] };
+        const orientation = selectedStudentNote.strokes_data?.orientation || 'landscape';
+        const isPortrait = orientation === 'portrait';
+        const docWidth = isPortrait ? 1130 : 1600;
+        const docHeight = isPortrait ? 1600 : 1130;
 
-            <div style={{ flex: 1, minHeight: '440px', background: '#131314', border: '1px solid var(--g-border)', borderRadius: '8px', position: 'relative', overflow: 'hidden', margin: '10px 0' }}>
-              {/* 모눈종이 배경 */}
-              <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
-
-              {/* 벡터 스트로크 SVG 렌더러 */}
-              <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-                {(selectedStudentNote.strokes_data?.strokes || []).map((stroke: any) => {
-                  if (!stroke.points || stroke.points.length === 0) return null;
-                  let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
-                  for (let i = 1; i < stroke.points.length; i++) {
-                    pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
-                  }
-                  return (
-                    <path
-                      key={stroke.id}
-                      d={pathData}
-                      fill="none"
-                      stroke={stroke.color}
-                      strokeWidth={stroke.size}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
-                    />
-                  );
-                })}
-              </svg>
-
-              {/* 텍스트 아이템 렌더러 */}
-              {(selectedStudentNote.strokes_data?.textItems || []).map((item: any) => (
-                <div
-                  key={item.id}
-                  style={{
-                    position: 'absolute',
-                    left: `${item.x}px`,
-                    top: `${item.y}px`,
-                    color: item.color,
-                    fontSize: `${item.fontSize}px`,
-                    fontWeight: 600,
-                    textShadow: '0 2px 4px rgba(0,0,0,0.8)'
-                  }}
-                >
-                  {item.text}
+        return (
+          <div className="modal-backdrop" onClick={() => setSelectedStudentNote(null)}>
+            <div className="modal-box" style={{ maxWidth: isPortrait ? '560px' : '900px', maxHeight: '94vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '20px' }}>👨‍🎓</span>
+                  <h2 style={{ fontSize: '16px', margin: 0 }}>
+                    {selectedStudentNote.student_grade}학년 {selectedStudentNote.student_class}반 {selectedStudentNote.student_num}번 {selectedStudentNote.student_name} 학생의 필기
+                  </h2>
+                  <span style={{ fontSize: '11px', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                    {isPortrait ? '📐 A4 세로' : '📐 A4 가로'}
+                  </span>
+                  {studentPages.length > 1 && (
+                    <span style={{ fontSize: '11px', background: 'rgba(168, 85, 247, 0.15)', color: '#d8b4fe', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                      총 {studentPages.length}페이지
+                    </span>
+                  )}
                 </div>
-              ))}
-            </div>
+                <button className="modal-close-btn" onClick={() => setSelectedStudentNote(null)}>✕</button>
+              </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', color: 'var(--g-text-secondary)' }}>
-                제출 시간: {selectedStudentNote.updated_at ? new Date(selectedStudentNote.updated_at).toLocaleTimeString('ko-KR') : '최근'}
-              </span>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  className="g-btn g-btn-primary"
-                  onClick={() => {
-                    showToast(`🌟 ${selectedStudentNote.student_name} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);
-                    setSelectedStudentNote(null);
-                  }}
+              {/* 멀티페이지 컨트롤 바 (2페이지 이상인 경우) */}
+              {studentPages.length > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '8px 12px', background: 'rgba(255, 255, 255, 0.04)', borderRadius: '8px', marginTop: '6px' }}>
+                  <button
+                    className="g-btn g-btn-secondary"
+                    style={{ fontSize: '12px', padding: '4px 10px' }}
+                    disabled={validPageIdx === 0}
+                    onClick={() => setSelectedStudentNotePageIdx(prev => Math.max(0, prev - 1))}
+                  >
+                    ◀ 이전 쪽
+                  </button>
+                  <span style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0' }}>
+                    {validPageIdx + 1} / {studentPages.length} 쪽
+                  </span>
+                  <button
+                    className="g-btn g-btn-secondary"
+                    style={{ fontSize: '12px', padding: '4px 10px' }}
+                    disabled={validPageIdx >= studentPages.length - 1}
+                    onClick={() => setSelectedStudentNotePageIdx(prev => Math.min(studentPages.length - 1, prev + 1))}
+                  >
+                    다음 쪽 ▶
+                  </button>
+                </div>
+              )}
+
+              {/* 필기 용지 컨테이너 */}
+              <div style={{
+                position: 'relative',
+                width: '100%',
+                aspectRatio: `${docWidth} / ${docHeight}`,
+                maxHeight: '68vh',
+                background: '#131314',
+                border: '1px solid var(--g-border)',
+                borderRadius: '8px',
+                overflow: 'hidden',
+                margin: '10px 0',
+                boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)'
+              }}>
+                {/* 모눈종이 배경 */}
+                <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+
+                {/* 벡터 스트로크 SVG 렌더러 (정확한 1600x1130 / 1130x1600 viewBox) */}
+                <svg
+                  viewBox={`0 0 ${docWidth} ${docHeight}`}
+                  preserveAspectRatio="xMidYMid meet"
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
                 >
-                  ⭐ 참 잘했어요!
-                </button>
-                <button className="g-btn g-btn-text" onClick={() => setSelectedStudentNote(null)}>
-                  닫기
-                </button>
+                  {(currentNotePage.strokes || []).map((stroke: any) => {
+                    if (!stroke.points || stroke.points.length === 0) return null;
+                    let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
+                    for (let i = 1; i < stroke.points.length; i++) {
+                      pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
+                    }
+                    return (
+                      <path
+                        key={stroke.id}
+                        d={pathData}
+                        fill="none"
+                        stroke={stroke.color}
+                        strokeWidth={stroke.size}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
+                      />
+                    );
+                  })}
+                </svg>
+
+                {/* 텍스트 아이템 렌더러 (백분율 좌표) */}
+                {(currentNotePage.textItems || []).map((item: any) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      position: 'absolute',
+                      left: `${(item.x / docWidth) * 100}%`,
+                      top: `${(item.y / docHeight) * 100}%`,
+                      color: item.color,
+                      fontSize: `${item.fontSize}px`,
+                      fontWeight: 600,
+                      textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+                      userSelect: 'none'
+                    }}
+                  >
+                    {item.text}
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px', color: 'var(--g-text-secondary)' }}>
+                  제출 시간: {selectedStudentNote.updated_at ? new Date(selectedStudentNote.updated_at).toLocaleTimeString('ko-KR') : '최근'}
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="g-btn g-btn-primary"
+                    onClick={() => {
+                      showToast(`🌟 ${selectedStudentNote.student_name} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);
+                      setSelectedStudentNote(null);
+                    }}
+                  >
+                    ⭐ 참 잘했어요!
+                  </button>
+                  <button className="g-btn g-btn-text" onClick={() => setSelectedStudentNote(null)}>
+                    닫기
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ====================================================================
           모달 1-5: 학생 필기 모음집 단일 PDF 저장 및 구글드라이브 업로드
