@@ -6,6 +6,12 @@
  * - 관리자 (Admin): admin / admin!@#$1234 (전체 비밀번호 검색, 수정, 초기화 관리 대시보드)
  */
 
+export const UserRole = {
+  whiteboard: 'whiteboard',
+  teacher: 'teacher',
+  student: 'student',
+  admin: 'admin'
+} as const;
 export type UserRole = 'whiteboard' | 'teacher' | 'student' | 'admin';
 
 export interface UserSession {
