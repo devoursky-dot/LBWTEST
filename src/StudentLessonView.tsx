@@ -503,15 +503,71 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
+  const MIN_ZOOM = 0.5; // 최소 50% 이하로 작아지지 않도록 제한
+  const MAX_ZOOM = 3.0; // 최대 300%
+
+  // ==========================================================================
+  // [가로 크기 기준 가운데 정렬 및 화면 이탈 방지 헬퍼]
+  // - 축소 시 페이지 폭이 화면보다 작거나 같으면 100% 정중앙(x = 0)으로 자동 정렬
+  // - 화면보다 클 때만 좌우 이동을 허용하고 화면 밖 이탈 방지
+  // - 세로 방향도 화면에 맞으면 정중앙, 클 때만 스크롤
+  // ==========================================================================
+  const clampPanOffset = useCallback((pan: { x: number; y: number }, scale: number): { x: number; y: number } => {
+    const container = containerRef.current;
+    if (!container) return pan;
+
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+
+    const paperBaseWidth = orientation === 'landscape' ? 1120 : 792;
+    const paperBaseHeight = orientation === 'landscape' ? 792 : 1120;
+
+    const renderedWidth = paperBaseWidth * scale;
+    const renderedHeight = paperBaseHeight * scale;
+
+    // 1. 가로 크기 기준: 화면 폭보다 작으면 무조건 x = 0 (정중앙 정렬, 한쪽 쏠림 방지!)
+    let clampedX = 0;
+    if (renderedWidth > containerWidth) {
+      const maxPanX = (renderedWidth - containerWidth) / 2;
+      clampedX = Math.max(-maxPanX, Math.min(maxPanX, pan.x));
+    } else {
+      clampedX = 0; // 가로 화면 크기보다 작을 때 무조건 정중앙 정렬
+    }
+
+    // 2. 세로 크기 기준: 화면 높이보다 작으면 y = 0 (정중앙), 클 때만 스크롤 허용
+    let clampedY = 0;
+    if (renderedHeight > containerHeight) {
+      const maxPanY = (renderedHeight - containerHeight) / 2 + 80;
+      clampedY = Math.max(-maxPanY, Math.min(maxPanY, pan.y));
+    } else {
+      clampedY = 0;
+    }
+
+    return { x: clampedX, y: clampedY };
+  }, [orientation]);
+
+  // 방향 전환 및 화면 크기 변화 시 가로 가운데 정렬 유지
+  useEffect(() => {
+    setPanOffset(prev => clampPanOffset(prev, zoomScale));
+  }, [orientation, zoomScale, clampPanOffset]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setPanOffset(prev => clampPanOffset(prev, zoomScale));
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [zoomScale, clampPanOffset]);
+
   // ==========================================================================
   // [삼성노트 REA 휠 줌 및 스크롤 이벤트 핸들러 - 마우스 커서 위치 중심 줌]
   // ==========================================================================
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.ctrlKey) {
-      // Ctrl + 휠: 마우스 커서 위치 중심 초정밀 확대/축소
+      // Ctrl + 휠: 마우스 커서 위치 중심 초정밀 확대/축소 (최소 50% 제한)
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-      const nextScale = Math.min(Math.max(0.5, zoomScale * zoomFactor), 3.0);
+      const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomScale * zoomFactor));
       if (nextScale === zoomScale) return;
 
       const container = containerRef.current;
@@ -524,29 +580,31 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         const deltaY = e.clientY - viewportCenterY;
         const scaleRatio = nextScale / zoomScale;
 
-        setPanOffset(prev => ({
-          x: prev.x * scaleRatio + deltaX * (1 - scaleRatio),
-          y: prev.y * scaleRatio + deltaY * (1 - scaleRatio)
-        }));
+        const rawPanX = panOffset.x * scaleRatio + deltaX * (1 - scaleRatio);
+        const rawPanY = panOffset.y * scaleRatio + deltaY * (1 - scaleRatio);
+
+        // 가로 폭이 화면보다 작아지면 자동으로 x=0(정중앙) 정렬
+        setPanOffset(clampPanOffset({ x: rawPanX, y: rawPanY }, nextScale));
       }
       setZoomScale(nextScale);
     } else {
-      // 일반 휠: 위아래 / 좌우 스크롤
-      setPanOffset(prev => ({
-        x: prev.x - (e.shiftKey ? e.deltaY : e.deltaX),
-        y: prev.y - (!e.shiftKey ? e.deltaY : 0)
-      }));
+      // 일반 휠: 위아래 / 좌우 스크롤 (화면보다 작을 때는 가로 가운데 정렬 유지)
+      setPanOffset(prev => {
+        const nextX = prev.x - (e.shiftKey ? e.deltaY : e.deltaX);
+        const nextY = prev.y - (!e.shiftKey ? e.deltaY : 0);
+        return clampPanOffset({ x: nextX, y: nextY }, zoomScale);
+      });
     }
   };
 
-  // 줌 리셋
+  // 줌 리셋 (100% 원위치 & 가운데 정렬)
   const handleResetZoom = () => {
     setZoomScale(1.0);
-    setPanOffset({ x: 0, y: 0 });
+    setPanOffset(clampPanOffset({ x: 0, y: 0 }, 1.0));
     showToast('🔍 100% 원위치로 맞췄습니다.');
   };
 
-  // 삼성노트 REA 2손가락 핀치 줌 & 팬 (손가락 접촉 지점 100% 고정 포컬포인트 줌)
+  // 삼성노트 REA 2손가락 핀치 줌 & 팬 (손가락 접촉 지점 포컬포인트 줌 & 화면보다 작아지면 가운데 정렬)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -579,7 +637,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
         if (initialTouchDistanceRef.current > 0) {
           const ratio = currentDist / initialTouchDistanceRef.current;
-          const nextScale = Math.min(3.0, Math.max(0.5, initialScaleRef.current * ratio));
+          // 축소 시 50%(0.5) 이하로 작아지지 않도록 제한
+          const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, initialScaleRef.current * ratio));
           setZoomScale(nextScale);
 
           const rect = container.getBoundingClientRect();
@@ -597,11 +656,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           // 줌 배율 변화비
           const scaleChangeRatio = nextScale / initialScaleRef.current;
 
-          // 손가락 밑의 종이 좌표가 손가락을 따라 정확히 고정되도록 panOffset 보정
-          const newPanX = (initialPanRef.current.x * scaleChangeRatio) + (initialFocalRelX * (1 - scaleChangeRatio)) + translationX;
-          const newPanY = (initialPanRef.current.y * scaleChangeRatio) + (initialFocalRelY * (1 - scaleChangeRatio)) + translationY;
+          const rawPanX = (initialPanRef.current.x * scaleChangeRatio) + (initialFocalRelX * (1 - scaleChangeRatio)) + translationX;
+          const rawPanY = (initialPanRef.current.y * scaleChangeRatio) + (initialFocalRelY * (1 - scaleChangeRatio)) + translationY;
 
-          setPanOffset({ x: newPanX, y: newPanY });
+          // 화면 크기보다 작아지면 가로 가운데 정렬(pan.x=0) 적용
+          setPanOffset(clampPanOffset({ x: rawPanX, y: rawPanY }, nextScale));
         }
       }
     };
@@ -621,7 +680,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
     };
-  }, [zoomScale, panOffset]);
+  }, [zoomScale, panOffset, clampPanOffset]);
 
   // 팝오버 메뉴 외부 클릭 시 자동 닫기 (이벤트 버블링 및 렌더링 노드 분리 방어)
   useEffect(() => {
@@ -1544,7 +1603,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 <button
                   type="button"
                   className="student-tool-btn"
-                  onClick={() => setZoomScale(prev => Math.max(0.5, prev - 0.15))}
+                  onClick={() => {
+                    setZoomScale(prev => {
+                      const next = Math.max(MIN_ZOOM, prev - 0.15);
+                      setPanOffset(p => clampPanOffset(p, next));
+                      return next;
+                    });
+                  }}
                   style={{ flex: 1, justifyContent: 'center', fontSize: '11.5px' }}
                 >
                   - 축소
@@ -1560,7 +1625,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 <button
                   type="button"
                   className="student-tool-btn"
-                  onClick={() => setZoomScale(prev => Math.min(3.0, prev + 0.15))}
+                  onClick={() => {
+                    setZoomScale(prev => {
+                      const next = Math.min(MAX_ZOOM, prev + 0.15);
+                      setPanOffset(p => clampPanOffset(p, next));
+                      return next;
+                    });
+                  }}
                   style={{ flex: 1, justifyContent: 'center', fontSize: '11.5px' }}
                 >
                   + 확대
@@ -1615,7 +1686,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             height: `${orientation === 'landscape' ? 792 : 1120}px`,
             transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
             transformOrigin: 'center center',
-            transition: 'width 0.2s ease, height 0.2s ease',
+            transition: isGestureRef.current ? 'none' : 'transform 0.15s ease-out, width 0.2s ease, height 0.2s ease',
             position: 'relative',
             boxShadow: '0 20px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1)',
             borderRadius: '12px',
