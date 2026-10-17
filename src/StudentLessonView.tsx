@@ -87,6 +87,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [penColor, setPenColor] = useState<string>('#ffffff');
   const [penSize, setPenSize] = useState<number>(3);
   const [penOnlyMode, setPenOnlyMode] = useState<boolean>(false); // 기본 터치/펜 모두 허용, S펜 전용 클릭 시 손바닥 차단
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState<boolean>(false); // 더보기(⚙️) 설정 및 지우기 서브메뉴 상태
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -307,24 +308,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     showToast(`📄 ${nextIndex + 1}페이지가 추가되었습니다.`);
   };
 
-  // 페이지 삭제 핸들러 (2페이지 이상일 때)
-  const handleDeletePage = () => {
-    if (pages.length <= 1) {
-      showToast('⚠️ 최소 1개 페이지는 유지되어야 합니다.');
-      return;
-    }
-    if (window.confirm(`${currentPageIndex + 1}페이지를 삭제하시겠습니까?`)) {
-      const updated = pages.filter((_, idx) => idx !== currentPageIndex);
-      const nextIdx = Math.max(0, currentPageIndex - 1);
-      setPages(updated);
-      setCurrentPageIndex(nextIdx);
-      setStrokes(updated[nextIdx]?.strokes || []);
-      setTextItems(updated[nextIdx]?.textItems || []);
-      setRedoStrokes([]);
-      setActiveTextId(null);
-      showToast('🗑️ 페이지가 삭제되었습니다.');
-    }
-  };
 
   // ==========================================================================
   // [삼성노트 REA 좌표 변환 헬퍼 (줌 & 스크롤 반영)]
@@ -466,25 +449,77 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setStrokes(prev => [...prev, last]);
   };
 
-  // 전체 지우기
-  const handleClearAll = () => {
-    if (confirm('현재 페이지의 필기 내용을 모두 지우시겠습니까?')) {
+  // [지우기 1] 현재 페이지만 지우기
+  const handleClearCurrentPage = () => {
+    if (window.confirm(`현재 ${currentPageIndex + 1}쪽의 필기 내용을 모두 지우시겠습니까?`)) {
       setStrokes([]);
       setTextItems([]);
       setRedoStrokes([]);
-      showToast('🗑️ 현재 페이지 내용이 초기화되었습니다.');
+      setIsMoreMenuOpen(false);
+      showToast(`🗑️ ${currentPageIndex + 1}쪽 내용이 초기화되었습니다.`);
+    }
+  };
+
+  // [지우기 2] 전체 페이지 다 지우기
+  const handleClearAllPages = () => {
+    if (window.confirm('전체 페이지의 모든 필기 내용을 완전히 초기화하시겠습니까?\n(공책의 모든 쪽이 비워집니다)')) {
+      const resetPages: LessonPage[] = [{ id: `page_${Date.now()}`, strokes: [], textItems: [] }];
+      setPages(resetPages);
+      setCurrentPageIndex(0);
+      setStrokes([]);
+      setTextItems([]);
+      setRedoStrokes([]);
+      setIsMoreMenuOpen(false);
+      showToast('🗑️ 모든 페이지의 필기가 초기화되었습니다.');
+    }
+  };
+
+  // [지우기 3] 현재 쪽 완전히 삭제 (2쪽 이상일 때)
+  const handleDeleteCurrentPage = () => {
+    if (pages.length <= 1) {
+      showToast('⚠️ 최소 1개 페이지는 유지되어야 합니다.');
+      return;
+    }
+    if (window.confirm(`현재 ${currentPageIndex + 1}쪽을 공책에서 완전히 삭제하시겠습니까?`)) {
+      const updated = pages.filter((_, idx) => idx !== currentPageIndex);
+      const nextIdx = Math.max(0, currentPageIndex - 1);
+      setPages(updated);
+      setCurrentPageIndex(nextIdx);
+      setStrokes(updated[nextIdx]?.strokes || []);
+      setTextItems(updated[nextIdx]?.textItems || []);
+      setRedoStrokes([]);
+      setIsMoreMenuOpen(false);
+      showToast(`🗑️ ${currentPageIndex + 1}쪽이 삭제되었습니다.`);
     }
   };
 
   // ==========================================================================
-  // [삼성노트 REA 휠 줌 및 스크롤 이벤트 핸들러]
+  // [삼성노트 REA 휠 줌 및 스크롤 이벤트 핸들러 - 마우스 커서 위치 중심 줌]
   // ==========================================================================
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (e.ctrlKey) {
-      // Ctrl + 휠: 줌 인/아웃
+      // Ctrl + 휠: 마우스 커서 위치 중심 초정밀 확대/축소
       e.preventDefault();
-      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-      setZoomScale(prev => Math.min(Math.max(0.5, prev * zoomFactor), 3.0));
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+      const nextScale = Math.min(Math.max(0.5, zoomScale * zoomFactor), 3.0);
+      if (nextScale === zoomScale) return;
+
+      const container = containerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        const viewportCenterX = rect.left + rect.width / 2;
+        const viewportCenterY = rect.top + rect.height / 2;
+
+        const deltaX = e.clientX - viewportCenterX;
+        const deltaY = e.clientY - viewportCenterY;
+        const scaleRatio = nextScale / zoomScale;
+
+        setPanOffset(prev => ({
+          x: prev.x * scaleRatio + deltaX * (1 - scaleRatio),
+          y: prev.y * scaleRatio + deltaY * (1 - scaleRatio)
+        }));
+      }
+      setZoomScale(nextScale);
     } else {
       // 일반 휠: 위아래 / 좌우 스크롤
       setPanOffset(prev => ({
@@ -501,7 +536,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     showToast('🔍 100% 원위치로 맞췄습니다.');
   };
 
-  // 삼성노트 REA 2손가락 핀치 줌 & 팬 (태블릿/모바일 터치 제스처)
+  // 삼성노트 REA 2손가락 핀치 줌 & 팬 (손가락 접촉 지점 100% 고정 포컬포인트 줌)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -536,14 +571,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           const ratio = currentDist / initialTouchDistanceRef.current;
           const nextScale = Math.min(3.0, Math.max(0.5, initialScaleRef.current * ratio));
           setZoomScale(nextScale);
-        }
 
-        const deltaX = currentCenter.x - initialCenterRef.current.x;
-        const deltaY = currentCenter.y - initialCenterRef.current.y;
-        setPanOffset({
-          x: initialPanRef.current.x + deltaX,
-          y: initialPanRef.current.y + deltaY
-        });
+          const rect = container.getBoundingClientRect();
+          const viewportCenterX = rect.left + rect.width / 2;
+          const viewportCenterY = rect.top + rect.height / 2;
+
+          // 터치 시작 시 두 손가락 중심과 뷰포트 중심 간의 상대 벡터
+          const initialFocalRelX = initialCenterRef.current.x - viewportCenterX;
+          const initialFocalRelY = initialCenterRef.current.y - viewportCenterY;
+
+          // 두 손가락 중심 자체의 이동량 (Pan translation)
+          const translationX = currentCenter.x - initialCenterRef.current.x;
+          const translationY = currentCenter.y - initialCenterRef.current.y;
+
+          // 줌 배율 변화비
+          const scaleChangeRatio = nextScale / initialScaleRef.current;
+
+          // 손가락 밑의 종이 좌표가 손가락을 따라 정확히 고정되도록 panOffset 보정
+          const newPanX = (initialPanRef.current.x * scaleChangeRatio) + (initialFocalRelX * (1 - scaleChangeRatio)) + translationX;
+          const newPanY = (initialPanRef.current.y * scaleChangeRatio) + (initialFocalRelY * (1 - scaleChangeRatio)) + translationY;
+
+          setPanOffset({ x: newPanX, y: newPanY });
+        }
       }
     };
 
@@ -563,6 +612,22 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       container.removeEventListener('touchend', onTouchEnd);
     };
   }, [zoomScale, panOffset]);
+
+  // 더보기 메뉴 외부 클릭 시 자동 닫기
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('#btn-more-settings') && !target.closest('#more-settings-popup')) {
+        setIsMoreMenuOpen(false);
+      }
+    };
+    if (isMoreMenuOpen) {
+      document.addEventListener('click', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [isMoreMenuOpen]);
 
   // 이전 필기 복원 (학생이 다시 들어왔을 때 이전 내용 자동 로드)
   useEffect(() => {
@@ -768,26 +833,163 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </div>
       </header>
 
-      {/* 2. 툴바 (A4 방향, 페이지 추가/이동, 줌 컨트롤, 도구, 팔레트) */}
-      <div className="student-toolbar" style={{ flexWrap: 'wrap', gap: '6px', padding: '6px 12px' }}>
-        {/* A4 용지 가로/세로 방향 토글 */}
-        <button
-          id="btn-toggle-orientation"
-          type="button"
-          className="student-tool-btn"
-          onClick={() => {
-            const next = orientation === 'landscape' ? 'portrait' : 'landscape';
-            setOrientation(next);
-            showToast(`📐 A4 ${next === 'landscape' ? '가로' : '세로'} 모드로 전환되었습니다.`);
-          }}
-          title="A4 용지 방향 전환"
-        >
-          <span>{orientation === 'landscape' ? '📐 A4 가로' : '📏 A4 세로'}</span>
-        </button>
+      {/* 2. 툴바 (필기 핵심 도구 최우선 배치 + 더보기 ⚙️ 설정 & 지우기 서브메뉴) */}
+      <div className="student-toolbar" style={{ flexWrap: 'wrap', gap: '6px', padding: '6px 12px', position: 'relative' }}>
+        
+        {/* [A] 필기 도구 선택 (펜, 형광펜, 지우개, 타이핑) */}
+        <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+          <button
+            type="button"
+            className={`student-tool-btn ${tool === 'pen' ? 'active' : ''}`}
+            onClick={() => setTool('pen')}
+            title="일반 펜 (글씨/필기)"
+          >
+            🖊️ 펜
+          </button>
+          <button
+            type="button"
+            className={`student-tool-btn ${tool === 'highlighter' ? 'active' : ''}`}
+            onClick={() => setTool('highlighter')}
+            title="형광펜 (반투명 강조)"
+          >
+            🖍️ 형광펜
+          </button>
+          <button
+            type="button"
+            className={`student-tool-btn ${tool === 'eraser' ? 'active' : ''}`}
+            onClick={() => setTool('eraser')}
+            title="지우개 (획 부분 지우기)"
+          >
+            🧹 지우개
+          </button>
+          <button
+            type="button"
+            className={`student-tool-btn ${tool === 'text' ? 'active' : ''}`}
+            onClick={() => setTool('text')}
+            title="텍스트 타이핑"
+          >
+            ⌨️ 타이핑
+          </button>
+        </div>
 
         <div className="toolbar-divider" />
 
-        {/* 멀티페이지 네비게이션 & 추가 */}
+        {/* [B] 색상 팔레트 (선명한 6색 + 커스텀 컬러 피커) */}
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {[
+            { color: '#ffffff', label: '흰색' },
+            { color: '#000000', label: '검정' },
+            { color: '#ef4444', label: '빨강' },
+            { color: '#3b82f6', label: '파랑' },
+            { color: '#eab308', label: '노랑' },
+            { color: '#22c55e', label: '초록' },
+          ].map(({ color, label }) => (
+            <button
+              key={color}
+              type="button"
+              className={`color-dot-btn ${penColor === color ? 'selected' : ''}`}
+              style={{
+                backgroundColor: color,
+                border: color === '#000000' ? '1px solid #555' : undefined
+              }}
+              onClick={() => {
+                setPenColor(color);
+                if (tool === 'eraser') setTool('pen');
+              }}
+              title={label}
+            />
+          ))}
+
+          {/* 커스텀 색상 선택 피커 */}
+          <label
+            title="더 많은 색상 직접 선택"
+            style={{
+              position: 'relative',
+              width: '24px',
+              height: '24px',
+              borderRadius: '50%',
+              background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: '2px solid rgba(255,255,255,0.4)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.5)'
+            }}
+          >
+            <input
+              type="color"
+              value={penColor}
+              onChange={(e) => {
+                setPenColor(e.target.value);
+                if (tool === 'eraser') setTool('pen');
+              }}
+              style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+            />
+            <span style={{ fontSize: '11px', textShadow: '0 1px 2px #000' }}>🎨</span>
+          </label>
+        </div>
+
+        <div className="toolbar-divider" />
+
+        {/* [C] 펜/지우개 굵기 조절 (1, 3, 6, 12, 24px) */}
+        <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+          {[
+            { size: 1, label: '가늘게 (1px)' },
+            { size: 3, label: '보통 (3px)' },
+            { size: 6, label: '굵게 (6px)' },
+            { size: 12, label: '매우 굵게 (12px)' },
+            { size: 24, label: '마커/대형 (24px)' }
+          ].map(({ size, label }) => (
+            <button
+              key={size}
+              type="button"
+              className={`size-dot-btn ${penSize === size ? 'selected' : ''}`}
+              onClick={() => setPenSize(size)}
+              title={label}
+              style={{ width: '26px', height: '26px' }}
+            >
+              <div
+                style={{
+                  width: `${Math.min(18, Math.max(3, size))}px`,
+                  height: `${Math.min(18, Math.max(3, size))}px`,
+                  borderRadius: '50%',
+                  background: penSize === size ? '#ffffff' : 'rgba(255, 255, 255, 0.7)'
+                }}
+              />
+            </button>
+          ))}
+        </div>
+
+        <div className="toolbar-divider" />
+
+        {/* [D] 실행 취소 & 다시 실행 */}
+        <div style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="student-tool-btn"
+            onClick={handleUndo}
+            disabled={strokes.length === 0}
+            style={{ opacity: strokes.length === 0 ? 0.4 : 1.0, padding: '3px 8px' }}
+            title="실행 취소 (Ctrl+Z)"
+          >
+            ↩️
+          </button>
+          <button
+            type="button"
+            className="student-tool-btn"
+            onClick={handleRedo}
+            disabled={redoStrokes.length === 0}
+            style={{ opacity: redoStrokes.length === 0 ? 0.4 : 1.0, padding: '3px 8px' }}
+            title="다시 실행 (Ctrl+Y)"
+          >
+            ↪️
+          </button>
+        </div>
+
+        <div className="toolbar-divider" />
+
+        {/* [E] 페이지 이동 및 추가 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '8px', padding: '2px 6px' }}>
           <button
             id="btn-page-prev"
@@ -795,13 +997,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             className="student-tool-btn"
             disabled={currentPageIndex <= 0}
             onClick={() => handleGoToPage(currentPageIndex - 1)}
-            style={{ padding: '3px 6px', fontSize: '11px' }}
-            title="이전 페이지"
+            style={{ padding: '3px 6px', fontSize: '11px', opacity: currentPageIndex <= 0 ? 0.35 : 1 }}
+            title="이전 쪽"
           >
             ◀
           </button>
-          <span style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8', minWidth: '42px', textAlign: 'center' }}>
-            {currentPageIndex + 1} / {pages.length}p
+          <span style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8', minWidth: '46px', textAlign: 'center' }}>
+            {currentPageIndex + 1} / {pages.length}쪽
           </span>
           <button
             id="btn-page-next"
@@ -809,8 +1011,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             className="student-tool-btn"
             disabled={currentPageIndex >= pages.length - 1}
             onClick={() => handleGoToPage(currentPageIndex + 1)}
-            style={{ padding: '3px 6px', fontSize: '11px' }}
-            title="다음 페이지"
+            style={{ padding: '3px 6px', fontSize: '11px', opacity: currentPageIndex >= pages.length - 1 ? 0.35 : 1 }}
+            title="다음 쪽"
           >
             ▶
           </button>
@@ -819,169 +1021,232 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             type="button"
             className="student-tool-btn"
             onClick={handleAddPage}
-            style={{ padding: '3px 8px', fontSize: '11.5px', background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd' }}
+            style={{ padding: '3px 8px', fontSize: '11.5px', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', fontWeight: 600 }}
             title="새 페이지 추가"
           >
             + 추가
           </button>
-          {pages.length > 1 && (
-            <button
-              id="btn-delete-page"
-              type="button"
-              className="student-tool-btn danger"
-              onClick={handleDeletePage}
-              style={{ padding: '3px 6px', fontSize: '11px' }}
-              title="현재 페이지 삭제"
-            >
-              🗑️
-            </button>
-          )}
         </div>
 
-        <div className="toolbar-divider" />
-
-        {/* 줌 확대/축소 컨트롤 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '8px', padding: '2px 6px' }}>
-          <button
-            id="btn-zoom-out"
-            type="button"
-            className="student-tool-btn"
-            onClick={() => setZoomScale(prev => Math.max(0.5, prev - 0.15))}
-            style={{ padding: '3px 7px', fontSize: '11px' }}
-            title="축소"
-          >
-            -
-          </button>
+        {/* [F] 우측 정렬: 더보기 ⚙️ 설정 & 지우기 서브메뉴 버튼 */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* 현재 줌 배율 간략 표시 */}
           <span
-            id="btn-zoom-reset"
             onClick={handleResetZoom}
-            style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0', minWidth: '40px', textAlign: 'center', cursor: 'pointer' }}
+            style={{
+              fontSize: '11.5px',
+              fontWeight: 600,
+              color: zoomScale !== 1.0 ? '#60a5fa' : 'var(--g-text-secondary)',
+              cursor: 'pointer',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              background: zoomScale !== 1.0 ? 'rgba(59, 130, 246, 0.15)' : 'transparent'
+            }}
             title="클릭 시 100% 원위치 리셋"
           >
-            {Math.round(zoomScale * 100)}%
+            🔍 {Math.round(zoomScale * 100)}%
           </span>
+
           <button
-            id="btn-zoom-in"
+            id="btn-more-settings"
             type="button"
-            className="student-tool-btn"
-            onClick={() => setZoomScale(prev => Math.min(3.0, prev + 0.15))}
-            style={{ padding: '3px 7px', fontSize: '11px' }}
-            title="확대"
+            className={`student-tool-btn ${isMoreMenuOpen ? 'active' : ''}`}
+            onClick={() => setIsMoreMenuOpen(prev => !prev)}
+            style={{
+              padding: '4px 10px',
+              fontSize: '12px',
+              background: isMoreMenuOpen ? 'var(--g-primary-blue)' : 'rgba(255,255,255,0.08)',
+              color: isMoreMenuOpen ? '#ffffff' : 'var(--g-text-secondary)',
+              border: '1px solid var(--g-border)'
+            }}
+            title="용지 방향, S펜 설정, 페이지 지우기 등 펼치기"
           >
-            +
+            ⚙️ 설정 및 관리 {isMoreMenuOpen ? '▲' : '▼'}
           </button>
-          {(zoomScale !== 1.0 || panOffset.x !== 0 || panOffset.y !== 0) && (
-            <button
-              id="btn-zoom-restore"
-              type="button"
-              className="student-tool-btn"
-              onClick={handleResetZoom}
-              style={{ padding: '3px 6px', fontSize: '11px', color: '#60a5fa' }}
-              title="원위치로 복원"
-            >
-              ⟲
-            </button>
-          )}
         </div>
 
-        <div className="toolbar-divider" />
+        {/* ====================================================================
+            더보기 ⚙️ 설정 및 지우기 드롭다운 팝오버
+            ==================================================================== */}
+        {isMoreMenuOpen && (
+          <div
+            id="more-settings-popup"
+            style={{
+              position: 'absolute',
+              top: '52px',
+              right: '12px',
+              width: '290px',
+              backgroundColor: '#1e1f20',
+              border: '1px solid var(--g-border)',
+              borderRadius: '12px',
+              boxShadow: '0 16px 36px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.1)',
+              zIndex: 999,
+              padding: '14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              backdropFilter: 'blur(16px)'
+            }}
+          >
+            {/* 섹션 1: A4 용지 방향 */}
+            <div>
+              <div style={{ fontSize: '11.5px', color: 'var(--g-text-secondary)', marginBottom: '6px', fontWeight: 600 }}>
+                📐 A4 용지 방향
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${orientation === 'landscape' ? 'active' : ''}`}
+                  onClick={() => {
+                    setOrientation('landscape');
+                    showToast('📐 A4 가로 모드로 전환되었습니다.');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '12px', padding: '6px' }}
+                >
+                  📐 가로 (1600×1130)
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${orientation === 'portrait' ? 'active' : ''}`}
+                  onClick={() => {
+                    setOrientation('portrait');
+                    showToast('📏 A4 세로 모드로 전환되었습니다.');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '12px', padding: '6px' }}
+                >
+                  📏 세로 (1130×1600)
+                </button>
+              </div>
+            </div>
 
-        {/* 팜리젝션 S펜 전용 토글 */}
-        <button
-          type="button"
-          className={`student-tool-btn ${penOnlyMode ? 'active-pen-mode' : ''}`}
-          onClick={() => {
-            const next = !penOnlyMode;
-            setPenOnlyMode(next);
-            showToast(next ? '🛡️ S펜 전용 모드 ON (손바닥 터치 차단)' : '🖐️ 손가락 터치 필기 허용');
-          }}
-          title={penOnlyMode ? 'S펜만 필기 (손바닥 100% 무시)' : '손가락으로도 필기 가능'}
-        >
-          <span>{penOnlyMode ? '✏️ S펜 전용' : '🖐️ 터치 허용'}</span>
-        </button>
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
-        <div className="toolbar-divider" />
+            {/* 섹션 2: S펜 팜리젝션 모드 */}
+            <div>
+              <div style={{ fontSize: '11.5px', color: 'var(--g-text-secondary)', marginBottom: '6px', fontWeight: 600 }}>
+                ✏️ 터치 / S펜 모드
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${!penOnlyMode ? 'active' : ''}`}
+                  onClick={() => {
+                    setPenOnlyMode(false);
+                    showToast('🖐️ 손가락 터치 필기가 허용되었습니다.');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '12px', padding: '6px' }}
+                >
+                  🖐️ 터치 허용
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${penOnlyMode ? 'active-pen-mode' : ''}`}
+                  onClick={() => {
+                    setPenOnlyMode(true);
+                    showToast('🛡️ S펜 전용 모드 ON (손바닥 터치 100% 차단)');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '12px', padding: '6px' }}
+                >
+                  ✏️ S펜 전용
+                </button>
+              </div>
+            </div>
 
-        {/* 필기 도구 선택 */}
-        <button
-          type="button"
-          className={`student-tool-btn ${tool === 'pen' ? 'active' : ''}`}
-          onClick={() => setTool('pen')}
-          title="펜"
-        >
-          🖊️ 펜
-        </button>
-        <button
-          type="button"
-          className={`student-tool-btn ${tool === 'highlighter' ? 'active' : ''}`}
-          onClick={() => setTool('highlighter')}
-          title="형광펜"
-        >
-          🖍️ 형광펜
-        </button>
-        <button
-          type="button"
-          className={`student-tool-btn ${tool === 'eraser' ? 'active' : ''}`}
-          onClick={() => setTool('eraser')}
-          title="지우개"
-        >
-          🧹 지우개
-        </button>
-        <button
-          type="button"
-          className={`student-tool-btn ${tool === 'text' ? 'active' : ''}`}
-          onClick={() => setTool('text')}
-          title="텍스트 타이핑"
-        >
-          ⌨️ 타이핑
-        </button>
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
-        <div className="toolbar-divider" />
+            {/* 섹션 3: 화면 줌 조절 */}
+            <div>
+              <div style={{ fontSize: '11.5px', color: 'var(--g-text-secondary)', marginBottom: '6px', fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
+                <span>🔍 화면 확대 / 축소</span>
+                <span style={{ color: '#38bdf8' }}>{Math.round(zoomScale * 100)}%</span>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={() => setZoomScale(prev => Math.max(0.5, prev - 0.15))}
+                  style={{ flex: 1, justifyContent: 'center', fontSize: '12px' }}
+                >
+                  - 축소
+                </button>
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={handleResetZoom}
+                  style={{ flex: 1.2, justifyContent: 'center', fontSize: '12px', background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd' }}
+                >
+                  100% 원위치
+                </button>
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={() => setZoomScale(prev => Math.min(3.0, prev + 0.15))}
+                  style={{ flex: 1, justifyContent: 'center', fontSize: '12px' }}
+                >
+                  + 확대
+                </button>
+              </div>
+            </div>
 
-        {/* 색상 팔레트 */}
-        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-          {['#ffffff', '#60a5fa', '#f87171', '#4ade80', '#facc15'].map(c => (
-            <button
-              key={c}
-              type="button"
-              className={`color-dot-btn ${penColor === c ? 'selected' : ''}`}
-              style={{ backgroundColor: c }}
-              onClick={() => {
-                setPenColor(c);
-                if (tool === 'eraser') setTool('pen');
-              }}
-            />
-          ))}
-        </div>
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
-        <div className="toolbar-divider" />
-
-        {/* 굵기 조절 */}
-        <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
-          {[2, 4, 8].map(s => (
-            <button
-              key={s}
-              type="button"
-              className={`size-dot-btn ${penSize === s ? 'selected' : ''}`}
-              onClick={() => setPenSize(s)}
-            >
-              <div style={{ width: `${s * 2}px`, height: `${s * 2}px`, borderRadius: '50%', background: '#ffffff' }} />
-            </button>
-          ))}
-        </div>
-
-        <div className="toolbar-divider" />
-
-        {/* 되돌리기 & 지우기 */}
-        <button type="button" className="student-tool-btn" onClick={handleUndo} title="실행 취소">
-          ↩️
-        </button>
-        <button type="button" className="student-tool-btn" onClick={handleRedo} title="다시 실행">
-          ↪️
-        </button>
-        <button type="button" className="student-tool-btn danger" onClick={handleClearAll} title="현재 페이지 지우기">
-          🗑️
-        </button>
+            {/* 섹션 4: 🗑️ 지우기 및 초기화 메뉴 (안전하게 숨김 배치) */}
+            <div>
+              <div style={{ fontSize: '11.5px', color: '#f87171', marginBottom: '6px', fontWeight: 700 }}>
+                🗑️ 지우기 & 페이지 관리
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={handleClearCurrentPage}
+                  style={{
+                    justifyContent: 'flex-start',
+                    fontSize: '12px',
+                    padding: '8px 10px',
+                    background: 'rgba(255,255,255,0.04)',
+                    color: '#e2e8f0',
+                    border: '1px solid rgba(255,255,255,0.08)'
+                  }}
+                >
+                  📄 현재 쪽({currentPageIndex + 1}쪽) 내용만 지우기
+                </button>
+                <button
+                  type="button"
+                  className="student-tool-btn danger"
+                  onClick={handleClearAllPages}
+                  style={{
+                    justifyContent: 'flex-start',
+                    fontSize: '12px',
+                    padding: '8px 10px',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    color: '#fca5a5',
+                    border: '1px solid rgba(239, 68, 68, 0.25)'
+                  }}
+                >
+                  📚 전체 페이지 모든 필기 다 지우기
+                </button>
+                {pages.length > 1 && (
+                  <button
+                    type="button"
+                    className="student-tool-btn danger"
+                    onClick={handleDeleteCurrentPage}
+                    style={{
+                      justifyContent: 'flex-start',
+                      fontSize: '12px',
+                      padding: '8px 10px',
+                      background: 'rgba(239, 68, 68, 0.2)',
+                      color: '#f87171',
+                      border: '1px solid rgba(239, 68, 68, 0.4)'
+                    }}
+                  >
+                    ❌ 현재 쪽({currentPageIndex + 1}쪽) 완전히 삭제
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 3. 메인 작업 영역: A4 종이 시트 & 줌/스크롤 뷰포트 */}
