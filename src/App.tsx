@@ -2273,11 +2273,41 @@ export default function App() {
                 {/* 모눈종이 배경 */}
                 <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
 
+                {/* 전체 배경 이미지 (PDF 또는 학습지) */}
+                {currentNotePage.fullPageBackground && (
+                  <img
+                    src={currentNotePage.fullPageBackground}
+                    alt="Worksheet Background"
+                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none', zIndex: 1 }}
+                  />
+                )}
+
+                {/* 임베드된 문제/스티커 이미지들 */}
+                {(currentNotePage.images || []).map((img: any) => (
+                  <img
+                    key={img.id}
+                    src={img.src}
+                    alt="Embedded Problem"
+                    style={{
+                      position: 'absolute',
+                      left: `${(img.x / docWidth) * 100}%`,
+                      top: `${(img.y / docHeight) * 100}%`,
+                      width: `${(img.width / docWidth) * 100}%`,
+                      height: `${(img.height / docHeight) * 100}%`,
+                      objectFit: 'fill',
+                      pointerEvents: 'none',
+                      borderRadius: '4px',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                      zIndex: 2
+                    }}
+                  />
+                ))}
+
                 {/* 벡터 스트로크 SVG 렌더러 (정확한 1600x1130 / 1130x1600 viewBox) */}
                 <svg
                   viewBox={`0 0 ${docWidth} ${docHeight}`}
                   preserveAspectRatio="xMidYMid meet"
-                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 3 }}
                 >
                   {(currentNotePage.strokes || []).map((stroke: any) => {
                     if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;

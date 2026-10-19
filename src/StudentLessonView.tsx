@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
+import {
+  loadPdfDocument,
+  renderPdfThumbnails,
+  renderPdfPageToDataUrl,
+  loadImageFile,
+  type CropRect
+} from './lib/pdfImporter';
+import { PdfPagePickerModal } from './components/PdfPagePickerModal';
+import { ImageCropModal } from './components/ImageCropModal';
+import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/EmbeddedImageLayer';
 
 interface StudentInfo {
   grade: string;
@@ -35,6 +45,8 @@ interface LessonPage {
   id: string;
   strokes: Stroke[];
   textItems: TextItem[];
+  fullPageBackground?: string | null;
+  images?: EmbeddedImageItem[];
 }
 
 interface StudentLessonViewProps {
@@ -140,7 +152,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
 
   // --- 4. 필기 도구 상태 (삼성노트 REA 분리 모드) ---
-  const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text'>('pen');
+  const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text' | 'image'>('pen');
   const [penColor, setPenColor] = useState<string>('#ffffff');
   const [penSize, setPenSize] = useState<number>(3);
   const [highlighterColor, setHighlighterColor] = useState<string>('#fde047');
@@ -155,7 +167,25 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return false;
     }
   }); // false: 터치 모드, true: 펜 모드 (팜리젝션 & 1손가락 이동)
-  const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | null>(null);
+  const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | 'image' | null>(null);
+
+  // --- 4-1. 페이지별 전체 배경 & 임베드 이미지(스티커) 상태 ---
+  const [fullPageBackground, setFullPageBackground] = useState<string | null>(null);
+  const [embeddedImages, setEmbeddedImages] = useState<EmbeddedImageItem[]>([]);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+
+  // --- 4-2. PDF 및 이미지 크롭 모달 상태 ---
+  const [pdfPickerOpen, setPdfPickerOpen] = useState(false);
+  const [pdfFileName, setPdfFileName] = useState('');
+  const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
+  const [pdfThumbnails, setPdfThumbnails] = useState<Array<{ pageNumber: number; dataUrl: string; width: number; height: number }>>([]);
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
+
+  const [cropModalOpen, setCropModalOpen] = useState(false);
+  const [cropTargetImageSrc, setCropTargetImageSrc] = useState<string>('');
+  const [editingImageItem, setEditingImageItem] = useState<EmbeddedImageItem | null>(null);
+
+  const imagePdfInputRef = useRef<HTMLInputElement>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -331,25 +361,27 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // 모눈종이 그리드 배경
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-    ctx.lineWidth = 1;
-    const gridSize = 32;
+    // 모눈종이 그리드 배경 (단, 전체 배경 PDF/이미지가 없을 때만 모눈종이를 표시하여 문제지가 선명하게 보이도록 함)
+    if (!fullPageBackground) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      const gridSize = 32;
 
-    for (let x = gridSize; x < canvas.width; x += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvas.height);
-      ctx.stroke();
+      for (let x = gridSize; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = gridSize; y < canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    for (let y = gridSize; y < canvas.height; y += gridSize) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvas.width, y);
-      ctx.stroke();
-    }
-    ctx.restore();
 
     // 완료된 모든 스트로크 그리기
     for (const stroke of strokes) {
@@ -360,7 +392,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (isDrawingRef.current && currentStrokeRef.current) {
       drawSingleStroke(ctx, currentStrokeRef.current);
     }
-  }, [strokes]);
+  }, [strokes, fullPageBackground]);
 
   useEffect(() => {
     // 굿노트(GoodNotes) 역추적 최적화:
@@ -378,7 +410,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // [멀티페이지 전환 & 보존 관리]
   // ==========================================================================
 
-  // 페이지 이동 핸들러 (동기식 페이지 갱신으로 스트로크 유실 방지)
+  // 페이지 이동 핸들러 (동기식 페이지 갱신으로 스트로크/배경 유실 방지)
   const handleGoToPage = (targetIdx: number) => {
     if (targetIdx < 0 || targetIdx >= pages.length) return;
     
@@ -387,7 +419,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       updated[currentPageIndex] = {
         ...updated[currentPageIndex],
         strokes,
-        textItems
+        textItems,
+        fullPageBackground,
+        images: embeddedImages
       };
     }
     setPages(updated);
@@ -396,6 +430,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setCurrentPageIndex(targetIdx);
     setStrokes(targetPage?.strokes || []);
     setTextItems(targetPage?.textItems || []);
+    setFullPageBackground(targetPage?.fullPageBackground || null);
+    setEmbeddedImages(targetPage?.images || []);
+    setSelectedImageId(null);
     setUndoStack([]);
     setRedoStack([]);
     setActiveTextId(null);
@@ -406,7 +443,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     const newPage: LessonPage = {
       id: `page_${Date.now()}`,
       strokes: [],
-      textItems: []
+      textItems: [],
+      fullPageBackground: null,
+      images: []
     };
 
     const nextIndex = pages.length;
@@ -415,17 +454,211 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       updated[currentPageIndex] = {
         ...updated[currentPageIndex],
         strokes,
-        textItems
+        textItems,
+        fullPageBackground,
+        images: embeddedImages
       };
     }
     setPages([...updated, newPage]);
     setCurrentPageIndex(nextIndex);
     setStrokes([]);
     setTextItems([]);
+    setFullPageBackground(null);
+    setEmbeddedImages([]);
+    setSelectedImageId(null);
     setUndoStack([]);
     setRedoStack([]);
     setActiveTextId(null);
     showToast(`📄 ${nextIndex + 1}페이지가 추가되었습니다.`);
+  };
+
+  // ==========================================================================
+  // [PDF 및 이미지 학습지 임포트 / 자르기 / 크기 조절 핸들러]
+  // ==========================================================================
+
+  // 파일 선택 처리 (PDF 또는 일반 이미지)
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // input 값 리셋하여 동일 파일 재선택 가능하게 처리
+    e.target.value = '';
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    if (isPdf) {
+      setPdfFileName(file.name);
+      setIsPdfLoading(true);
+      setPdfPickerOpen(true);
+      try {
+        const pdfDoc = await loadPdfDocument(file);
+        setPdfDocProxy(pdfDoc);
+        const thumbs = await renderPdfThumbnails(pdfDoc, 260);
+        setPdfThumbnails(thumbs);
+      } catch (err: any) {
+        console.error('PDF 로드 실패:', err);
+        showToast(`❌ PDF 로드 실패: ${err.message || '파일을 열 수 없습니다.'}`);
+        setPdfPickerOpen(false);
+      } finally {
+        setIsPdfLoading(false);
+      }
+    } else {
+      // 일반 이미지 파일
+      try {
+        const { dataUrl } = await loadImageFile(file);
+        setEditingImageItem(null);
+        setCropTargetImageSrc(dataUrl);
+        setCropModalOpen(true);
+      } catch (err: any) {
+        console.error('이미지 로드 실패:', err);
+        showToast(`❌ 이미지 로드 실패: ${err.message || '이미지를 불러올 수 없습니다.'}`);
+      }
+    }
+  };
+
+  // PDF 특정 페이지 선택 처리 (전체 배경 또는 특정 영역 자르기)
+  const handleSelectPdfPage = async (pageNumber: number, mode: 'full_page' | 'crop') => {
+    if (!pdfDocProxy) return;
+
+    try {
+      showToast(`⏳ PDF ${pageNumber}페이지를 고해상도로 렌더링하고 있습니다...`);
+      const { dataUrl } = await renderPdfPageToDataUrl(pdfDocProxy, pageNumber, 2400);
+
+      setPdfPickerOpen(false);
+
+      if (mode === 'full_page') {
+        setFullPageBackground(dataUrl);
+        showToast(`📄 PDF ${pageNumber}페이지가 현재 쪽 전체 배경으로 설정되었습니다.`);
+      } else {
+        // 크롭 모달 열기
+        setEditingImageItem(null);
+        setCropTargetImageSrc(dataUrl);
+        setCropModalOpen(true);
+      }
+    } catch (err: any) {
+      console.error('PDF 페이지 렌더링 실패:', err);
+      showToast(`❌ PDF 페이지 처리 실패: ${err.message || '페이지 렌더링 오류'}`);
+    }
+  };
+
+  // 크롭 확정 핸들러 (새 이미지 추가 또는 기존 이미지 자르기 수정)
+  const handleConfirmCrop = (croppedDataUrl: string, cropRect: CropRect) => {
+    if (editingImageItem) {
+      const aspect = cropRect.width / Math.max(1, cropRect.height);
+      const newWidth = editingImageItem.width;
+      const newHeight = Math.round(newWidth / aspect);
+      setEmbeddedImages(prev => prev.map(img => img.id === editingImageItem.id ? {
+        ...img,
+        src: croppedDataUrl,
+        crop: cropRect,
+        width: newWidth,
+        height: newHeight
+      } : img));
+      setEditingImageItem(null);
+      showToast('✂️ 이미지 자르기 수정이 완료되었습니다.');
+    } else {
+      const aspect = cropRect.width / Math.max(1, cropRect.height);
+      const initialWidth = Math.min(A4_WIDTH * 0.75, 750);
+      const initialHeight = Math.round(initialWidth / aspect);
+      const newId = `img_${Date.now()}`;
+      const newImage: EmbeddedImageItem = {
+        id: newId,
+        src: croppedDataUrl,
+        originalSrc: cropTargetImageSrc,
+        x: Math.round((A4_WIDTH - initialWidth) / 2),
+        y: Math.min(120, Math.round((A4_HEIGHT - initialHeight) / 3)),
+        width: Math.round(initialWidth),
+        height: Math.round(initialHeight),
+        crop: cropRect
+      };
+      setEmbeddedImages(prev => [...prev, newImage]);
+      setSelectedImageId(newId);
+      setTool('image');
+      showToast('🖼️ 이미지가 공책에 추가되었습니다. 위치와 크기를 조절할 수 있습니다.');
+    }
+    setCropModalOpen(false);
+  };
+
+  // 기존 이미지 재자르기
+  const handleEditCrop = (img: EmbeddedImageItem) => {
+    setEditingImageItem(img);
+    setCropTargetImageSrc(img.originalSrc || img.src);
+    setCropModalOpen(true);
+  };
+
+  // 이미지 업데이트 (위치/크기 조절)
+  const handleUpdateEmbeddedImage = (id: string, updates: Partial<EmbeddedImageItem>) => {
+    setEmbeddedImages(prev => prev.map(img => img.id === id ? { ...img, ...updates } : img));
+  };
+
+  // 이미지 삭제
+  const handleDeleteEmbeddedImage = (id: string) => {
+    setEmbeddedImages(prev => prev.filter(img => img.id !== id));
+    if (selectedImageId === id) setSelectedImageId(null);
+    showToast('🗑️ 이미지가 삭제되었습니다.');
+  };
+
+  // 이미지 직접 전체 배경 설정
+  const handleSetImageAsBackground = (imageSrc: string) => {
+    setFullPageBackground(imageSrc);
+    setCropModalOpen(false);
+    showToast('📄 이미지가 현재 쪽 전체 배경으로 설정되었습니다.');
+  };
+
+  // 샘플 수학 문제지 생성 및 자르기 모달 열기 (테스트 및 빠른 실습용)
+  const handleLoadSampleProblem = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1000;
+    canvas.height = 750;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // 흰색 학습지 배경
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 1000, 750);
+
+    // 헤더 배너
+    ctx.fillStyle = '#2563eb';
+    ctx.fillRect(40, 35, 920, 65);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px "Pretendard", sans-serif';
+    ctx.fillText('📐 [단원 평가] 일차방정식과 함수의 활용', 65, 78);
+
+    // 1번 문제 박스
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(40, 125, 920, 260);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 24px "Pretendard", sans-serif';
+    ctx.fillText('[문제 1] 다음 일차방정식을 풀고 x의 값을 구하시오.', 65, 175);
+    ctx.font = 'bold 32px monospace';
+    ctx.fillStyle = '#dc2626';
+    ctx.fillText('3x + 7 = 2x + 19', 120, 245);
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '19px "Pretendard", sans-serif';
+    ctx.fillText('✍️ 풀이 과정과 정답을 아래 공책 여백에 직접 필기하세요.', 120, 320);
+
+    // 2번 문제 박스
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(40, 415, 920, 290);
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 24px "Pretendard", sans-serif';
+    ctx.fillText('[문제 2] 다음 일차함수 y = 2x - 4 의 x절편과 y절편을 구하시오.', 65, 465);
+    ctx.font = '22px "Pretendard", sans-serif';
+    ctx.fillStyle = '#2563eb';
+    ctx.fillText('(1) x절편: (      ,  0  )', 120, 540);
+    ctx.fillText('(2) y절편: (  0   ,     )', 120, 610);
+
+    const dataUrl = canvas.toDataURL('image/png');
+    setEditingImageItem(null);
+    setCropTargetImageSrc(dataUrl);
+    setCropModalOpen(true);
+    setActivePopup(null);
+    showToast('📄 샘플 문제지를 불러왔습니다. 원하는 영역을 잘라보세요!');
   };
 
 
@@ -536,6 +769,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         }
         return;
       }
+    }
+
+    if (tool === 'image') {
+      setSelectedImageId(null);
+      return;
     }
 
     if (tool === 'text') {
@@ -1197,25 +1435,37 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     updatedPages[currentPageIndex] = {
       ...updatedPages[currentPageIndex],
       strokes,
-      textItems
+      textItems,
+      fullPageBackground,
+      images: embeddedImages
     };
 
     // 끝부분의 불필요한 빈 페이지만 정리 (2쪽 이상인 경우)
     let finalPages = [...updatedPages];
-    while (
-      finalPages.length > 1 &&
-      (!finalPages[finalPages.length - 1].strokes || finalPages[finalPages.length - 1].strokes.length === 0) &&
-      (!finalPages[finalPages.length - 1].textItems || finalPages[finalPages.length - 1].textItems.length === 0)
-    ) {
-      finalPages.pop();
+    while (finalPages.length > 1) {
+      const lastPage = finalPages[finalPages.length - 1];
+      if (!lastPage) break;
+      const isBlank =
+        (!lastPage.strokes || lastPage.strokes.length === 0) &&
+        (!lastPage.textItems || lastPage.textItems.length === 0) &&
+        !lastPage.fullPageBackground &&
+        (!lastPage.images || lastPage.images.length === 0);
+      if (isBlank) {
+        finalPages.pop();
+      } else {
+        break;
+      }
     }
 
     const hasAnyContent = finalPages.some(
-      p => (p.strokes && p.strokes.length > 0) || (p.textItems && p.textItems.length > 0)
+      p => (p.strokes && p.strokes.length > 0) ||
+           (p.textItems && p.textItems.length > 0) ||
+           Boolean(p.fullPageBackground) ||
+           (p.images && p.images.length > 0)
     );
 
     if (!hasAnyContent) {
-      showToast('⚠️ 필기나 타이핑한 내용이 없습니다.');
+      showToast('⚠️ 필기나 학습지 내용이 없습니다.');
       return;
     }
 
@@ -1228,6 +1478,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       // 스트로크 포인트 경량화 최적화 적용
       const optimizedPages = finalPages.map(p => ({
         ...p,
+        fullPageBackground: p.fullPageBackground || null,
+        images: p.images || [],
         strokes: (p.strokes || []).map(s => ({
           ...s,
           points: optimizePoints(s.points)
@@ -1564,6 +1816,53 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           >
             ⌨️
           </button>
+
+          {/* 5. 학습지 이미지 / PDF 삽입 및 관리 */}
+          <button
+            id="btn-tool-image-pdf"
+            type="button"
+            className={`student-tool-btn ${tool === 'image' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (tool !== 'image') {
+                setTool('image');
+                setActivePopup('image');
+              } else {
+                setActivePopup(prev => prev === 'image' ? null : 'image');
+              }
+            }}
+            style={{
+              position: 'relative',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              height: '38px',
+              padding: '2px 8px',
+              gap: '2px'
+            }}
+            title="학습지 이미지/PDF 삽입 및 크기 조절/자르기"
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '13px' }}>
+              <span>🖼️</span>
+              <span style={{ fontSize: '9px', opacity: 0.8 }}>{activePopup === 'image' ? '▲' : '▼'}</span>
+            </div>
+            <div
+              style={{
+                width: '16px',
+                height: '3px',
+                borderRadius: '2px',
+                backgroundColor: tool === 'image' ? '#38bdf8' : (fullPageBackground || embeddedImages.length > 0 ? '#10b981' : 'transparent')
+              }}
+            />
+          </button>
+
+          {/* 숨김 파일 인풋 (PDF 및 이미지) */}
+          <input
+            type="file"
+            ref={imagePdfInputRef}
+            accept="image/*,application/pdf"
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
         </div>
 
         <div className="toolbar-divider" />
@@ -2140,6 +2439,159 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         )}
 
         {/* ====================================================================
+            [팝오버 5] 🖼️ 학습지 / PDF 관리 팝오버
+            ==================================================================== */}
+        {activePopup === 'image' && (
+          <div
+            id="popup-image-settings"
+            className="samsung-tool-popup"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: '96px',
+              left: '120px',
+              zIndex: 1000,
+              width: '290px',
+              maxWidth: 'calc(100vw - 24px)',
+              background: '#1a1d24',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              borderRadius: '12px',
+              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.7)',
+              padding: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#ffffff' }}>🖼️ 학습지 / PDF 도구</span>
+              <button
+                type="button"
+                onClick={() => setActivePopup(null)}
+                style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: '14px', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', lineHeight: 1.4 }}>
+              PDF나 문제 이미지를 불러와 전체 배경으로 넣거나, 원하는 문제만 잘라서 배치하고 그 위에 필기하세요.
+            </p>
+
+            <button
+              id="btn-load-image-pdf"
+              type="button"
+              className="g-btn g-btn-primary"
+              onClick={() => {
+                imagePdfInputRef.current?.click();
+                setActivePopup(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                fontSize: '12.5px',
+                padding: '8px 12px'
+              }}
+            >
+              <span>📂</span> 새 PDF / 이미지 불러오기
+            </button>
+
+            <button
+              id="btn-load-sample-problem"
+              type="button"
+              className="student-tool-btn"
+              onClick={handleLoadSampleProblem}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                padding: '7px 12px',
+                background: 'rgba(59, 130, 246, 0.15)',
+                color: '#93c5fd',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+                fontWeight: 600
+              }}
+              title="테스트용 샘플 수학 문제지 즉시 불러오기"
+            >
+              <span>🧪</span> 샘플 수학 문제지 불러오기 (테스트)
+            </button>
+
+            {fullPageBackground && (
+              <button
+                type="button"
+                className="student-tool-btn danger"
+                onClick={() => {
+                  setFullPageBackground(null);
+                  showToast('🗑️ 현재 쪽의 배경이 제거되었습니다.');
+                }}
+                style={{
+                  fontSize: '11.5px',
+                  padding: '7px 10px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  color: '#fca5a5',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  justifyContent: 'center'
+                }}
+              >
+                ✕ 현재 쪽 배경 제거
+              </button>
+            )}
+
+            {embeddedImages.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+                  배치된 문제 이미지 ({embeddedImages.length}개)
+                </div>
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={() => {
+                    setEmbeddedImages([]);
+                    setSelectedImageId(null);
+                    showToast('🗑️ 모든 이미지가 삭제되었습니다.');
+                  }}
+                  style={{
+                    fontSize: '11.5px',
+                    padding: '6px 10px',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    color: '#f87171',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
+                    justifyContent: 'center'
+                  }}
+                >
+                  🗑️ 모든 문제 이미지 지우기
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="student-tool-btn"
+              onClick={() => {
+                setTool('pen');
+                setActivePopup(null);
+                setSelectedImageId(null);
+              }}
+              style={{
+                fontSize: '11.5px',
+                padding: '7px 10px',
+                background: 'rgba(56, 189, 248, 0.15)',
+                color: '#38bdf8',
+                border: '1px solid rgba(56, 189, 248, 0.3)',
+                justifyContent: 'center',
+                fontWeight: 600
+              }}
+            >
+              ✓ 펜 필기 모드로 전환
+            </button>
+          </div>
+        )}
+
+        {/* ====================================================================
             [팝오버 4] ⚙️ 설정 & 페이지 관리 팝오버
             ==================================================================== */}
         {activePopup === 'settings' && (
@@ -2355,6 +2807,78 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             userSelect: 'none'
           }}
         >
+          {/* Layer 0: A4 전체 배경 (PDF 또는 이미지) */}
+          {fullPageBackground && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                zIndex: 1,
+                pointerEvents: 'none',
+                overflow: 'hidden'
+              }}
+            >
+              <img
+                src={fullPageBackground}
+                alt="Worksheet Background"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  display: 'block'
+                }}
+              />
+            </div>
+          )}
+
+          {/* 배경 제거 퀵 버튼 */}
+          {fullPageBackground && (
+            <button
+              type="button"
+              onClick={() => {
+                setFullPageBackground(null);
+                showToast('🗑️ 현재 쪽의 배경이 제거되었습니다.');
+              }}
+              style={{
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                zIndex: 15,
+                background: 'rgba(0, 0, 0, 0.75)',
+                color: '#cbd5e1',
+                border: '1px solid rgba(255, 255, 255, 0.25)',
+                borderRadius: '6px',
+                padding: '3px 8px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              title="배경 PDF/이미지 제거"
+            >
+              <span>✕</span> 배경 제거
+            </button>
+          )}
+
+          {/* Layer 1: 임베드된 잘라낸 문제/이미지 스티커 레이어 */}
+          <EmbeddedImageLayer
+            images={embeddedImages}
+            selectedImageId={selectedImageId}
+            onSelectImage={setSelectedImageId}
+            onUpdateImage={handleUpdateEmbeddedImage}
+            onDeleteImage={handleDeleteEmbeddedImage}
+            onEditCrop={handleEditCrop}
+            isDrawingToolActive={tool === 'pen' || tool === 'highlighter' || tool === 'eraser'}
+            A4_WIDTH={A4_WIDTH}
+            A4_HEIGHT={A4_HEIGHT}
+          />
+
+          {/* Layer 2: 필기 캔버스 */}
           <canvas
             ref={canvasRef}
             className="student-canvas"
@@ -2364,9 +2888,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onPointerCancel={handlePointerCancel}
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
             style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
               width: '100%',
               height: '100%',
               display: 'block',
+              zIndex: tool === 'image' && selectedImageId ? 2 : 4,
+              pointerEvents: tool === 'image' ? 'none' : 'auto',
               touchAction: 'none',
               WebkitTouchCallout: 'none',
               WebkitUserSelect: 'none',
@@ -2507,6 +3036,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           <span>{toastMsg}</span>
         </div>
       )}
+
+      {/* 5. PDF 페이지 선택 모달 */}
+      <PdfPagePickerModal
+        isOpen={pdfPickerOpen}
+        fileName={pdfFileName}
+        thumbnails={pdfThumbnails}
+        isLoading={isPdfLoading}
+        onSelectPage={handleSelectPdfPage}
+        onClose={() => setPdfPickerOpen(false)}
+      />
+
+      {/* 6. 이미지/문제 영역 자르기(Crop) 모달 */}
+      <ImageCropModal
+        isOpen={cropModalOpen}
+        imageSrc={cropTargetImageSrc}
+        initialCrop={editingImageItem?.crop}
+        onConfirmCrop={handleConfirmCrop}
+        onSetAsBackground={handleSetImageAsBackground}
+        onClose={() => {
+          setCropModalOpen(false);
+          setEditingImageItem(null);
+        }}
+      />
     </div>
   );
 };
