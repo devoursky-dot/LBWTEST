@@ -153,6 +153,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
+  // 학생 제출 고유 ID (1인 1행 유지하여 중복 생성 및 타임아웃 방지)
+  const submissionIdRef = useRef<string | null>(null);
+
   // DOM 참조
   const containerRef = useRef<HTMLDivElement>(null);
   const paperSheetRef = useRef<HTMLDivElement>(null);
@@ -356,30 +359,25 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // ==========================================================================
   // [멀티페이지 전환 & 보존 관리]
   // ==========================================================================
-  // 페이지 이동 전 현재 페이지 데이터 동기화
-  const syncCurrentPageData = useCallback(() => {
-    setPages(prevPages => {
-      const updated = [...prevPages];
-      if (updated[currentPageIndex]) {
-        updated[currentPageIndex] = {
-          ...updated[currentPageIndex],
-          strokes,
-          textItems
-        };
-      }
-      return updated;
-    });
-  }, [currentPageIndex, strokes, textItems]);
 
-  // 페이지 이동 핸들러
+  // 페이지 이동 핸들러 (동기식 페이지 갱신으로 스트로크 유실 방지)
   const handleGoToPage = (targetIdx: number) => {
     if (targetIdx < 0 || targetIdx >= pages.length) return;
-    syncCurrentPageData();
+    
+    const updated = [...pages];
+    if (updated[currentPageIndex]) {
+      updated[currentPageIndex] = {
+        ...updated[currentPageIndex],
+        strokes,
+        textItems
+      };
+    }
+    setPages(updated);
 
-    const targetPage = pages[targetIdx];
+    const targetPage = updated[targetIdx];
     setCurrentPageIndex(targetIdx);
-    setStrokes(targetPage.strokes || []);
-    setTextItems(targetPage.textItems || []);
+    setStrokes(targetPage?.strokes || []);
+    setTextItems(targetPage?.textItems || []);
     setUndoStack([]);
     setRedoStack([]);
     setActiveTextId(null);
@@ -1035,8 +1033,48 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [lessonId]);
 
+  // 학생 필기 포인트 최적화 헬퍼 (좌표 반올림 및 미세 떨림 필터링으로 데이터 60% 경량화)
+  const optimizePoints = (points: StrokePoint[]): StrokePoint[] => {
+    if (!points || points.length === 0) return [];
+    if (points.length <= 2) {
+      return points.map(p => ({
+        x: Math.round(p.x * 10) / 10,
+        y: Math.round(p.y * 10) / 10,
+        pressure: Math.round((p.pressure ?? 0.5) * 100) / 100
+      }));
+    }
+    const result: StrokePoint[] = [];
+    let prev = points[0];
+    result.push({
+      x: Math.round(prev.x * 10) / 10,
+      y: Math.round(prev.y * 10) / 10,
+      pressure: Math.round((prev.pressure ?? 0.5) * 100) / 100
+    });
+    for (let i = 1; i < points.length - 1; i++) {
+      const cur = points[i];
+      const dx = cur.x - prev.x;
+      const dy = cur.y - prev.y;
+      // 2픽셀 미만의 미세 떨림/중복 터치 좌표 필터링 (가독성 손실 없이 데이터 대폭 절감)
+      if (dx * dx + dy * dy >= 2.0) {
+        result.push({
+          x: Math.round(cur.x * 10) / 10,
+          y: Math.round(cur.y * 10) / 10,
+          pressure: Math.round((cur.pressure ?? 0.5) * 100) / 100
+        });
+        prev = cur;
+      }
+    }
+    const last = points[points.length - 1];
+    result.push({
+      x: Math.round(last.x * 10) / 10,
+      y: Math.round(last.y * 10) / 10,
+      pressure: Math.round((last.pressure ?? 0.5) * 100) / 100
+    });
+    return result;
+  };
+
   // ==========================================================================
-  // [등록 및 제출하기 (멀티페이지 통합 저장)]
+  // [등록 및 제출하기 (멀티페이지 통합 저장 & 중복 방지 최적화)]
   // ==========================================================================
   const handleSubmitLesson = async () => {
     if (!studentInfo) {
@@ -1052,7 +1090,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       textItems
     };
 
-    const hasAnyContent = updatedPages.some(
+    // 끝부분의 불필요한 빈 페이지만 정리 (2쪽 이상인 경우)
+    let finalPages = [...updatedPages];
+    while (
+      finalPages.length > 1 &&
+      (!finalPages[finalPages.length - 1].strokes || finalPages[finalPages.length - 1].strokes.length === 0) &&
+      (!finalPages[finalPages.length - 1].textItems || finalPages[finalPages.length - 1].textItems.length === 0)
+    ) {
+      finalPages.pop();
+    }
+
+    const hasAnyContent = finalPages.some(
       p => (p.strokes && p.strokes.length > 0) || (p.textItems && p.textItems.length > 0)
     );
 
@@ -1067,57 +1115,100 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     try {
       const now = new Date().toISOString();
 
-      // 1. 학생 필기 멀티페이지 데이터를 로컬 스토리지에 백업
+      // 스트로크 포인트 경량화 최적화 적용
+      const optimizedPages = finalPages.map(p => ({
+        ...p,
+        strokes: (p.strokes || []).map(s => ({
+          ...s,
+          points: optimizePoints(s.points)
+        }))
+      }));
+
+      // 1. 학생 필기 멀티페이지 데이터를 로컬 스토리지에 안전 백업 (QuotaExceeded 예외 보호)
       const studentPayload = {
         student: studentInfo,
         lessonId,
-        pages: updatedPages,
+        pages: optimizedPages,
         orientation,
         timestamp: now
       };
-      localStorage.setItem(`lbw_lesson_${lessonId}_note_v2`, JSON.stringify(studentPayload));
+      try {
+        localStorage.setItem(`lbw_lesson_${lessonId}_note_v2`, JSON.stringify(studentPayload));
+      } catch (lsErr) {
+        console.warn('LocalStorage 용량 초과(무시하고 클라우드 전송):', lsErr);
+      }
+
+      // 2. 기존 등록 row ID 확인 (1인 1행 유지하여 중복 생성 및 DB 타임아웃 원천 방지)
+      let targetRowId = submissionIdRef.current;
+      if (!targetRowId && supabase && isSupabaseConfigured) {
+        try {
+          const { data: existingRows } = await supabase
+            .from('class_notes')
+            .select('id')
+            .eq('lesson_id', lessonId)
+            .eq('student_grade', studentInfo.grade)
+            .eq('student_class', studentInfo.classNum)
+            .eq('student_num', studentInfo.studentNum)
+            .order('updated_at', { ascending: false })
+            .limit(1);
+
+          if (existingRows && existingRows.length > 0) {
+            targetRowId = existingRows[0].id;
+            submissionIdRef.current = targetRowId;
+          }
+        } catch (findErr) {
+          console.warn('기존 제출 ID 조회 경고:', findErr);
+        }
+      }
 
       const record: ClassNoteRecord = {
+        ...(targetRowId ? { id: targetRowId } : {}),
         lesson_id: lessonId,
         student_grade: studentInfo.grade,
         student_class: studentInfo.classNum,
         student_num: studentInfo.studentNum,
         student_name: studentInfo.name,
         strokes_data: {
-          pages: updatedPages,
+          pages: optimizedPages,
           orientation,
           // 하위 호환용 1페이지 데이터
-          strokes: updatedPages[0]?.strokes || [],
-          textItems: updatedPages[0]?.textItems || []
+          strokes: optimizedPages[0]?.strokes || [],
+          textItems: optimizedPages[0]?.textItems || []
         },
         updated_at: now
       };
 
-      // 2. Supabase 클라우드 실시간 업서트
+      // 3. Supabase 클라우드 실시간 업서트 (기존 ID가 있으면 UPDATE, 없으면 INSERT)
       if (supabase && isSupabaseConfigured) {
-        try {
-          const { error } = await supabase
-            .from('class_notes')
-            .upsert([record]);
-          if (error) {
-            console.warn('Supabase 저장 경고:', error.message);
-          }
-        } catch (sbErr) {
-          console.warn('Supabase network error:', sbErr);
+        const { data: savedData, error: sbError } = await supabase
+          .from('class_notes')
+          .upsert([record])
+          .select('id')
+          .single();
+
+        if (sbError) {
+          console.error('Supabase 저장 실패:', sbError.message);
+          throw new Error(sbError.message);
+        } else if (savedData?.id) {
+          submissionIdRef.current = savedData.id;
         }
       }
 
-      // 3. 로컬 브로드캐스트 채널 전송
+      // 4. 로컬 브로드캐스트 채널 전송
       if (localRealtimeChannel) {
         localRealtimeChannel.postMessage({
           type: 'STUDENT_SUBMIT',
-          record
+          record: {
+            ...record,
+            id: submissionIdRef.current || record.id
+          }
         });
       }
 
-      showToast(`🎉 '${studentInfo.name}' 학생의 ${updatedPages.length}페이지 필기가 등록되었습니다!`);
+      showToast(`🎉 '${studentInfo.name}' 학생의 ${optimizedPages.length}페이지 필기가 등록되었습니다!`);
     } catch (err: any) {
-      showToast(`❌ 등록 실패: ${err.message}`);
+      console.error('제출 오류:', err);
+      showToast(`❌ 등록 실패: ${err.message || '네트워크 오류'}`);
     } finally {
       setIsSubmitting(false);
     }

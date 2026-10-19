@@ -14,7 +14,7 @@ export interface ClassNoteRecord {
   student_class: string;
   student_num: string;
   student_name: string;
-  strokes_data: any;
+  strokes_data?: any;
   created_at?: string;
   updated_at?: string;
   is_archived?: boolean;

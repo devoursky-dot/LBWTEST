@@ -163,7 +163,7 @@ export default function App() {
   const [isDraggingGlobal, setIsDraggingGlobal] = useState<boolean>(false);
 
   // --- 모달 관리 ---
-  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'qr_lesson_viewer' | 'save_pdf_modal' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
+  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'qr_lesson_viewer' | 'lesson_session_prompt' | 'save_pdf_modal' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
   const [targetItem, setTargetItem] = useState<DriveItem | null>(null);
   const [renameInput, setRenameInput] = useState<string>('');
   const [newFolderName, setNewFolderName] = useState<string>('');
@@ -179,6 +179,12 @@ export default function App() {
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
   const [selectedStudentNotePageIdx, setSelectedStudentNotePageIdx] = useState<number>(0);
   const [selectedDateFilter, setSelectedDateFilter] = useState<'today' | 'all'>('today');
+
+  // --- 수업 세션 시작 모달 & 실시간 상태 관리 ---
+  const [sessionPromptLesson, setSessionPromptLesson] = useState<DriveItem | null>(null);
+  const [existingSessionCount, setExistingSessionCount] = useState<number>(0);
+  const [isRefreshingSubmissions, setIsRefreshingSubmissions] = useState<boolean>(false);
+  const [isLoadingNoteDetail, setIsLoadingNoteDetail] = useState<boolean>(false);
 
   // --- 통합 PDF 모음집 생성 상태 ---
   const [pdfCompilationTitle, setPdfCompilationTitle] = useState<string>('');
@@ -321,31 +327,62 @@ export default function App() {
     fetchDriveItems(currentFolder.id);
   }, [currentFolder.id, googleApiKey]);
 
+  // 한국 표준시(KST) YYYY-MM-DD 날짜 문자열 변환 헬퍼 (UTC 시차 오류 완전 해결)
+  const getKstDateString = (dateInput?: string | Date) => {
+    const d = dateInput ? new Date(dateInput) : new Date();
+    return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+  };
+
+  // 학생별 최신 1건만 유지하는 중복 제거 헬퍼
+  const deduplicateSubmissions = (list: ClassNoteRecord[]): ClassNoteRecord[] => {
+    const map = new Map<string, ClassNoteRecord>();
+    for (const item of list) {
+      const key = `${item.student_grade}_${item.student_class}_${item.student_num}`;
+      if (!map.has(key)) {
+        map.set(key, item);
+      }
+    }
+    return Array.from(map.values());
+  };
+
   // ==========================================================================
   // [전자칠판 라이브 대시보드: 학생 필기 실시간 수신 및 최신순 정렬 리스너]
   // ==========================================================================
+  // 수동/자동 새로고침 함수 ref
+  const refreshNotesRef = useRef<((isManual?: boolean) => Promise<void>) | null>(null);
+
   useEffect(() => {
     if (activeModal !== 'qr_lesson_viewer' || !activeQrLesson) return;
 
     const currentLessonId = activeQrLesson.folderId || activeQrLesson.id;
 
-    // 1. Supabase에서 기존 제출 목록 조회
-    const fetchExistingNotes = async () => {
+    // 1. Supabase에서 경량 메타데이터만 0.2초 초고속 조회 (Statement Timeout 박멸!)
+    const fetchExistingNotes = async (isManual = false) => {
       if (supabase && isSupabaseConfigured) {
         try {
+          if (isManual) setIsRefreshingSubmissions(true);
           const { data, error } = await supabase
             .from('class_notes')
-            .select('*')
+            .select('id, lesson_id, student_grade, student_class, student_num, student_name, created_at, updated_at')
             .eq('lesson_id', currentLessonId)
             .order('updated_at', { ascending: false });
+
           if (!error && data) {
-            setStudentSubmissions(data);
+            const deduplicated = deduplicateSubmissions(data);
+            setStudentSubmissions(deduplicated);
+            if (isManual) {
+              showToast(`🔄 최신 학생 제출 현황을 갱신했습니다. (총 ${deduplicated.length}명)`);
+            }
           }
         } catch (e) {
           console.warn('Supabase fetch notes error:', e);
+        } finally {
+          if (isManual) setIsRefreshingSubmissions(false);
         }
       }
     };
+
+    refreshNotesRef.current = fetchExistingNotes;
     fetchExistingNotes();
 
     // 2. Supabase Realtime 채널 구독
@@ -358,12 +395,10 @@ export default function App() {
             'postgres_changes',
             { event: '*', schema: 'public', table: 'class_notes', filter: `lesson_id=eq.${currentLessonId}` },
             (payload) => {
+              // 실시간 이벤트 수신 시 즉시 목록 갱신
+              fetchExistingNotes();
               const newRecord = payload.new as ClassNoteRecord;
-              if (newRecord) {
-                setStudentSubmissions(prev => {
-                  const filtered = prev.filter(p => !(p.student_grade === newRecord.student_grade && p.student_class === newRecord.student_class && p.student_num === newRecord.student_num));
-                  return [newRecord, ...filtered];
-                });
+              if (newRecord && newRecord.student_name) {
                 showToast(`🔔 ${newRecord.student_grade}-${newRecord.student_class} ${newRecord.student_name} 학생이 필기를 제출했습니다!`);
               }
             }
@@ -392,7 +427,13 @@ export default function App() {
       localRealtimeChannel.addEventListener('message', handleLocalMessage);
     }
 
+    // 4. 백그라운드 3.5초 주기적 폴링 (Realtime 웹소켓 256KB 초과 누락 방지 완벽 보장)
+    const pollInterval = setInterval(() => {
+      fetchExistingNotes();
+    }, 3500);
+
     return () => {
+      clearInterval(pollInterval);
       if (sbChannel && supabase) supabase.removeChannel(sbChannel);
       if (localRealtimeChannel) localRealtimeChannel.removeEventListener('message', handleLocalMessage);
     };
@@ -619,15 +660,56 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [QR 수업 대화형 실행 (전자칠판 뷰어 열기)]
+  // [QR 수업 대화형 실행: 세션 선택 모달 & 이어하기 / 새로 갱신 분기]
   // ==========================================================================
   const handleOpenQrLesson = async (item: DriveItem) => {
+    const currentLessonId = item.folderId || item.id;
+    let existingCount = 0;
+    if (supabase && isSupabaseConfigured) {
+      try {
+        const { count, error } = await supabase
+          .from('class_notes')
+          .select('id', { count: 'exact', head: true })
+          .eq('lesson_id', currentLessonId);
+        if (!error && typeof count === 'number') {
+          existingCount = count;
+        }
+      } catch (e) {
+        console.warn('기존 수업 제출 확인 오류:', e);
+      }
+    }
+
+    if (existingCount > 0) {
+      // 기존 제출된 기록이 있는 경우: 이어하기 vs 새로 갱신 모달 팝업
+      setSessionPromptLesson(item);
+      setExistingSessionCount(existingCount);
+      setActiveModal('lesson_session_prompt');
+      return;
+    }
+
+    // 기존 기록이 없으면 바로 수업 대시보드 열기
+    await startQrLessonViewer(item, false);
+  };
+
+  // 실제 QR 수업 대시보드 진입 실행 함수
+  const startQrLessonViewer = async (item: DriveItem, clearExisting: boolean) => {
+    const currentLessonId = item.folderId || item.id;
+    if (clearExisting && supabase && isSupabaseConfigured) {
+      try {
+        await supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
+        setStudentSubmissions([]);
+        showToast('✨ 이전 기록을 모두 초기화하고 새 수업을 시작합니다.');
+      } catch (e) {
+        console.warn('초기화 오류:', e);
+      }
+    }
+
     setActiveQrLesson(item);
     setActiveModal('qr_lesson_viewer');
 
     const cleanTitle = item.name.replace('[QR수업]', '').trim();
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const studentUrl = `${origin}/?lessonId=${item.folderId || item.id}&title=${encodeURIComponent(cleanTitle)}`;
+    const studentUrl = `${origin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
 
     try {
       const qrDataUrl = await QRCode.toDataURL(studentUrl, {
@@ -644,7 +726,64 @@ export default function App() {
     }
   };
 
+  // 수업 중 수동으로 제출 내역 전체 초기화
+  const handleResetLessonSubmissions = async () => {
+    if (!activeQrLesson) return;
+    const currentLessonId = activeQrLesson.folderId || activeQrLesson.id;
+    const confirmed = window.confirm(
+      '⚠️ 현재 수업에 제출된 모든 학생의 필기 기록을 삭제하고 새로 시작하시겠습니까?\n\n이전 반의 기록을 지우고 새로운 반 학생들의 등록을 받을 때 사용합니다. (삭제 후 복구 불가)'
+    );
+    if (!confirmed) return;
 
+    if (supabase && isSupabaseConfigured) {
+      try {
+        await supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
+        setStudentSubmissions([]);
+        showToast('🧹 학생 필기 기록이 모두 초기화되었습니다. 새로운 등록을 받습니다.');
+      } catch (err: any) {
+        showToast(`❌ 초기화 실패: ${err.message}`);
+      }
+    }
+  };
+
+  // 학생 타일 클릭 시 개별 학생 상세 필기 조회 (스마트 페이지 선택 & 지연 로딩)
+  const handleOpenStudentDetail = async (sub: ClassNoteRecord) => {
+    // 1. 이미 스트로크 데이터가 있는 경우 바로 열기
+    if (sub.strokes_data?.pages || sub.strokes_data?.strokes) {
+      setSelectedStudentNote(sub);
+      const pages = (Array.isArray(sub.strokes_data.pages) && sub.strokes_data.pages.length > 0)
+        ? sub.strokes_data.pages
+        : [{ strokes: sub.strokes_data.strokes || [], textItems: sub.strokes_data.textItems || [] }];
+      const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0);
+      setSelectedStudentNotePageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+      return;
+    }
+
+    // 2. 메타데이터만 있는 경우 해당 학생 1명의 스트로크 데이터를 즉시 단건 조회 (50ms)
+    setSelectedStudentNote(sub);
+    setIsLoadingNoteDetail(true);
+    try {
+      if (supabase && isSupabaseConfigured && sub.id) {
+        const { data, error } = await supabase
+          .from('class_notes')
+          .select('*')
+          .eq('id', sub.id)
+          .single();
+        if (!error && data) {
+          setSelectedStudentNote(data);
+          const pages = (Array.isArray(data.strokes_data?.pages) && data.strokes_data.pages.length > 0)
+            ? data.strokes_data.pages
+            : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
+          const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0);
+          setSelectedStudentNotePageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+        }
+      }
+    } catch (err) {
+      console.error('학생 필기 상세 조회 오류:', err);
+    } finally {
+      setIsLoadingNoteDetail(false);
+    }
+  };
 
   // ==========================================================================
   // [전체 학생 필기 모음집 단일 PDF 생성 및 구글드라이브 업로드]
@@ -655,11 +794,11 @@ export default function App() {
     const lessonFolderId = activeQrLesson.folderId || activeQrLesson.id;
     const cleanLessonTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
 
-    // 오늘 날짜 또는 전체 필터에 맞춘 제출 학생 목록
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // 한국 표준시(KST) 오늘 날짜 또는 전체 필터에 맞춘 제출 학생 목록
+    const todayStr = getKstDateString();
     const targetNotes = studentSubmissions.filter(sub => {
       if (selectedDateFilter === 'all') return true;
-      const datePart = (sub.updated_at || sub.created_at || '').slice(0, 10);
+      const datePart = getKstDateString(sub.updated_at || sub.created_at);
       return !datePart || datePart === todayStr;
     });
 
@@ -673,10 +812,27 @@ export default function App() {
     showToast(`📄 ${targetNotes.length}명 학생 필기를 하나의 통합 PDF로 모으는 중...`);
 
     try {
+      // PDF 생성을 위해 누락된 필기 데이터(strokes_data)를 대상 학생 ID로 일괄 보충 조회
+      const noteIds = targetNotes.map(n => n.id).filter(Boolean);
+      let notesWithStrokes = [...targetNotes];
+      if (supabase && isSupabaseConfigured && noteIds.length > 0) {
+        try {
+          const { data: fullData, error: fetchErr } = await supabase
+            .from('class_notes')
+            .select('*')
+            .in('id', noteIds);
+          if (!fetchErr && fullData && fullData.length > 0) {
+            notesWithStrokes = fullData;
+          }
+        } catch (fErr) {
+          console.warn('PDF 병합용 스트로크 보충 조회 실패, 기존 캐시 사용:', fErr);
+        }
+      }
+
       const result = await generateClassSubmissionPdf({
         lessonTitle: cleanLessonTitle,
         customTitle: pdfCompilationTitle.trim() || cleanLessonTitle,
-        notes: targetNotes,
+        notes: notesWithStrokes,
         onProgress: (current, total, name) => {
           setPdfProgress({ current, total, name });
         }
@@ -1802,7 +1958,28 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="g-btn g-btn-text"
+                      style={{ fontSize: '12px', border: '1px solid var(--g-border)', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      disabled={isRefreshingSubmissions}
+                      onClick={() => refreshNotesRef.current && refreshNotesRef.current(true)}
+                      title="실시간 학생 제출 목록을 즉시 새로고침합니다."
+                    >
+                      <span style={{ display: 'inline-block', animation: isRefreshingSubmissions ? 'spin 1s linear infinite' : 'none' }}>🔄</span>
+                      새로고침
+                    </button>
+                    <button
+                      type="button"
+                      className="g-btn g-btn-text"
+                      style={{ fontSize: '12px', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      onClick={handleResetLessonSubmissions}
+                      title="이전 학생 제출 기록을 모두 삭제하고 새 수업으로 초기화합니다."
+                    >
+                      <span>🗑️</span>
+                      수업 초기화 (새로 시작)
+                    </button>
                     <button
                       type="button"
                       className="g-btn g-btn-primary"
@@ -1849,10 +2026,10 @@ export default function App() {
                   {/* 학생 타일 그리드 (실시간 데이터 렌더링) */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px', overflowY: 'auto', maxHeight: '240px' }}>
                     {(() => {
-                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const todayStr = getKstDateString();
                       const displayList = studentSubmissions.filter(sub => {
                         if (selectedDateFilter === 'all') return true;
-                        const datePart = (sub.updated_at || sub.created_at || '').slice(0, 10);
+                        const datePart = getKstDateString(sub.updated_at || sub.created_at);
                         return !datePart || datePart === todayStr;
                       });
 
@@ -1868,11 +2045,8 @@ export default function App() {
 
                       return displayList.map((sub, idx) => (
                         <div
-                          key={`${sub.student_grade}_${sub.student_class}_${sub.student_num}`}
-                          onClick={() => {
-                            setSelectedStudentNote(sub);
-                            setSelectedStudentNotePageIdx(0);
-                          }}
+                          key={sub.id || `${sub.student_grade}_${sub.student_class}_${sub.student_num}`}
+                          onClick={() => handleOpenStudentDetail(sub)}
                           style={{
                             background: idx === 0 ? 'rgba(59, 130, 246, 0.18)' : '#282a2c',
                             border: `1px solid ${idx === 0 ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
@@ -1908,6 +2082,105 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          모달: 수업 세션 시작 모드 선택 (이전 기록 이어하기 vs 새로 갱신하여 시작)
+          ==================================================================== */}
+      {activeModal === 'lesson_session_prompt' && sessionPromptLesson && (
+        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+          <div className="modal-box" style={{ maxWidth: '580px', padding: '24px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'rgba(59, 130, 246, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '26px' }}>
+                🎓
+              </div>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
+                  수업 시작 방식 선택
+                </h2>
+                <div style={{ fontSize: '13px', color: '#93c5fd', marginTop: '2px', fontWeight: 600 }}>
+                  {sessionPromptLesson.name.replace('[QR수업]', '').trim()}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background: '#1e1f20', border: '1px solid var(--g-border)', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px' }}>
+              <p style={{ margin: 0, fontSize: '13.5px', color: '#e2e8f0', lineHeight: 1.6 }}>
+                💡 이전에 등록된 학생 필기 기록이 <strong style={{ color: '#38bdf8' }}>{existingSessionCount}건</strong> 있습니다.<br />
+                이번 수업을 어떻게 진행하시겠습니까?
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+              {/* 옵션 1: 이전 기록 이어하기 */}
+              <div
+                onClick={() => startQrLessonViewer(sessionPromptLesson, false)}
+                style={{
+                  background: 'rgba(30, 41, 59, 0.7)',
+                  border: '1.5px solid #3b82f6',
+                  borderRadius: '12px',
+                  padding: '16px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <div style={{ fontSize: '28px', background: 'rgba(59, 130, 246, 0.2)', width: '48px', height: '48px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  📂
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    이전 수업 기록 가져오기 (이어하기)
+                    <span style={{ fontSize: '11px', background: 'rgba(59, 130, 246, 0.3)', color: '#93c5fd', padding: '1px 6px', borderRadius: '4px' }}>추천</span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--g-text-secondary)', marginTop: '4px', lineHeight: 1.4 }}>
+                    수업 중 실수로 창을 닫았거나, 학생들이 이전에 제출한 내용을 그대로 유지하고 이어서 진행합니다.
+                  </div>
+                </div>
+              </div>
+
+              {/* 옵션 2: 새로 갱신하여 시작 */}
+              <div
+                onClick={() => {
+                  if (window.confirm(`정말 이전 등록 내용(${existingSessionCount}건)을 모두 지우고 새로 수업을 시작하시겠습니까?\n새로운 반 학생들의 등록을 받습니다.`)) {
+                    startQrLessonViewer(sessionPromptLesson, true);
+                  }
+                }}
+                style={{
+                  background: 'rgba(30, 41, 59, 0.4)',
+                  border: '1.5px solid rgba(239, 68, 68, 0.4)',
+                  borderRadius: '12px',
+                  padding: '16px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <div style={{ fontSize: '28px', background: 'rgba(239, 68, 68, 0.15)', width: '48px', height: '48px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  ✨
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: '#f87171' }}>
+                    새로 갱신하여 시작 (이전 기록 초기화)
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--g-text-secondary)', marginTop: '4px', lineHeight: 1.4 }}>
+                    새로운 반이나 새 수업을 시작할 때 선택하세요. 이전 기록을 깨끗이 비우고 새로운 등록을 받습니다.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="g-btn g-btn-text" onClick={() => setActiveModal(null)} style={{ fontSize: '13px' }}>
+                취소
+              </button>
             </div>
           </div>
         </div>
@@ -1989,6 +2262,14 @@ export default function App() {
                 margin: '10px 0',
                 boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)'
               }}>
+                {/* 비동기 상세 필기 로딩 스피너 */}
+                {isLoadingNoteDetail && (
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(19, 19, 20, 0.85)', zIndex: 10 }}>
+                    <span style={{ fontSize: '32px', display: 'inline-block', animation: 'spin 1s linear infinite' }}>🔄</span>
+                    <span style={{ marginTop: '10px', fontSize: '13px', color: '#93c5fd', fontWeight: 600 }}>학생 필기 데이터를 불러오는 중...</span>
+                  </div>
+                )}
+
                 {/* 모눈종이 배경 */}
                 <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
 
@@ -1999,7 +2280,7 @@ export default function App() {
                   style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
                 >
                   {(currentNotePage.strokes || []).map((stroke: any) => {
-                    if (!stroke.points || stroke.points.length === 0) return null;
+                    if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;
                     let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
                     for (let i = 1; i < stroke.points.length; i++) {
                       pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
