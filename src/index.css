@@ -849,10 +849,18 @@ body {
   display: flex;
   flex-direction: column;
   width: 100vw;
+  width: 100dvw;
   height: 100vh;
+  height: 100dvh;
   background-color: #131314;
   color: #f1f3f4;
   overflow: hidden;
+  box-sizing: border-box;
+  /* iPad Safari 상단 주소창/노치 및 하단 홈 바 가려짐 완벽 방어 */
+  padding-top: max(10px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(6px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(8px, env(safe-area-inset-left, 0px));
+  padding-right: max(8px, env(safe-area-inset-right, 0px));
   user-select: none !important;
   -webkit-user-select: none !important;
   -webkit-touch-callout: none !important;
@@ -878,14 +886,18 @@ body {
 }
 
 .student-header {
-  height: 52px;
+  min-height: 48px;
+  height: auto;
   background-color: #1e1f20;
   border-bottom: 1px solid var(--g-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 6px 14px;
   z-index: 100;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  gap: 8px;
 }
 
 .student-badge-btn {
@@ -909,22 +921,51 @@ body {
 }
 
 .student-toolbar {
-  height: 48px;
+  min-height: 44px;
+  height: auto;
   background-color: #232528;
   border-bottom: 1px solid var(--g-border);
   display: flex;
+  flex-direction: row;
   align-items: center;
-  padding: 0 12px;
-  gap: 8px;
-  overflow-x: auto;
+  padding: 4px 10px;
+  gap: 6px;
   z-index: 90;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 2줄 툴바 모드 (아이패드 세로 모드 및 화면 폭 < 960px) */
+.student-toolbar.two-tier {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 4px 10px;
+  gap: 4px;
+  min-height: 74px;
+}
+
+.student-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
+}
+
+.student-toolbar-row::-webkit-scrollbar {
+  display: none;
 }
 
 .toolbar-divider {
   width: 1px;
-  height: 24px;
+  height: 22px;
   background-color: var(--g-border);
-  margin: 0 4px;
+  margin: 0 3px;
   flex-shrink: 0;
 }
 
