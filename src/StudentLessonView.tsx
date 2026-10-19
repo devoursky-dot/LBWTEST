@@ -165,7 +165,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const currentStrokeRef = useRef<Stroke | null>(null);
   const strokeDragStartSnapshotRef = useRef<Stroke[]>([]);
   const didEraseInGestureRef = useRef<boolean>(false);
-  const hasInitializedZoomRef = useRef<boolean>(false);
 
   // 제스처 및 스크롤 추적 ref
   const isGestureRef = useRef(false);
@@ -178,6 +177,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const activePointersRef = useRef<Map<number, { x: number; y: number; type: string }>>(new Map());
   const activeDrawPointerIdRef = useRef<number | null>(null);
   const activeDrawPointerTypeRef = useRef<string | null>(null);
+  // 글자 간격 펜 뗌 보호 스마트 팜리젝션 (애플펜슬/S펜 사용 후 1.2초간 손바닥 터치 오작동 완벽 차단)
+  const lastPenTimeRef = useRef<number>(0);
 
   // 펜 모드 시 손가락 1개 드래그 이동(Pan) ref
   const isFingerPanningRef = useRef(false);
@@ -444,14 +445,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     // 2. 활성 포인터 등록 (포인터 타입 함께 보관)
     activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
 
-    // 3. [스마트 팜리젝션 1]: 이미 애플펜슬/펜이 필기 중일 때 손바닥(touch)이 닿으면 펜 필기를 취소하지 않고 손바닥 터치만 무시!
-    if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') {
-      if (e.pointerType === 'touch') {
-        return; // 손바닥 터치 무시
+    // 3. [애플펜슬/S펜 스타일러스 최우선권 부여 및 스마트 팜리젝션]:
+    if (e.pointerType === 'pen') {
+      lastPenTimeRef.current = Date.now();
+      isGestureRef.current = false; // 제스처 즉시 해제
+
+      // 혹시 이전에 손바닥(touch)으로 잘못 시작된 획이 있다면 즉시 파기
+      if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
+        isDrawingRef.current = false;
+        currentStrokeRef.current = null;
+        activeDrawPointerIdRef.current = null;
+        activeDrawPointerTypeRef.current = null;
+        renderCanvas();
+      }
+    } else if (e.pointerType === 'touch') {
+      // 4. [글자 간격 펜 뗌 보호 스마트 팜리젝션]:
+      // 펜 필기 중이거나, 글자 사이 펜을 잠깐 뗀 직후(1.2초 이내) 닿은 손바닥(touch)은 100% 무시
+      const isRecentPenUser = Date.now() - lastPenTimeRef.current < 1200;
+      if ((isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') || isRecentPenUser) {
+        return; // 손바닥 터치 완벽 무시
       }
     }
 
-    // 4. [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), 펜/마우스이면 필기!
+    // 5. [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), 펜/마우스이면 필기!
     if (penOnlyMode) {
       if (e.pointerType === 'touch') {
         if (activePointersRef.current.size === 1) {
@@ -552,6 +568,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       e.preventDefault();
     }
 
+    if (e.pointerType === 'pen') {
+      lastPenTimeRef.current = Date.now();
+    }
+
     // 1. 펜 모드에서 손가락 1개로 드래그 위치 이동 중일 때
     if (isFingerPanningRef.current && e.pointerType === 'touch') {
       const dx = e.clientX - fingerPanStartRef.current.x;
@@ -638,6 +658,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
     if (e) {
       activePointersRef.current.delete(e.pointerId);
+      if (e.pointerType === 'pen') {
+        lastPenTimeRef.current = Date.now();
+      }
     }
 
     // 손가락 팬 종료
@@ -850,15 +873,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [getFitScales, zoomScale, handleFitPage, handleFitWidth]);
 
-  // 초기 로드 시 한 페이지 전체가 잘림 없이 보이도록 전체 보기에 자동 맞춤
+  // 초기 로드 및 용지 방향(가로/세로) 전환 시 한 페이지 전체가 잘림 없이 보이도록 전체 보기에 자동 맞춤
   useEffect(() => {
-    if (!hasInitializedZoomRef.current && containerRef.current) {
-      hasInitializedZoomRef.current = true;
+    if (containerRef.current) {
       const { fitPageScale: targetScale } = getFitScales();
       setZoomScale(targetScale);
       setPanOffset({ x: 0, y: 0 });
     }
-  }, [getFitScales]);
+  }, [orientation]);
 
   // 방향 전환 및 화면 크기 변화 시 클램핑 및 가로/세로 정렬 유지
   useEffect(() => {
@@ -922,8 +944,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (!container) return;
 
     const onTouchStart = (e: TouchEvent) => {
-      // 애플펜슬 필기 중 손바닥이 닿아 발생하는 터치는 핀치 제스처로 오인하지 않도록 완벽 무시
-      if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') {
+      // 애플펜슬 필기 중이거나 글자 사이 펜을 잠깐 뗀 직후(1.2초) 손바닥이 닿아 발생하는 터치는 핀치 제스처로 오인하지 않도록 완벽 무시
+      const isRecentPenUser = Date.now() - lastPenTimeRef.current < 1200;
+      if ((isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') || isRecentPenUser) {
         return;
       }
 
@@ -954,6 +977,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
 
     const onTouchMove = (e: TouchEvent) => {
+      const isRecentPenUser = Date.now() - lastPenTimeRef.current < 1200;
+      if ((isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') || isRecentPenUser) {
+        return;
+      }
+
       if (isGestureRef.current && e.touches.length >= 2) {
         if (e.cancelable) e.preventDefault();
         const t1 = e.touches[0];
@@ -1013,12 +1041,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     container.addEventListener('touchstart', onTouchStart, { passive: true });
     container.addEventListener('touchmove', onTouchMove, { passive: false });
     container.addEventListener('touchend', onTouchEnd, { passive: true });
+    container.addEventListener('touchcancel', onTouchEnd, { passive: true });
     container.addEventListener('selectstart', onSelectStart);
 
     return () => {
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
+      container.removeEventListener('touchcancel', onTouchEnd);
       container.removeEventListener('selectstart', onSelectStart);
     };
   }, [zoomScale, panOffset, clampPanOffset]);
