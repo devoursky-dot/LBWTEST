@@ -43,6 +43,61 @@ interface StudentLessonViewProps {
   onExit?: () => void;
 }
 
+// ============================================================================
+// [아이콘 & 기하학 유틸리티]
+// ============================================================================
+
+// 사각 고무 지우개 SVG 아이콘 (붓/빗자루 대신 직사각형 지우개 모양)
+const EraserIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={color}
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ display: 'inline-block', verticalAlign: 'middle' }}
+  >
+    <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" />
+    <path d="M22 21H7" />
+    <path d="m5 11 9 9" />
+  </svg>
+);
+
+// 점(px, py)에서 선분 (x1, y1)-(x2, y2)까지의 최단 거리
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  return Math.hypot(px - projX, py - projY);
+}
+
+// 스트로크와 지우개 반경 충돌 검사 (획 단위 지우개)
+function isStrokeHit(stroke: Stroke, px: number, py: number, eraserRadius: number): boolean {
+  if (!stroke.points || stroke.points.length === 0) return false;
+  const threshold = eraserRadius + (stroke.size || 3) / 2;
+
+  if (stroke.points.length === 1) {
+    return Math.hypot(px - stroke.points[0].x, py - stroke.points[0].y) <= threshold;
+  }
+
+  for (let i = 0; i < stroke.points.length - 1; i++) {
+    const p1 = stroke.points[i];
+    const p2 = stroke.points[i + 1];
+    if (distToSegment(px, py, p1.x, p1.y, p2.x, p2.y) <= threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   lessonId,
   lessonTitle,
@@ -65,9 +120,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isChangingStudent, setIsChangingStudent] = useState(false);
 
   // --- 2. 삼성노트 REA 뷰포트 & A4 용지 규격 상태 ---
-  const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('landscape');
+  // 기본 표준: A4 세로 (Portrait)
+  const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [zoomScale, setZoomScale] = useState<number>(1.0); // 0.5 ~ 3.0
+  const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // --- 3. 멀티페이지 공책 상태 ---
@@ -76,9 +132,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   ]);
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
 
-  // 현재 활성 페이지의 데이터
+  // 현재 활성 페이지의 데이터 & Undo/Redo 스택 (획 추가 및 획 삭제 모두 지원)
   const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [redoStrokes, setRedoStrokes] = useState<Stroke[]>([]);
+  const [undoStack, setUndoStack] = useState<Stroke[][]>([]);
+  const [redoStack, setRedoStack] = useState<Stroke[][]>([]);
   const [textItems, setTextItems] = useState<TextItem[]>([]);
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
 
@@ -89,7 +146,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [highlighterColor, setHighlighterColor] = useState<string>('#fde047');
   const [highlighterSize, setHighlighterSize] = useState<number>(18);
   const [eraserSize, setEraserSize] = useState<number>(24);
-  const [penOnlyMode, setPenOnlyMode] = useState<boolean>(false); // 기본 터치/펜 모두 허용, S펜 전용 클릭 시 손바닥 차단
+  const [eraserMode, setEraserMode] = useState<'stroke' | 'pixel'>('stroke'); // 기본값: 획 지우개
+  const [penOnlyMode, setPenOnlyMode] = useState<boolean>(false); // false: 터치 모드, true: 펜 모드 (팜리젝션 & 1손가락 이동)
   const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -102,6 +160,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   const isDrawingRef = useRef(false);
   const currentStrokeRef = useRef<Stroke | null>(null);
+  const strokeDragStartSnapshotRef = useRef<Stroke[]>([]);
+  const didEraseInGestureRef = useRef<boolean>(false);
+  const hasInitializedZoomRef = useRef<boolean>(false);
 
   // 제스처 및 스크롤 추적 ref
   const isGestureRef = useRef(false);
@@ -181,7 +242,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // ==========================================================================
   // [A4 용지 규격 캔버스 초기화]
+  // - A4 표준 비율: 1 : √2 ≈ 1 : 1.4142 (세로 210mm x 297mm)
+  // - 인쇄 및 모바일/스마트보드 기준: 세로(Portrait) 기본
   // ==========================================================================
+  const paperBaseWidth = orientation === 'landscape' ? 1133 : 800;
+  const paperBaseHeight = orientation === 'landscape' ? 800 : 1133;
+
   const A4_WIDTH = orientation === 'landscape' ? 1600 : 1130;
   const A4_HEIGHT = orientation === 'landscape' ? 1130 : 1600;
 
@@ -314,7 +380,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setCurrentPageIndex(targetIdx);
     setStrokes(targetPage.strokes || []);
     setTextItems(targetPage.textItems || []);
-    setRedoStrokes([]);
+    setUndoStack([]);
+    setRedoStack([]);
     setActiveTextId(null);
   };
 
@@ -339,7 +406,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setCurrentPageIndex(nextIndex);
     setStrokes([]);
     setTextItems([]);
-    setRedoStrokes([]);
+    setUndoStack([]);
+    setRedoStack([]);
     setActiveTextId(null);
     showToast(`📄 ${nextIndex + 1}페이지가 추가되었습니다.`);
   };
@@ -362,7 +430,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   // ==========================================================================
-  // [삼성노트 REA 포인터 이벤트 핸들러 (펜 모드 1손가락 이동 & 멀티터치 직선 방지)]
+  // [포인터 이벤트 핸들러 (터치 모드 & 펜 모드, 획 지우개, 멀티터치 직선 방지)]
   // ==========================================================================
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     tryAutoFullscreen();
@@ -388,7 +456,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setActivePopup(null);
     }
 
-    // [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), S펜/마우스이면 필기!
+    // [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), 펜/마우스이면 필기!
     if (penOnlyMode) {
       if (e.pointerType === 'touch') {
         // 손가락 1개 드래그로 캔버스 위치 이동(Pan) 시작
@@ -404,7 +472,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         return;
       }
 
-      // S펜/마우스가 아니면 무시
+      // 펜/마우스가 아니면 무시 (손바닥 터치 차단 / 팜리젝션)
       if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') {
         return;
       }
@@ -418,12 +486,34 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
+    // 획 지우개 모드: 터치한 곳의 획 전체 즉시 삭제
+    if (tool === 'eraser' && eraserMode === 'stroke') {
+      strokeDragStartSnapshotRef.current = [...strokes];
+      didEraseInGestureRef.current = false;
+      isDrawingRef.current = true;
+      activeDrawPointerIdRef.current = e.pointerId;
+
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+
+      const { x, y } = getCanvasCoords(e);
+      const eraserRadius = Math.max(16, eraserSize / 2);
+      const hitStrokes = strokes.filter(s => isStrokeHit(s, x, y, eraserRadius));
+      if (hitStrokes.length > 0) {
+        didEraseInGestureRef.current = true;
+        setStrokes(prev => prev.filter(s => !hitStrokes.some(hs => hs.id === s.id)));
+      }
+      return;
+    }
+
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {}
 
     isDrawingRef.current = true;
     activeDrawPointerIdRef.current = e.pointerId;
+    strokeDragStartSnapshotRef.current = [...strokes];
 
     const { x, y } = getCanvasCoords(e);
     const pressure = e.pressure > 0 ? e.pressure : 0.5;
@@ -473,15 +563,30 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    // 3. 필기 중인 포인터 ID와 일치하지 않으면 무시 (두 번째 손가락과의 직선 연결 버그 해결)
-    if (!isDrawingRef.current || !currentStrokeRef.current || e.pointerId !== activeDrawPointerIdRef.current) {
+    // 3. 필기 중인 포인터 ID와 일치하지 않으면 무시
+    if (!isDrawingRef.current || e.pointerId !== activeDrawPointerIdRef.current) {
       return;
     }
 
     const { x, y } = getCanvasCoords(e);
-    const pressure = e.pressure > 0 ? e.pressure : 0.5;
 
+    // 획 지우개 모드: 이동 경로에서 스친 획 전체 삭제
+    if (tool === 'eraser' && eraserMode === 'stroke') {
+      const eraserRadius = Math.max(16, eraserSize / 2);
+      setStrokes(prev => {
+        const remaining = prev.filter(s => !isStrokeHit(s, x, y, eraserRadius));
+        if (remaining.length !== prev.length) {
+          didEraseInGestureRef.current = true;
+        }
+        return remaining;
+      });
+      return;
+    }
+
+    // 일반 필기 및 영역(픽셀) 지우개
+    if (!currentStrokeRef.current) return;
     const currentStroke = currentStrokeRef.current;
+    const pressure = e.pressure > 0 ? e.pressure : 0.5;
     currentStroke.points.push({ x, y, pressure });
 
     // 초고속 실시간 증분 렌더링
@@ -534,15 +639,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       isFingerPanningRef.current = false;
     }
 
-    // 필기 종료 처리
+    // 획 지우개 종료 및 Undo 히스토리 기록
+    if (isDrawingRef.current && tool === 'eraser' && eraserMode === 'stroke') {
+      isDrawingRef.current = false;
+      activeDrawPointerIdRef.current = null;
+      if (didEraseInGestureRef.current) {
+        setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
+        setRedoStack([]);
+        didEraseInGestureRef.current = false;
+      }
+      return;
+    }
+
+    // 일반 필기 종료 처리
     if (isDrawingRef.current && e && e.pointerId === activeDrawPointerIdRef.current) {
       isDrawingRef.current = false;
       activeDrawPointerIdRef.current = null;
 
       const finishedStroke = currentStrokeRef.current;
       if (finishedStroke && finishedStroke.points.length > 0) {
+        setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
+        setRedoStack([]);
         setStrokes(prev => [...prev, { ...finishedStroke, points: [...finishedStroke.points] }]);
-        setRedoStrokes([]);
       }
       currentStrokeRef.current = null;
     } else if (isDrawingRef.current && !e) {
@@ -552,27 +670,32 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // 실행 취소 & 다시 실행
-  const handleUndo = () => {
-    if (strokes.length === 0) return;
-    const last = strokes[strokes.length - 1];
-    setStrokes(prev => prev.slice(0, -1));
-    setRedoStrokes(prev => [...prev, last]);
-  };
+  // 실행 취소 & 다시 실행 (획 추가 및 획 삭제 모두 지원)
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0) return;
+    const previous = undoStack[undoStack.length - 1];
+    setRedoStack(prev => [...prev.slice(-30), strokes]);
+    setUndoStack(prev => prev.slice(0, -1));
+    setStrokes(previous);
+  }, [undoStack, strokes]);
 
-  const handleRedo = () => {
-    if (redoStrokes.length === 0) return;
-    const last = redoStrokes[redoStrokes.length - 1];
-    setRedoStrokes(prev => prev.slice(0, -1));
-    setStrokes(prev => [...prev, last]);
-  };
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack(prev => [...prev.slice(-30), strokes]);
+    setRedoStack(prev => prev.slice(0, -1));
+    setStrokes(next);
+  }, [redoStack, strokes]);
 
   // [지우기 1] 현재 페이지만 지우기
   const handleClearCurrentPage = () => {
     if (window.confirm(`현재 ${currentPageIndex + 1}쪽의 필기 내용을 모두 지우시겠습니까?`)) {
+      if (strokes.length > 0) {
+        setUndoStack(prev => [...prev.slice(-30), strokes]);
+        setRedoStack([]);
+      }
       setStrokes([]);
       setTextItems([]);
-      setRedoStrokes([]);
       setActivePopup(null);
       showToast(`🗑️ ${currentPageIndex + 1}쪽 내용이 초기화되었습니다.`);
     }
@@ -586,7 +709,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setCurrentPageIndex(0);
       setStrokes([]);
       setTextItems([]);
-      setRedoStrokes([]);
+      setUndoStack([]);
+      setRedoStack([]);
       setActivePopup(null);
       showToast('🗑️ 모든 페이지의 필기가 초기화되었습니다.');
     }
@@ -605,20 +729,48 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setCurrentPageIndex(nextIdx);
       setStrokes(updated[nextIdx]?.strokes || []);
       setTextItems(updated[nextIdx]?.textItems || []);
-      setRedoStrokes([]);
+      setUndoStack([]);
+      setRedoStack([]);
       setActivePopup(null);
       showToast(`🗑️ ${currentPageIndex + 1}쪽이 삭제되었습니다.`);
     }
   };
 
-  const MIN_ZOOM = 0.5; // 최소 50% 이하로 작아지지 않도록 제한
-  const MAX_ZOOM = 3.0; // 최대 300%
+  // ==========================================================================
+  // [동적 확대/축소 배율 계산 (폭 맞춤 100% vs 전체 보기)]
+  // - 100% 확대: 화면 가로 폭(Width)에 정확히 맞춤
+  // - 전체 보기 (최대 축소): 한 페이지 전체(세로+가로)가 화면에 완전히 다 보일 때까지 축소
+  // - 축소 제한: 한 페이지 전체가 보이는 배율보다 더 작아지지 않음 (축소하더라도 한 페이지 전체가 보일 때까지만 축소)
+  // ==========================================================================
+  const getFitScales = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return { fitWidthScale: 1.0, fitPageScale: 0.6, minScale: 0.6, maxScale: 3.0 };
+    }
+
+    const availW = Math.max(200, container.clientWidth - 24);
+    const availH = Math.max(200, container.clientHeight - 32);
+
+    // 100% 폭 맞춤 배율 (화면 가로 폭 크기에 맞춤)
+    const fitWidthScale = availW / paperBaseWidth;
+
+    // 한 페이지 전체 보기 배율 (화면 높이와 폭 모두에 완전히 쏙 들어오는 최대 축소 기준)
+    const fitPageScale = Math.min(availW / paperBaseWidth, availH / paperBaseHeight);
+
+    // 축소는 한 페이지 전체가 다 보일 때까지만 허용 (화면폭보다 작아서 의미 없는 축소 방지)
+    const minScale = fitPageScale;
+    const maxScale = Math.max(fitWidthScale * 3.0, 3.0);
+
+    return { fitWidthScale, fitPageScale, minScale, maxScale };
+  }, [paperBaseWidth, paperBaseHeight]);
+
+  const { fitWidthScale, fitPageScale, minScale, maxScale } = getFitScales();
+  const displayPercent = Math.round((zoomScale / fitWidthScale) * 100);
+  const isFitWidth = Math.abs(zoomScale - fitWidthScale) < 0.03;
+  const isFitPage = Math.abs(zoomScale - fitPageScale) < 0.03;
 
   // ==========================================================================
   // [가로 크기 기준 가운데 정렬 및 화면 이탈 방지 헬퍼]
-  // - 축소 시 페이지 폭이 화면보다 작거나 같으면 100% 정중앙(x = 0)으로 자동 정렬
-  // - 화면보다 클 때만 좌우 이동을 허용하고 화면 밖 이탈 방지
-  // - 세로 방향도 화면에 맞으면 정중앙, 클 때만 스크롤
   // ==========================================================================
   const clampPanOffset = useCallback((pan: { x: number; y: number }, scale: number): { x: number; y: number } => {
     const container = containerRef.current;
@@ -627,55 +779,94 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     const containerWidth = container.clientWidth;
     const containerHeight = container.clientHeight;
 
-    const paperBaseWidth = orientation === 'landscape' ? 1120 : 792;
-    const paperBaseHeight = orientation === 'landscape' ? 792 : 1120;
-
     const renderedWidth = paperBaseWidth * scale;
     const renderedHeight = paperBaseHeight * scale;
 
-    // 1. 가로 크기 기준: 화면 폭보다 작으면 무조건 x = 0 (정중앙 정렬, 한쪽 쏠림 방지!)
+    // 1. 가로: 화면 폭보다 작거나 같으면 무조건 x = 0 (정중앙 정렬)
     let clampedX = 0;
     if (renderedWidth > containerWidth) {
-      const maxPanX = (renderedWidth - containerWidth) / 2;
+      const maxPanX = (renderedWidth - containerWidth) / 2 + 16;
       clampedX = Math.max(-maxPanX, Math.min(maxPanX, pan.x));
     } else {
-      clampedX = 0; // 가로 화면 크기보다 작을 때 무조건 정중앙 정렬
+      clampedX = 0;
     }
 
-    // 2. 세로 크기 기준: 화면 높이보다 작으면 y = 0 (정중앙), 클 때만 스크롤 허용
+    // 2. 세로: 화면 높이보다 작거나 같으면 무조건 y = 0 (정중앙 정렬)
     let clampedY = 0;
     if (renderedHeight > containerHeight) {
-      const maxPanY = (renderedHeight - containerHeight) / 2 + 80;
+      const maxPanY = (renderedHeight - containerHeight) / 2 + 24;
       clampedY = Math.max(-maxPanY, Math.min(maxPanY, pan.y));
     } else {
       clampedY = 0;
     }
 
     return { x: clampedX, y: clampedY };
-  }, [orientation]);
+  }, [paperBaseWidth, paperBaseHeight]);
 
-  // 방향 전환 및 화면 크기 변화 시 가로 가운데 정렬 유지
+  // [1] 한 페이지 전체 보기 (최대 축소: 한 페이지 전체가 한눈에 다 보임)
+  const handleFitPage = useCallback(() => {
+    const { fitPageScale: targetScale } = getFitScales();
+    setZoomScale(targetScale);
+    setPanOffset({ x: 0, y: 0 });
+    showToast('📄 한 페이지 전체 보기에 맞췄습니다.');
+  }, [getFitScales]);
+
+  // [2] 화면 폭 맞춤 100% (화면 폭 크기에 맞게 페이지 크기 맞춤)
+  const handleFitWidth = useCallback(() => {
+    const { fitWidthScale: targetScale } = getFitScales();
+    setZoomScale(targetScale);
+    setPanOffset(clampPanOffset({ x: 0, y: 0 }, targetScale));
+    showToast('↔️ 화면 폭에 100% 맞췄습니다.');
+  }, [getFitScales, clampPanOffset]);
+
+  // [3] 폭 맞춤 ↔ 전체 보기 원터치 토글
+  const handleToggleZoomFit = useCallback(() => {
+    const { fitWidthScale: fw, fitPageScale: fp } = getFitScales();
+    if (Math.abs(zoomScale - fw) <= Math.abs(zoomScale - fp)) {
+      handleFitPage();
+    } else {
+      handleFitWidth();
+    }
+  }, [getFitScales, zoomScale, handleFitPage, handleFitWidth]);
+
+  // 초기 로드 시 한 페이지 전체가 잘림 없이 보이도록 전체 보기에 자동 맞춤
+  useEffect(() => {
+    if (!hasInitializedZoomRef.current && containerRef.current) {
+      hasInitializedZoomRef.current = true;
+      const { fitPageScale: targetScale } = getFitScales();
+      setZoomScale(targetScale);
+      setPanOffset({ x: 0, y: 0 });
+    }
+  }, [getFitScales]);
+
+  // 방향 전환 및 화면 크기 변화 시 클램핑 및 가로/세로 정렬 유지
   useEffect(() => {
     setPanOffset(prev => clampPanOffset(prev, zoomScale));
   }, [orientation, zoomScale, clampPanOffset]);
 
   useEffect(() => {
     const handleResize = () => {
-      setPanOffset(prev => clampPanOffset(prev, zoomScale));
+      const { minScale: minS, maxScale: maxS } = getFitScales();
+      setZoomScale(prev => {
+        const next = Math.min(maxS, Math.max(minS, prev));
+        setPanOffset(p => clampPanOffset(p, next));
+        return next;
+      });
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [zoomScale, clampPanOffset]);
+  }, [getFitScales, clampPanOffset]);
 
   // ==========================================================================
-  // [삼성노트 REA 휠 줌 및 스크롤 이벤트 핸들러 - 마우스 커서 위치 중심 줌]
+  // [휠 줌 및 스크롤 이벤트 핸들러 - 마우스 커서 위치 중심 줌]
   // ==========================================================================
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const { minScale: minS, maxScale: maxS } = getFitScales();
     if (e.ctrlKey) {
-      // Ctrl + 휠: 마우스 커서 위치 중심 초정밀 확대/축소 (최소 50% 제한)
+      // Ctrl + 휠: 마우스 커서 위치 중심 확대/축소 (최소 배율은 한 페이지 전체 보기로 제한!)
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-      const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomScale * zoomFactor));
+      const nextScale = Math.min(maxS, Math.max(minS, zoomScale * zoomFactor));
       if (nextScale === zoomScale) return;
 
       const container = containerRef.current;
@@ -691,12 +882,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         const rawPanX = panOffset.x * scaleRatio + deltaX * (1 - scaleRatio);
         const rawPanY = panOffset.y * scaleRatio + deltaY * (1 - scaleRatio);
 
-        // 가로 폭이 화면보다 작아지면 자동으로 x=0(정중앙) 정렬
         setPanOffset(clampPanOffset({ x: rawPanX, y: rawPanY }, nextScale));
       }
       setZoomScale(nextScale);
     } else {
-      // 일반 휠: 위아래 / 좌우 스크롤 (화면보다 작을 때는 가로 가운데 정렬 유지)
+      // 일반 휠: 위아래 / 좌우 스크롤
       setPanOffset(prev => {
         const nextX = prev.x - (e.shiftKey ? e.deltaY : e.deltaX);
         const nextY = prev.y - (!e.shiftKey ? e.deltaY : 0);
@@ -705,14 +895,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // 줌 리셋 (100% 원위치 & 가운데 정렬)
-  const handleResetZoom = () => {
-    setZoomScale(1.0);
-    setPanOffset(clampPanOffset({ x: 0, y: 0 }, 1.0));
-    showToast('🔍 100% 원위치로 맞췄습니다.');
-  };
-
-  // 삼성노트 REA 2손가락 핀치 줌 & 팬 (손가락 접촉 지점 포컬포인트 줌 & 화면보다 작아지면 가운데 정렬)
+  // 삼성노트 REA 2손가락 핀치 줌 & 팬
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -723,7 +906,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       if (e.touches.length >= 2) {
         isGestureRef.current = true;
 
-        // 2손가락 감지 즉시 진행 중이던 필기 강제 취소 및 캔버스 클리어! (두 손가락 사이 직선 생성 원천 방지)
         if (isDrawingRef.current) {
           isDrawingRef.current = false;
           currentStrokeRef.current = null;
@@ -759,29 +941,26 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
         if (initialTouchDistanceRef.current > 0) {
           const ratio = currentDist / initialTouchDistanceRef.current;
-          // 축소 시 50%(0.5) 이하로 작아지지 않도록 제한
-          const nextScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, initialScaleRef.current * ratio));
+          const { minScale: minS, maxScale: maxS } = getFitScales();
+          // 축소 시 한 페이지 전체가 보일 때까지만(minScale) 제한
+          const nextScale = Math.min(maxS, Math.max(minS, initialScaleRef.current * ratio));
           setZoomScale(nextScale);
 
           const rect = container.getBoundingClientRect();
           const viewportCenterX = rect.left + rect.width / 2;
           const viewportCenterY = rect.top + rect.height / 2;
 
-          // 터치 시작 시 두 손가락 중심과 뷰포트 중심 간의 상대 벡터
           const initialFocalRelX = initialCenterRef.current.x - viewportCenterX;
           const initialFocalRelY = initialCenterRef.current.y - viewportCenterY;
 
-          // 두 손가락 중심 자체의 이동량 (Pan translation)
           const translationX = currentCenter.x - initialCenterRef.current.x;
           const translationY = currentCenter.y - initialCenterRef.current.y;
 
-          // 줌 배율 변화비
           const scaleChangeRatio = nextScale / initialScaleRef.current;
 
           const rawPanX = (initialPanRef.current.x * scaleChangeRatio) + (initialFocalRelX * (1 - scaleChangeRatio)) + translationX;
           const rawPanY = (initialPanRef.current.y * scaleChangeRatio) + (initialFocalRelY * (1 - scaleChangeRatio)) + translationY;
 
-          // 화면 크기보다 작아지면 가로 가운데 정렬(pan.x=0) 적용
           setPanOffset(clampPanOffset({ x: rawPanX, y: rawPanY }, nextScale));
         }
       }
@@ -1146,18 +1325,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               padding: '2px 8px',
               gap: '2px'
             }}
-            title="지우개 (클릭 시 지우개 크기 및 페이지 지우기 메뉴)"
+            title={`지우개 (${eraserMode === 'stroke' ? '획 지우개' : '영역 지우개'}, 클릭 시 모드 및 크기 설정)`}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '13px' }}>
-              <span>🧹</span>
+              <EraserIcon size={16} color={tool === 'eraser' ? '#38bdf8' : '#e2e8f0'} />
               <span style={{ fontSize: '9px', opacity: 0.8 }}>{activePopup === 'eraser' ? '▲' : '▼'}</span>
             </div>
             <div
               style={{
-                width: '14px',
+                width: '16px',
                 height: '3px',
                 borderRadius: '2px',
-                backgroundColor: '#cbd5e1'
+                backgroundColor: eraserMode === 'stroke' ? '#38bdf8' : '#cbd5e1'
               }}
             />
           </button>
@@ -1216,8 +1395,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             type="button"
             className="student-tool-btn"
             onClick={handleUndo}
-            disabled={strokes.length === 0}
-            style={{ opacity: strokes.length === 0 ? 0.35 : 1.0, padding: '3px 7px', height: '34px' }}
+            disabled={undoStack.length === 0}
+            style={{ opacity: undoStack.length === 0 ? 0.35 : 1.0, padding: '3px 7px', height: '34px' }}
             title="실행 취소 (Ctrl+Z)"
           >
             ↩️
@@ -1226,13 +1405,44 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             type="button"
             className="student-tool-btn"
             onClick={handleRedo}
-            disabled={redoStrokes.length === 0}
-            style={{ opacity: redoStrokes.length === 0 ? 0.35 : 1.0, padding: '3px 7px', height: '34px' }}
+            disabled={redoStack.length === 0}
+            style={{ opacity: redoStack.length === 0 ? 0.35 : 1.0, padding: '3px 7px', height: '34px' }}
             title="다시 실행 (Ctrl+Y)"
           >
             ↪️
           </button>
         </div>
+
+        <div className="toolbar-divider" />
+
+        {/* [C-2] 터치 모드 / 펜 모드 원터치 전환 버튼 */}
+        <button
+          id="btn-input-mode-toggle"
+          type="button"
+          className={`student-tool-btn ${penOnlyMode ? 'active-pen-mode' : ''}`}
+          onClick={() => {
+            const next = !penOnlyMode;
+            setPenOnlyMode(next);
+            showToast(next ? '✏️ 펜 모드 ON (펜 전용 필기, 손가락은 화면 이동)' : '🖐️ 터치 모드 ON (손가락과 펜 모두 필기)');
+          }}
+          style={{
+            padding: '3px 8px',
+            height: '34px',
+            fontSize: '11.5px',
+            background: penOnlyMode ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+            border: penOnlyMode ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.12)',
+            color: penOnlyMode ? '#93c5fd' : '#cbd5e1',
+            gap: '3px',
+            flexShrink: 0
+          }}
+          title={
+            penOnlyMode
+              ? '현재: 펜 모드 (애플펜슬/스타일러스 전용 필기, 손가락은 화면 이동) - 클릭하여 터치 모드로 전환'
+              : '현재: 터치 모드 (손가락 및 펜 모두 필기 가능) - 클릭하여 펜 모드로 전환'
+          }
+        >
+          {penOnlyMode ? '✏️ 펜 모드' : '🖐️ 터치 모드'}
+        </button>
 
         <div className="toolbar-divider" />
 
@@ -1275,22 +1485,64 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           </button>
         </div>
 
-        {/* [E] 우측 설정 및 줌 */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 }}>
+        {/* [E] 우측 줌 맞춤 및 설정 */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+          {/* 1. 한 페이지 전체 보기 (최대 축소) */}
+          <button
+            id="btn-zoom-fit-page"
+            type="button"
+            className={`student-tool-btn ${isFitPage ? 'active' : ''}`}
+            onClick={handleFitPage}
+            style={{
+              padding: '3px 7px',
+              fontSize: '11px',
+              height: '32px',
+              background: isFitPage ? 'rgba(168, 85, 247, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+              border: isFitPage ? '1px solid #a855f7' : '1px solid rgba(255, 255, 255, 0.1)',
+              color: isFitPage ? '#d8b4fe' : '#cbd5e1'
+            }}
+            title="한 페이지 전체 보기 (최대 축소)"
+          >
+            📄 전체
+          </button>
+
+          {/* 2. 100% 폭 맞춤 */}
+          <button
+            id="btn-zoom-fit-width"
+            type="button"
+            className={`student-tool-btn ${isFitWidth ? 'active' : ''}`}
+            onClick={handleFitWidth}
+            style={{
+              padding: '3px 7px',
+              fontSize: '11px',
+              height: '32px',
+              fontWeight: 600,
+              background: isFitWidth ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+              border: isFitWidth ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.1)',
+              color: isFitWidth ? '#93c5fd' : '#cbd5e1'
+            }}
+            title="화면 폭에 100% 맞춤"
+          >
+            ↔️ 100% 폭
+          </button>
+
+          {/* 3. 배율 표시 & 원터치 토글 */}
           <span
-            onClick={handleResetZoom}
+            onClick={handleToggleZoomFit}
             style={{
               fontSize: '11px',
-              fontWeight: 600,
-              color: zoomScale !== 1.0 ? '#60a5fa' : 'var(--g-text-secondary)',
+              fontWeight: 700,
+              color: isFitWidth ? '#38bdf8' : isFitPage ? '#c084fc' : 'var(--g-text-secondary)',
               cursor: 'pointer',
-              padding: '2px 6px',
+              padding: '3px 6px',
               borderRadius: '4px',
-              background: zoomScale !== 1.0 ? 'rgba(59, 130, 246, 0.15)' : 'transparent'
+              background: isFitWidth || isFitPage ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+              minWidth: '40px',
+              textAlign: 'center'
             }}
-            title="클릭 시 100% 원위치 리셋"
+            title="클릭 시 [100% 폭 맞춤] ↔ [전체 보기] 전환"
           >
-            🔍 {Math.round(zoomScale * 100)}%
+            🔍 {displayPercent}%
           </span>
 
           <button
@@ -1304,12 +1556,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             style={{
               padding: '3px 8px',
               fontSize: '12px',
-              height: '34px',
+              height: '32px',
               background: activePopup === 'settings' ? 'var(--g-primary-blue)' : 'rgba(255,255,255,0.08)',
               color: activePopup === 'settings' ? '#ffffff' : 'var(--g-text-secondary)',
               border: '1px solid var(--g-border)'
             }}
-            title="용지 방향, S펜 설정, 페이지 삭제 메뉴"
+            title="용지 방향, 입력 모드, 페이지 관리 메뉴"
           >
             ⚙️ 설정 {activePopup === 'settings' ? '▲' : '▼'}
           </button>
@@ -1549,17 +1801,19 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         )}
 
         {/* ====================================================================
-            [팝오버 3] 삼성노트 REA 🧹 지우개 크기 & 빠른 지우기 팝오버
+            [팝오버 3] 삼성노트 REA 지우개 크기 & 방식 팝오버
             ==================================================================== */}
         {activePopup === 'eraser' && (
           <div
             id="popup-eraser-settings"
             className="samsung-tool-popup"
             onClick={(e) => e.stopPropagation()}
-            style={{ position: 'absolute', top: '96px', left: '70px', zIndex: 1000, width: '270px', maxWidth: 'calc(100vw - 16px)' }}
+            style={{ position: 'absolute', top: '96px', left: '70px', zIndex: 1000, width: '275px', maxWidth: 'calc(100vw - 16px)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: '#ffffff' }}>🧹 지우개 설정</span>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <EraserIcon size={16} color="#38bdf8" /> 지우개 설정
+              </span>
               <button
                 type="button"
                 onClick={() => setActivePopup(null)}
@@ -1568,6 +1822,44 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 ✕
               </button>
             </div>
+
+            {/* 지우개 모드 선택: 획 지우개 vs 영역(픽셀) 지우개 */}
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
+                지우개 모드
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${eraserMode === 'stroke' ? 'active' : ''}`}
+                  onClick={() => {
+                    setEraserMode('stroke');
+                    showToast('⚡ 획 지우개: 선을 건드리면 그린 획 전체가 깔끔하게 삭제됩니다.');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
+                >
+                  ⚡ 획 지우개
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${eraserMode === 'pixel' ? 'active' : ''}`}
+                  onClick={() => {
+                    setEraserMode('pixel');
+                    showToast('🧽 영역 지우개: 닿은 부분만 지워집니다.');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
+                >
+                  🧽 영역 지우개
+                </button>
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '4px' }}>
+                {eraserMode === 'stroke'
+                  ? '• 그린 획(선)을 터치하거나 스치면 획 단위로 삭제됩니다.'
+                  : '• 닿은 부분만 칠하듯 부분적으로 지워집니다.'}
+              </div>
+            </div>
+
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
             {/* 지우개 크기 프리셋 */}
             <div>
@@ -1661,20 +1953,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             {/* A4 용지 방향 */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
-                📐 A4 용지 방향
+                📐 A4 용지 방향 (표준 1:1.414)
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                <button
-                  type="button"
-                  className={`student-tool-btn ${orientation === 'landscape' ? 'active' : ''}`}
-                  onClick={() => {
-                    setOrientation('landscape');
-                    showToast('📐 A4 가로 모드로 전환되었습니다.');
-                  }}
-                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
-                >
-                  📐 가로 (1600×1130)
-                </button>
                 <button
                   type="button"
                   className={`student-tool-btn ${orientation === 'portrait' ? 'active' : ''}`}
@@ -1684,17 +1965,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   }}
                   style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
                 >
-                  📏 세로 (1130×1600)
+                  📏 세로 (표준)
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${orientation === 'landscape' ? 'active' : ''}`}
+                  onClick={() => {
+                    setOrientation('landscape');
+                    showToast('📐 A4 가로 모드로 전환되었습니다.');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
+                >
+                  📐 가로
                 </button>
               </div>
             </div>
 
             <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
-            {/* S펜 팜리젝션 모드 */}
+            {/* 터치 모드 vs 펜 모드 (팜리젝션) */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
-                ✏️ 터치 / S펜 모드
+                ✏️ 입력 모드 (터치 / 펜)
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                 <button
@@ -1702,23 +1994,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   className={`student-tool-btn ${!penOnlyMode ? 'active' : ''}`}
                   onClick={() => {
                     setPenOnlyMode(false);
-                    showToast('🖐️ 손가락 터치 필기가 허용되었습니다.');
+                    showToast('🖐️ 터치 모드 (손가락과 펜 모두 필기 가능)');
                   }}
                   style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
                 >
-                  🖐️ 터치 허용
+                  🖐️ 터치 모드
                 </button>
                 <button
                   type="button"
                   className={`student-tool-btn ${penOnlyMode ? 'active-pen-mode' : ''}`}
                   onClick={() => {
                     setPenOnlyMode(true);
-                    showToast('🛡️ S펜 전용 ON (손바닥 터치 차단)');
+                    showToast('✏️ 펜 모드 ON (펜 전용 필기, 손가락은 화면 이동, 팜리젝션)');
                   }}
                   style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
                 >
-                  ✏️ S펜 전용
+                  ✏️ 펜 모드
                 </button>
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#94a3b8', marginTop: '4px' }}>
+                {penOnlyMode
+                  ? '• 펜(스타일러스/애플펜슬)으로만 필기되며 손가락은 화면 이동에 사용됩니다.'
+                  : '• 손가락과 펜 모두 자유롭게 필기할 수 있습니다.'}
               </div>
             </div>
 
@@ -1727,8 +2024,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             {/* 화면 줌 조절 */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
-                <span>🔍 화면 확대 / 축소</span>
-                <span style={{ color: '#38bdf8' }}>{Math.round(zoomScale * 100)}%</span>
+                <span>🔍 화면 맞춤 / 줌</span>
+                <span style={{ color: '#38bdf8', fontWeight: 700 }}>
+                  {displayPercent}% {isFitWidth ? '(폭 맞춤)' : isFitPage ? '(전체)' : ''}
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${isFitPage ? 'active' : ''}`}
+                  onClick={handleFitPage}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px' }}
+                >
+                  📄 전체 보기
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${isFitWidth ? 'active' : ''}`}
+                  onClick={handleFitWidth}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px', fontWeight: 600, color: '#93c5fd' }}
+                >
+                  ↔️ 100% 폭 맞춤
+                </button>
               </div>
               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                 <button
@@ -1736,34 +2053,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   className="student-tool-btn"
                   onClick={() => {
                     setZoomScale(prev => {
-                      const next = Math.max(MIN_ZOOM, prev - 0.15);
+                      const next = Math.max(minScale, prev - fitWidthScale * 0.15);
                       setPanOffset(p => clampPanOffset(p, next));
                       return next;
                     });
                   }}
                   style={{ flex: 1, justifyContent: 'center', fontSize: '11.5px' }}
+                  title="축소 (한 페이지 전체까지만 축소)"
                 >
                   - 축소
                 </button>
                 <button
                   type="button"
                   className="student-tool-btn"
-                  onClick={handleResetZoom}
-                  style={{ flex: 1.2, justifyContent: 'center', fontSize: '11.5px', background: 'rgba(59, 130, 246, 0.2)', color: '#93c5fd' }}
-                >
-                  100% 원위치
-                </button>
-                <button
-                  type="button"
-                  className="student-tool-btn"
                   onClick={() => {
                     setZoomScale(prev => {
-                      const next = Math.min(MAX_ZOOM, prev + 0.15);
+                      const next = Math.min(maxScale, prev + fitWidthScale * 0.15);
                       setPanOffset(p => clampPanOffset(p, next));
                       return next;
                     });
                   }}
                   style={{ flex: 1, justifyContent: 'center', fontSize: '11.5px' }}
+                  title="확대"
                 >
                   + 확대
                 </button>
@@ -1813,8 +2124,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         <div
           ref={paperSheetRef}
           style={{
-            width: `${orientation === 'landscape' ? 1120 : 792}px`,
-            height: `${orientation === 'landscape' ? 792 : 1120}px`,
+            width: `${paperBaseWidth}px`,
+            height: `${paperBaseHeight}px`,
             transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
             transformOrigin: 'center center',
             transition: isGestureRef.current ? 'none' : 'transform 0.15s ease-out, width 0.2s ease, height 0.2s ease',
