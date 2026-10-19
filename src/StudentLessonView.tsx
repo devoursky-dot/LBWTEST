@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
+import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
   renderPdfThumbnails,
@@ -14,6 +14,8 @@ import { DrawingCanvas } from './components/DrawingCanvas';
 import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
 import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
+import { classroomRealtime } from './lib/classroomRealtime';
+import { compressNotePagesForTransmission } from './lib/imageCompressor';
 
 interface StudentInfo {
   grade: string;
@@ -227,6 +229,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 학생 제출 고유 ID (1인 1행 유지하여 중복 생성 및 타임아웃 방지)
   const submissionIdRef = useRef<string | null>(null);
+
+  // --- 전자칠판 실시간 연결 및 화면 꺼짐 방지(WakeLock) 상태 ---
+  const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
+  const wakeLockRef = useRef<any>(null);
 
   // DOM 참조
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1196,88 +1202,151 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   // ==========================================================================
-  // [등록 및 제출하기 (멀티페이지 통합 저장 & 중복 방지 최적화)]
+  // [전자칠판 실시간 연결 및 출석 신호 전송 (초경량 100바이트)]
   // ==========================================================================
-  const handleSubmitLesson = async () => {
-    if (!studentInfo) {
+  const handleConnectToBoard = async () => {
+    if (!studentInfo || !studentInfo.name.trim()) {
+      showToast('⚠️ 먼저 학번과 이름을 입력해주세요.');
       setIsChangingStudent(true);
       return;
     }
 
-    // 현재 페이지 데이터 동기화
-    const updatedPages = [...pages];
-    updatedPages[currentPageIndex] = {
-      ...updatedPages[currentPageIndex],
-      strokes,
-      textItems,
-      fullPageBackground,
-      images: embeddedImages
+    // 1. 브라우저 전체화면 요청
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (fsErr) {
+      console.warn('전체화면 요청 실패(사용자 제스처 필요):', fsErr);
+    }
+
+    // 2. 화면 꺼짐 방지 (Screen Wake Lock API)
+    try {
+      if ('wakeLock' in navigator && !wakeLockRef.current) {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+      }
+    } catch (wlErr) {
+      console.warn('Wake Lock 활성화 경고:', wlErr);
+    }
+
+    // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송
+    setIsConnectedToBoard(true);
+    classroomRealtime.joinLesson(lessonId);
+    await classroomRealtime.sendSignal({
+      type: 'STUDENT_PRESENCE',
+      lessonId,
+      student: studentInfo,
+      status: 'connected'
+    });
+
+    showToast(`📡 '${studentInfo.name}' 학생이 전자칠판에 연결되었습니다! (전체화면)`);
+  };
+
+  // 수업 나가기 처리 (WakeLock 해제, 전체화면 종료, 이탈 신호)
+  const handleExitLesson = async () => {
+    if (isConnectedToBoard) {
+      const ok = window.confirm('수업을 종료하고 전자칠판 연결을 해제하시겠습니까?');
+      if (!ok) return;
+
+      if (wakeLockRef.current) {
+        try {
+          await wakeLockRef.current.release();
+        } catch {}
+        wakeLockRef.current = null;
+      }
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+        } catch {}
+      }
+      await classroomRealtime.sendSignal({
+        type: 'STUDENT_PRESENCE',
+        lessonId,
+        student: studentInfo || undefined,
+        status: 'left'
+      });
+      classroomRealtime.leaveLesson();
+      setIsConnectedToBoard(false);
+    }
+
+    if (onExit) onExit();
+  };
+
+  // 학생 이탈(화면 전환, 홈버튼 등) 감지 리스너
+  useEffect(() => {
+    if (!isConnectedToBoard || !studentInfo) return;
+
+    const handleVisibilityChange = () => {
+      const isAway = document.visibilityState === 'hidden';
+      classroomRealtime.sendSignal({
+        type: 'STUDENT_PRESENCE',
+        lessonId,
+        student: studentInfo,
+        status: isAway ? 'away' : 'connected'
+      });
+      if (!isAway && !document.fullscreenElement) {
+        showToast('⚠️ 수업에 다시 복귀했습니다.');
+      }
     };
 
-    // 끝부분의 불필요한 빈 페이지만 정리 (2쪽 이상인 경우)
-    let finalPages = [...updatedPages];
-    while (finalPages.length > 1) {
-      const lastPage = finalPages[finalPages.length - 1];
-      if (!lastPage) break;
-      const isBlank =
-        (!lastPage.strokes || lastPage.strokes.length === 0) &&
-        (!lastPage.textItems || lastPage.textItems.length === 0) &&
-        !lastPage.fullPageBackground &&
-        (!lastPage.images || lastPage.images.length === 0);
-      if (isBlank) {
-        finalPages.pop();
-      } else {
-        break;
-      }
-    }
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
 
-    const hasAnyContent = finalPages.some(
-      p => (p.strokes && p.strokes.length > 0) ||
-           (p.textItems && p.textItems.length > 0) ||
-           Boolean(p.fullPageBackground) ||
-           (p.images && p.images.length > 0)
-    );
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
 
-    if (!hasAnyContent) {
-      showToast('⚠️ 필기나 학습지 내용이 없습니다.');
-      return;
-    }
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, [isConnectedToBoard, studentInfo, lessonId]);
 
-    setIsSubmitting(true);
-    showToast(`🚀 '${studentInfo.name}' 학생의 필기를 등록하는 중...`);
+  // ==========================================================================
+  // [초경량 백그라운드 필기 동기화 엔진 (온디맨드 호출 & 등록 공용)]
+  // ==========================================================================
+  const syncCurrentNoteToCloud = useCallback(async (quiet = false): Promise<ClassNoteRecord | null> => {
+    if (!studentInfo) return null;
 
     try {
-      const now = new Date().toISOString();
+      // 1. 현재 작성 중인 페이지와 메모리 동기화
+      const currentPagesCopy = pages.map((p, idx) => {
+        if (idx === currentPageIndex) {
+          return {
+            ...p,
+            strokes,
+            textItems,
+            fullPageBackground,
+            images: embeddedImages
+          };
+        }
+        return p;
+      });
 
-      // 스트로크 포인트 경량화 최적화 적용
-      const optimizedPages = finalPages.map(p => ({
+      // 끝부분의 빈 페이지 정리 (최소 1페이지 유지)
+      const finalPages = [...currentPagesCopy];
+      while (finalPages.length > 1) {
+        const last = finalPages[finalPages.length - 1];
+        const isBlank = (!last.strokes || last.strokes.length === 0) &&
+                        (!last.textItems || last.textItems.length === 0) &&
+                        !last.fullPageBackground &&
+                        (!last.images || last.images.length === 0);
+        if (isBlank) finalPages.pop();
+        else break;
+      }
+
+      // 2. 포인트 최적화
+      const rawOptimized = finalPages.map(p => ({
         ...p,
         fullPageBackground: p.fullPageBackground || null,
         images: p.images || [],
-        strokes: (p.strokes || []).map(s => ({
-          ...s,
-          points: optimizePoints(s.points)
-        }))
+        strokes: (p.strokes || []).map(s => ({ ...s, points: optimizePoints(s.points) }))
       }));
 
-      // 1. 학생 필기 멀티페이지 데이터를 로컬 스토리지에 안전 백업 (QuotaExceeded 예외 보호)
-      const studentPayload = {
-        student: studentInfo,
-        lessonId,
-        pages: optimizedPages,
-        orientation,
-        timestamp: now
-      };
-      try {
-        localStorage.setItem(`lbw_lesson_${lessonId}_note_v2`, JSON.stringify(studentPayload));
-        // 제출 성공 시 작성 중 드래프트 정리 (다음 진입 시 신규 깨끗한 상태 보장)
-        localStorage.removeItem(`lbw_active_draft_${lessonId}_v3`);
-        sessionStorage.removeItem(`lbw_session_draft_${lessonId}`);
-      } catch (lsErr) {
-        console.warn('LocalStorage 용량 초과(무시하고 클라우드 전송):', lsErr);
-      }
+      // 3. 💥 초경량 이미지 압축 (배경 이미지 및 스티커 95% 압축 -> 150KB 내외)
+      const optimizedPages = await compressNotePagesForTransmission(rawOptimized);
 
-      // 2. 기존 등록 row ID 확인 (1인 1행 유지하여 중복 생성 및 DB 타임아웃 원천 방지)
+      const now = new Date().toISOString();
       let targetRowId = submissionIdRef.current;
       if (!targetRowId && supabase && isSupabaseConfigured) {
         try {
@@ -1310,14 +1379,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         strokes_data: {
           pages: optimizedPages,
           orientation,
-          // 하위 호환용 1페이지 데이터
           strokes: optimizedPages[0]?.strokes || [],
           textItems: optimizedPages[0]?.textItems || []
         },
         updated_at: now
       };
 
-      // 3. Supabase 클라우드 실시간 업서트 (기존 ID가 있으면 UPDATE, 없으면 INSERT)
+      // 4. Supabase 클라우드 실시간 업서트
       if (supabase && isSupabaseConfigured) {
         const { data: savedData, error: sbError } = await supabase
           .from('class_notes')
@@ -1327,27 +1395,88 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
         if (sbError) {
           console.error('Supabase 저장 실패:', sbError.message);
-          throw new Error(sbError.message);
         } else if (savedData?.id) {
           submissionIdRef.current = savedData.id;
+          record.id = savedData.id;
         }
       }
 
-      // 4. 로컬 브로드캐스트 채널 전송
-      if (localRealtimeChannel) {
-        localRealtimeChannel.postMessage({
-          type: 'STUDENT_SUBMIT',
-          record: {
-            ...record,
-            id: submissionIdRef.current || record.id
+      // 5. 로컬 스토리지 안전 캐시
+      try {
+        localStorage.setItem(`lbw_lesson_${lessonId}_note_v2`, JSON.stringify({
+          student: studentInfo,
+          lessonId,
+          pages: optimizedPages,
+          orientation,
+          timestamp: now
+        }));
+      } catch {}
+
+      if (!quiet) {
+        showToast(`🎉 '${studentInfo.name}' 학생의 필기가 등록되었습니다!`);
+      }
+      return record;
+    } catch (err: any) {
+      console.error('필기 동기화 오류:', err);
+      if (!quiet) showToast(`❌ 등록 실패: ${err.message || '네트워크 오류'}`);
+      return null;
+    }
+  }, [studentInfo, pages, currentPageIndex, strokes, textItems, fullPageBackground, embeddedImages, lessonId, orientation]);
+
+  // 실시간 신호 리스너 (선생님이 특정 학생을 클릭하거나 전체 동기화 요청 시)
+  useEffect(() => {
+    if (!isConnectedToBoard || !studentInfo) return;
+
+    const unsubscribe = classroomRealtime.subscribe(async (signal) => {
+      if (signal.lessonId !== lessonId) return;
+
+      const myKey = `${studentInfo.grade}_${studentInfo.classNum}_${studentInfo.studentNum}`;
+      const isTargeted = signal.type === 'REQUEST_STUDENT_NOTE' && signal.targetStudentKey === myKey;
+      const isAllSync = signal.type === 'REQUEST_ALL_SYNC';
+
+      if (isTargeted || isAllSync) {
+        try {
+          const syncedRecord = await syncCurrentNoteToCloud(true);
+          if (syncedRecord) {
+            await classroomRealtime.sendSignal({
+              type: 'RESPONSE_STUDENT_NOTE',
+              lessonId,
+              student: studentInfo,
+              noteRecord: syncedRecord
+            });
           }
+        } catch (syncErr) {
+          console.warn('백그라운드 동기화 실패:', syncErr);
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [isConnectedToBoard, studentInfo, lessonId, syncCurrentNoteToCloud]);
+
+  // [등록 및 제출하기] 수동 버튼 클릭 핸들러
+  const handleSubmitLesson = async () => {
+    if (!studentInfo) {
+      setIsChangingStudent(true);
+      return;
+    }
+
+    setIsSubmitting(true);
+    showToast(`🚀 '${studentInfo.name}' 학생의 필기를 등록하는 중...`);
+
+    try {
+      const record = await syncCurrentNoteToCloud(false);
+      if (record) {
+        // 실시간 채널에 제출 알림
+        await classroomRealtime.sendSignal({
+          type: 'STUDENT_SUBMIT',
+          lessonId,
+          student: studentInfo,
+          noteRecord: record
         });
       }
-
-      showToast(`🎉 '${studentInfo.name}' 학생의 ${optimizedPages.length}페이지 필기가 등록되었습니다!`);
-    } catch (err: any) {
-      console.error('제출 오류:', err);
-      showToast(`❌ 등록 실패: ${err.message || '네트워크 오류'}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -2109,6 +2238,40 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             <span>{isExportingPdf ? 'PDF 생성 중...' : 'PDF 저장'}</span>
           </button>
 
+          {/* 전자칠판 실시간 연결 (전체화면) 버튼 */}
+          <button
+            id="btn-connect-board"
+            type="button"
+            className="g-btn"
+            style={{
+              fontSize: '12.5px',
+              fontWeight: 700,
+              padding: '6px 13px',
+              background: isConnectedToBoard
+                ? 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'
+                : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              color: '#ffffff',
+              border: isConnectedToBoard ? '1px solid #4ade80' : '1px solid #60a5fa',
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: isConnectedToBoard
+                ? '0 0 12px rgba(34, 197, 94, 0.45)'
+                : '0 4px 12px rgba(37, 99, 235, 0.35)',
+              cursor: 'pointer'
+            }}
+            onClick={handleConnectToBoard}
+            title={
+              isConnectedToBoard
+                ? '전자칠판에 실시간 연결 중입니다. 탭하면 전체화면을 다시 유지합니다.'
+                : '전자칠판에 실시간 연결하고 전체화면 모드로 전환합니다.'
+            }
+          >
+            <span>{isConnectedToBoard ? '🟢' : '📡'}</span>
+            <span>{isConnectedToBoard ? '칠판 연결됨 (전체화면)' : '전자칠판 연결'}</span>
+          </button>
+
           {/* 등록하기 제출 버튼 */}
           <button
             id="btn-submit-lesson"
@@ -2128,11 +2291,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             {isSubmitting ? '전송 중...' : '🚀 등록하기'}
           </button>
 
-          {onExit && (
-            <button className="g-btn g-btn-text" style={{ fontSize: '12px', padding: '4px 8px' }} onClick={onExit}>
-              나가기
-            </button>
-          )}
+          {/* 수업 나가기 버튼 */}
+          <button
+            id="btn-exit-lesson"
+            type="button"
+            className="g-btn g-btn-text"
+            style={{ fontSize: '12px', padding: '4px 8px', color: '#94a3b8' }}
+            onClick={handleExitLesson}
+            title="수업을 종료하고 나갑니다."
+          >
+            수업 나가기
+          </button>
         </div>
       </header>
 

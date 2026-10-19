@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { StudentLessonView } from './StudentLessonView';
 import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
+import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
 import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
@@ -181,17 +182,17 @@ export default function App() {
   const [qrLessonPin, setQrLessonPin] = useState<string>('1234');
   const [qrLessonPdfFile, setQrLessonPdfFile] = useState<File | null>(null);
   const [activeQrLesson, setActiveQrLesson] = useState<DriveItem | null>(null);
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  const [_qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [studentSubmissions, setStudentSubmissions] = useState<ClassNoteRecord[]>([]);
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
   const [selectedStudentNotePageIdx, setSelectedStudentNotePageIdx] = useState<number>(0);
-  const [selectedDateFilter, setSelectedDateFilter] = useState<'today' | 'all'>('today');
+  const [selectedDateFilter, _setSelectedDateFilter] = useState<'today' | 'all'>('today');
 
   // --- 수업 세션 시작 모달 & 실시간 상태 관리 ---
   const [sessionPromptLesson, setSessionPromptLesson] = useState<DriveItem | null>(null);
   const [existingSessionCount, setExistingSessionCount] = useState<number>(0);
-  const [isRefreshingSubmissions, setIsRefreshingSubmissions] = useState<boolean>(false);
-  const [isLoadingNoteDetail, setIsLoadingNoteDetail] = useState<boolean>(false);
+  const [_isRefreshingSubmissions, setIsRefreshingSubmissions] = useState<boolean>(false);
+  const [isLoadingNoteDetail] = useState<boolean>(false);
 
   // --- 통합 PDF 모음집 생성 상태 ---
   const [pdfCompilationTitle, setPdfCompilationTitle] = useState<string>('');
@@ -735,65 +736,6 @@ export default function App() {
       setQrCodeDataUrl(qrDataUrl);
     } catch (qrErr) {
       console.error('QR 코드 생성 실패:', qrErr);
-    }
-  };
-
-  // 수업 중 수동으로 제출 내역 전체 초기화
-  const handleResetLessonSubmissions = async () => {
-    if (!activeQrLesson) return;
-    const currentLessonId = activeQrLesson.folderId || activeQrLesson.id;
-    const confirmed = window.confirm(
-      '⚠️ 현재 수업에 제출된 모든 학생의 필기 기록을 삭제하고 새로 시작하시겠습니까?\n\n이전 반의 기록을 지우고 새로운 반 학생들의 등록을 받을 때 사용합니다. (삭제 후 복구 불가)'
-    );
-    if (!confirmed) return;
-
-    if (supabase && isSupabaseConfigured) {
-      try {
-        await supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
-        setStudentSubmissions([]);
-        showToast('🧹 학생 필기 기록이 모두 초기화되었습니다. 새로운 등록을 받습니다.');
-      } catch (err: any) {
-        showToast(`❌ 초기화 실패: ${err.message}`);
-      }
-    }
-  };
-
-  // 학생 타일 클릭 시 개별 학생 상세 필기 조회 (스마트 페이지 선택 & 지연 로딩)
-  const handleOpenStudentDetail = async (sub: ClassNoteRecord) => {
-    // 1. 이미 스트로크 데이터가 있는 경우 바로 열기
-    if (sub.strokes_data?.pages || sub.strokes_data?.strokes) {
-      setSelectedStudentNote(sub);
-      const pages = (Array.isArray(sub.strokes_data.pages) && sub.strokes_data.pages.length > 0)
-        ? sub.strokes_data.pages
-        : [{ strokes: sub.strokes_data.strokes || [], textItems: sub.strokes_data.textItems || [] }];
-      const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0);
-      setSelectedStudentNotePageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
-      return;
-    }
-
-    // 2. 메타데이터만 있는 경우 해당 학생 1명의 스트로크 데이터를 즉시 단건 조회 (50ms)
-    setSelectedStudentNote(sub);
-    setIsLoadingNoteDetail(true);
-    try {
-      if (supabase && isSupabaseConfigured && sub.id) {
-        const { data, error } = await supabase
-          .from('class_notes')
-          .select('*')
-          .eq('id', sub.id)
-          .single();
-        if (!error && data) {
-          setSelectedStudentNote(data);
-          const pages = (Array.isArray(data.strokes_data?.pages) && data.strokes_data.pages.length > 0)
-            ? data.strokes_data.pages
-            : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
-          const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0);
-          setSelectedStudentNotePageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
-        }
-      }
-    } catch (err) {
-      console.error('학생 필기 상세 조회 오류:', err);
-    } finally {
-      setIsLoadingNoteDetail(false);
     }
   };
 
@@ -1859,247 +1801,16 @@ export default function App() {
       )}
 
       {/* ====================================================================
-          모달 1-3: 전자칠판용 대화형 QR 수업 실행 대시보드 뷰어
+          전자칠판용 대화형 QR 수업 실행 전체화면 대시보드
           ==================================================================== */}
       {activeModal === 'qr_lesson_viewer' && activeQrLesson && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
-          <div className="modal-box" style={{ maxWidth: '900px', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: '24px' }}>📱</span>
-                <div>
-                  <h2 style={{ fontSize: '18px', margin: 0 }}>
-                    {activeQrLesson.name.replace('[QR수업]', '').trim()}
-                  </h2>
-                  <span style={{ fontSize: '12px', color: 'var(--g-text-secondary)' }}>
-                    대화형 전자칠판 라이브 수업 세션
-                  </span>
-                </div>
-              </div>
-              <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 320px) 1fr', gap: '24px', marginTop: '10px' }}>
-              {/* 좌측: 초대형 QR코드 영역 */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#1e1f20', padding: '20px', borderRadius: '12px', border: '1px solid var(--g-border)' }}>
-                <h3 style={{ fontSize: '14px', color: 'var(--g-primary-blue)', marginBottom: '12px', fontWeight: 600 }}>
-                  📷 학생 참여 QR코드
-                </h3>
-                {qrCodeDataUrl ? (
-                  <div style={{ background: '#ffffff', padding: '12px', borderRadius: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }}>
-                    <img src={qrCodeDataUrl} alt="QR Code" style={{ width: '220px', height: '220px', display: 'block' }} />
-                  </div>
-                ) : (
-                  <div style={{ width: '220px', height: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--g-text-muted)' }}>
-                    QR 생성 중...
-                  </div>
-                )}
-                <p style={{ fontSize: '12px', color: 'var(--g-text-secondary)', textAlign: 'center', marginTop: '14px', lineHeight: 1.5 }}>
-                  태블릿/스마트폰 카메라로<br />QR코드를 스캔하여 수업에 참여하세요.
-                </p>
-
-                <div style={{ display: 'flex', gap: '8px', marginTop: '12px', width: '100%' }}>
-                  <button
-                    type="button"
-                    className="g-btn g-btn-text"
-                    style={{ flex: 1, fontSize: '12px', border: '1px solid var(--g-border)' }}
-                    onClick={() => {
-                      const cleanTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
-                      const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-                        ? 'https://lbwtest.vercel.app'
-                        : window.location.origin;
-                      const url = `${baseOrigin}/?lessonId=${activeQrLesson.folderId || activeQrLesson.id}&title=${encodeURIComponent(cleanTitle)}`;
-                      navigator.clipboard.writeText(url);
-                      showToast('✅ 학생 접속 URL이 복사되었습니다.');
-                    }}
-                  >
-                    🔗 주소 복사
-                  </button>
-                  <button
-                    type="button"
-                    className="g-btn g-btn-primary"
-                    style={{ flex: 1, fontSize: '12px' }}
-                    onClick={() => {
-                      const cleanTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
-                      const url = `${window.location.origin}/?lessonId=${activeQrLesson.folderId || activeQrLesson.id}&title=${encodeURIComponent(cleanTitle)}`;
-                      window.open(url, '_blank');
-                    }}
-                  >
-                    🚀 학생 창 열기
-                  </button>
-                </div>
-              </div>
-
-              {/* 우측: 실시간 출석 및 필기 모니터링 영역 */}
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <h3 style={{ fontSize: '15px', color: '#ffffff', fontWeight: 600, margin: 0 }}>
-                      👥 실시간 학생 필기 모니터링
-                    </h3>
-                    <div style={{ display: 'flex', background: '#282a2c', borderRadius: '6px', padding: '2px', border: '1px solid var(--g-border)' }}>
-                      <button
-                        type="button"
-                        style={{
-                          background: selectedDateFilter === 'today' ? 'var(--g-primary-blue)' : 'transparent',
-                          color: selectedDateFilter === 'today' ? '#ffffff' : 'var(--g-text-secondary)',
-                          border: 'none',
-                          borderRadius: '4px',
-                          padding: '3px 8px',
-                          fontSize: '11px',
-                          cursor: 'pointer',
-                          fontWeight: 600
-                        }}
-                        onClick={() => setSelectedDateFilter('today')}
-                      >
-                        📅 오늘 수업만
-                      </button>
-                      <button
-                        type="button"
-                        style={{
-                          background: selectedDateFilter === 'all' ? 'var(--g-primary-blue)' : 'transparent',
-                          color: selectedDateFilter === 'all' ? '#ffffff' : 'var(--g-text-secondary)',
-                          border: 'none',
-                          borderRadius: '4px',
-                          padding: '3px 8px',
-                          fontSize: '11px',
-                          cursor: 'pointer',
-                          fontWeight: 600
-                        }}
-                        onClick={() => setSelectedDateFilter('all')}
-                      >
-                        📁 전체
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      className="g-btn g-btn-text"
-                      style={{ fontSize: '12px', border: '1px solid var(--g-border)', display: 'flex', alignItems: 'center', gap: '4px' }}
-                      disabled={isRefreshingSubmissions}
-                      onClick={() => refreshNotesRef.current && refreshNotesRef.current(true)}
-                      title="실시간 학생 제출 목록을 즉시 새로고침합니다."
-                    >
-                      <span style={{ display: 'inline-block', animation: isRefreshingSubmissions ? 'spin 1s linear infinite' : 'none' }}>🔄</span>
-                      새로고침
-                    </button>
-                    <button
-                      type="button"
-                      className="g-btn g-btn-text"
-                      style={{ fontSize: '12px', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: '4px' }}
-                      onClick={handleResetLessonSubmissions}
-                      title="이전 학생 제출 기록을 모두 삭제하고 새 수업으로 초기화합니다."
-                    >
-                      <span>🗑️</span>
-                      수업 초기화 (새로 시작)
-                    </button>
-                    <button
-                      type="button"
-                      className="g-btn g-btn-primary"
-                      style={{ fontSize: '12px', background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', borderColor: '#3b82f6', fontWeight: 700 }}
-                      disabled={isGeneratingPdf}
-                      onClick={() => {
-                        const clean = activeQrLesson.name.replace('[QR수업]', '').trim();
-                        setPdfCompilationTitle(clean);
-                        setActiveModal('save_pdf_modal');
-                      }}
-                      title="제출된 전체 학생들의 필기를 모아 하나의 고화질 멀티페이지 PDF 파일로 만들어 구글 드라이브에 저장합니다."
-                    >
-                      {isGeneratingPdf ? '⏳ PDF 모음집 생성 중...' : '📑 학생 필기 모음집 PDF로 저장'}
-                    </button>
-                    <button 
-                      type="button"
-                      className="g-btn g-btn-text" 
-                      style={{ fontSize: '12px', border: '1px solid var(--g-border)' }}
-                      onClick={() => handleOpenFolder(activeQrLesson.folderId || activeQrLesson.id, activeQrLesson.name)}
-                    >
-                      📁 드라이브 폴더 열기
-                    </button>
-                  </div>
-                </div>
-
-                {/* PDF 모음집 생성 진행 바 */}
-                {isGeneratingPdf && pdfProgress && (
-                  <div style={{ background: 'rgba(37, 99, 235, 0.15)', border: '1px solid #3b82f6', borderRadius: '8px', padding: '10px 14px', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: '#93c5fd' }}>
-                    <span>🔄 <strong>{pdfProgress.name}</strong> 학생 필기 고해상도 렌더링 및 PDF 병합 중...</span>
-                    <span style={{ fontWeight: 700 }}>{pdfProgress.current} / {pdfProgress.total}</span>
-                  </div>
-                )}
-
-                <div style={{ background: '#1e1f20', borderRadius: '12px', border: '1px solid var(--g-border)', padding: '16px', flex: 1, minHeight: '260px', display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--g-border-subtle)', paddingBottom: '10px', marginBottom: '12px' }}>
-                    <span style={{ fontSize: '12.5px', color: 'var(--g-text-secondary)' }}>
-                      최근 필기 제출순 자동 정렬 ({selectedDateFilter === 'today' ? '오늘 기준' : '전체'})
-                    </span>
-                    <span style={{ fontSize: '12px', background: isSupabaseConfigured ? 'rgba(52, 168, 83, 0.15)' : 'rgba(251, 188, 4, 0.15)', color: isSupabaseConfigured ? '#81c995' : '#fdd663', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
-                      {isSupabaseConfigured ? '● Supabase 실시간 동기화' : '● 로컬 브로드캐스트 동기화'}
-                    </span>
-                  </div>
-
-                  {/* 학생 타일 그리드 (실시간 데이터 렌더링) */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px', overflowY: 'auto', maxHeight: '240px' }}>
-                    {(() => {
-                      const todayStr = getKstDateString();
-                      const displayList = studentSubmissions.filter(sub => {
-                        if (selectedDateFilter === 'all') return true;
-                        const datePart = getKstDateString(sub.updated_at || sub.created_at);
-                        return !datePart || datePart === todayStr;
-                      });
-
-                      if (displayList.length === 0) {
-                        return (
-                          <div style={{ gridColumn: '1 / -1', border: '2px dashed var(--g-border)', borderRadius: '8px', padding: '24px 8px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12.5px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                            <span style={{ fontSize: '28px', marginBottom: '6px' }}>📱</span>
-                            {selectedDateFilter === 'today' ? '오늘' : ''} 학생들이 QR코드를 스캔하여 필기를 등록하면<br/>
-                            아이콘이 실시간으로 여기에 최신순 표시됩니다.
-                          </div>
-                        );
-                      }
-
-                      return displayList.map((sub, idx) => (
-                        <div
-                          key={sub.id || `${sub.student_grade}_${sub.student_class}_${sub.student_num}`}
-                          onClick={() => handleOpenStudentDetail(sub)}
-                          style={{
-                            background: idx === 0 ? 'rgba(59, 130, 246, 0.18)' : '#282a2c',
-                            border: `1px solid ${idx === 0 ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
-                            borderRadius: '8px',
-                            padding: '10px 8px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                            position: 'relative'
-                          }}
-                          title="클릭하여 필기 원본 확인"
-                        >
-                          <span style={{ position: 'absolute', top: '6px', right: '6px', width: '8px', height: '8px', borderRadius: '50%', background: '#34a853' }} />
-                          <span style={{ fontSize: '24px', marginBottom: '4px' }}>👨‍🎓</span>
-                          <span style={{ fontSize: '12px', fontWeight: 700, color: '#ffffff' }}>
-                            {sub.student_grade}-{sub.student_class} {sub.student_name}
-                          </span>
-                          <span style={{ fontSize: '11px', color: idx === 0 ? '#a8c7fa' : 'var(--g-text-muted)', marginTop: '2px', fontWeight: idx === 0 ? 600 : 400 }}>
-                            {idx === 0 ? '🟢 방금 제출' : '제출 완료'}
-                          </span>
-                        </div>
-                      ));
-                    })()}
-                  </div>
-
-                  <div style={{ marginTop: 'auto', paddingTop: '14px', borderTop: '1px solid var(--g-border-subtle)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: 'var(--g-text-muted)' }}>
-                    <span>💡 학생 타일을 탭하면 전자칠판에서 필기 원본을 바로 확인할 수 있습니다.</span>
-                    <button className="g-btn g-btn-text" style={{ fontSize: '12px' }} onClick={() => setActiveModal(null)}>
-                      닫기
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <LiveClassroomDashboard
+          lesson={activeQrLesson}
+          onExit={() => setActiveModal(null)}
+          onOpenFolder={handleOpenFolder}
+          executeDriveAction={executeDriveAction}
+          showToast={showToast}
+        />
       )}
 
       {/* ====================================================================
