@@ -179,6 +179,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const activeDrawPointerTypeRef = useRef<string | null>(null);
   // 글자 간격 펜 뗌 보호 스마트 팜리젝션 (애플펜슬/S펜 사용 후 1.2초간 손바닥 터치 오작동 완벽 차단)
   const lastPenTimeRef = useRef<number>(0);
+  // 굿노트(GoodNotes) 아키텍처: 직접 그린 획 커밋 시 캔버스 전체 지우기/다시그리기 스킵 플래그 (0ms 딜레이)
+  const isInternalStrokeAddRef = useRef<boolean>(false);
 
   // 펜 모드 시 손가락 1개 드래그 이동(Pan) ref
   const isFingerPanningRef = useRef(false);
@@ -354,6 +356,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   }, [strokes]);
 
   useEffect(() => {
+    // 굿노트(GoodNotes) 역추적 최적화:
+    // 방금 화면에 직접 필기한 획은 실시간 증분 렌더링으로 캔버스에 이미 그려져 있으므로
+    // 매 획마다 캔버스를 clearRect로 지우고 수십~수백 개의 획을 다시 그리는 50ms 랙 유발 루프를 완전히 생략합니다! (0ms 즉각 응답)
+    if (isInternalStrokeAddRef.current) {
+      isInternalStrokeAddRef.current = false;
+      return;
+    }
     resizeCanvas();
     renderCanvas();
   }, [resizeCanvas, renderCanvas, orientation]);
@@ -450,13 +459,24 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       lastPenTimeRef.current = Date.now();
       isGestureRef.current = false; // 제스처 즉시 해제
 
-      // 혹시 이전에 손바닥(touch)으로 잘못 시작된 획이 있다면 즉시 파기
+      // 혹시 이전에 손바닥(touch)으로 잘못 시작된 획이 있다면 즉시 파기 (캔버스 전체 clear 없이 조용히 종료)
       if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
         isDrawingRef.current = false;
         currentStrokeRef.current = null;
         activeDrawPointerIdRef.current = null;
         activeDrawPointerTypeRef.current = null;
-        renderCanvas();
+      }
+
+      // [이전 획 안전 보존]: 혹시 빠른 필기로 인해 이전 획의 pointerup이 Safari에서 누락된 상태로 새 획이 들어온 경우
+      // 이전 획을 즉시 정상 보존하여 글자 획이 씹히거나 날아가지 않도록 보장
+      if (isDrawingRef.current && currentStrokeRef.current) {
+        const prevFinished = currentStrokeRef.current;
+        if (prevFinished.points.length > 0) {
+          isInternalStrokeAddRef.current = true;
+          setStrokes(prev => [...prev, prevFinished]);
+        }
+        isDrawingRef.current = false;
+        currentStrokeRef.current = null;
       }
     } else if (e.pointerType === 'touch') {
       // 4. [글자 간격 펜 뗌 보호 스마트 팜리젝션]:
@@ -684,7 +704,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
 
     // 일반 필기 종료 처리 (현재 필기 중인 포인터가 떼어졌을 때만 저장)
-    if (isDrawingRef.current && e && e.pointerId === activeDrawPointerIdRef.current) {
+    if (isDrawingRef.current && (!e || e.pointerId === activeDrawPointerIdRef.current || e.pointerType === 'pen')) {
       isDrawingRef.current = false;
       activeDrawPointerIdRef.current = null;
       activeDrawPointerTypeRef.current = null;
@@ -693,6 +713,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       if (finishedStroke && finishedStroke.points.length > 0) {
         setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
         setRedoStack([]);
+        isInternalStrokeAddRef.current = true; // 굿노트 방식: 캔버스 재렌더링 생략
         setStrokes(prev => [...prev, { ...finishedStroke, points: [...finishedStroke.points] }]);
       }
       currentStrokeRef.current = null;
@@ -709,7 +730,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     activePointersRef.current.delete(e.pointerId);
 
     // 취소된 포인터가 현재 필기 중인 포인터인 경우에만 획 보존 후 종료
-    if (e.pointerId === activeDrawPointerIdRef.current) {
+    if (e.pointerId === activeDrawPointerIdRef.current || e.pointerType === 'pen') {
       handlePointerUp(e);
     }
   };
@@ -1052,6 +1073,21 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       container.removeEventListener('selectstart', onSelectStart);
     };
   }, [zoomScale, panOffset, clampPanOffset]);
+
+  // 전역 window 레벨 포인터 종료 캡처 (애플펜슬을 빠르게 뗐을 때 캔버스 영역 밖으로 벗어나 pointerup이 유실되는 사파리 버그 완벽 방어)
+  useEffect(() => {
+    const handleGlobalPointerUp = (e: PointerEvent) => {
+      if (isDrawingRef.current && (e.pointerId === activeDrawPointerIdRef.current || e.pointerType === 'pen')) {
+        handlePointerUp(e as any);
+      }
+    };
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
+    };
+  }, []);
 
   // 팝오버 메뉴 외부 클릭 시 자동 닫기 (이벤트 버블링 및 렌더링 노드 분리 방어)
   useEffect(() => {
