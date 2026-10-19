@@ -37,6 +37,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
   const [selectedStudentPageIdx, setSelectedStudentPageIdx] = useState<number>(0);
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
+  const selectedStudentKeyRef = useRef<string | null>(null);
 
   // PDF 일괄 컴파일 상태
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
@@ -62,13 +63,13 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     });
   }, [currentLessonId, cleanLessonTitle]);
 
-  // 2. 초기 DB 제출 목록 조회
+  // 2. 초기 DB 제출 목록 조회 (strokes_data 포함하여 온디맨드 즉시 렌더링 지원)
   const fetchSubmissionsFromDb = async () => {
     if (!supabase || !isSupabaseConfigured) return;
     try {
       const { data, error } = await supabase
         .from('class_notes')
-        .select('id, lesson_id, student_grade, student_class, student_num, student_name, created_at, updated_at')
+        .select('*')
         .eq('lesson_id', currentLessonId)
         .order('updated_at', { ascending: false });
 
@@ -116,6 +117,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       // [2] 학생 필기 등록 / 제출
       if (signal.type === 'STUDENT_SUBMIT' && signal.noteRecord) {
         const record = signal.noteRecord;
+        const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
         setStudentSubmissions((prev) => {
           const filtered = prev.filter(p => !(
             p.student_grade === record.student_grade &&
@@ -124,19 +126,30 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           ));
           return [record, ...filtered];
         });
+        if (selectedStudentKeyRef.current === recKey) {
+          setSelectedStudentNote(record);
+          setIsLoadingDetail(false);
+        }
         showToast(`📝 ${record.student_grade}-${record.student_class} ${record.student_name} 학생이 필기를 제출했습니다!`);
       }
 
-      // [3] 온디맨드 필기 응답 수신
+      // [3] 온디맨드 필기 응답 수신 (stale closure 방지: selectedStudentKeyRef 활용)
       if (signal.type === 'RESPONSE_STUDENT_NOTE' && signal.noteRecord) {
-        if (selectedStudentNote &&
-            selectedStudentNote.student_grade === signal.noteRecord.student_grade &&
-            selectedStudentNote.student_class === signal.noteRecord.student_class &&
-            selectedStudentNote.student_num === signal.noteRecord.student_num) {
-          setSelectedStudentNote(signal.noteRecord);
+        const record = signal.noteRecord;
+        const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
+        if (selectedStudentKeyRef.current === recKey) {
+          setSelectedStudentNote(record);
           setIsLoadingDetail(false);
-          showToast(`⚡ ${signal.noteRecord.student_name} 학생의 실시간 최신 필기를 수신했습니다.`);
+          showToast(`⚡ ${record.student_name} 학생의 최신 필기가 동기화되었습니다.`);
         }
+        setStudentSubmissions((prev) => {
+          const filtered = prev.filter(p => !(
+            p.student_grade === record.student_grade &&
+            p.student_class === record.student_class &&
+            p.student_num === record.student_num
+          ));
+          return [record, ...filtered];
+        });
       }
     });
 
@@ -225,12 +238,17 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const handleSelectStudent = async (studentItem: typeof sortedStudentRoster[0]) => {
     setIsLoadingDetail(true);
     setSelectedStudentPageIdx(0);
+    selectedStudentKeyRef.current = studentItem.key;
 
-    const targetKey = studentItem.key;
-
-    // A. 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시
+    // A. 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
     if (studentItem.submission?.strokes_data?.pages || studentItem.submission?.strokes_data?.strokes) {
       setSelectedStudentNote(studentItem.submission);
+      const pages = (Array.isArray(studentItem.submission.strokes_data.pages) && studentItem.submission.strokes_data.pages.length > 0)
+        ? studentItem.submission.strokes_data.pages
+        : [{ strokes: studentItem.submission.strokes_data.strokes || [], textItems: studentItem.submission.strokes_data.textItems || [] }];
+      const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
+      setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+      setIsLoadingDetail(false);
     } else {
       // 임시 placeholder 설정
       setSelectedStudentNote({
@@ -248,21 +266,39 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       await classroomRealtime.sendSignal({
         type: 'REQUEST_STUDENT_NOTE',
         lessonId: currentLessonId,
-        targetStudentKey: targetKey
+        targetStudentKey: studentItem.key
       });
     }
 
-    // C. Supabase에서 최신 행 단건 조회
-    if (supabase && isSupabaseConfigured && studentItem.submission?.id) {
+    // C. Supabase DB에서 최신 데이터 조회 (학번 기준 단건 조회)
+    if (supabase && isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
           .from('class_notes')
           .select('*')
-          .eq('id', studentItem.submission.id)
-          .single();
+          .eq('lesson_id', currentLessonId)
+          .eq('student_grade', studentItem.grade)
+          .eq('student_class', studentItem.classNum)
+          .eq('student_num', studentItem.studentNum)
+          .order('updated_at', { ascending: false })
+          .maybeSingle();
 
         if (!error && data) {
           setSelectedStudentNote(data);
+          const pages = (Array.isArray(data.strokes_data?.pages) && data.strokes_data.pages.length > 0)
+            ? data.strokes_data.pages
+            : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
+          const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
+          setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+
+          setStudentSubmissions((prev) => {
+            const filtered = prev.filter(p => !(
+              p.student_grade === data.student_grade &&
+              p.student_class === data.student_class &&
+              p.student_num === data.student_num
+            ));
+            return [data, ...filtered];
+          });
         }
       } catch (err) {
         console.warn('학생 상세 필기 조회 오류:', err);
@@ -270,8 +306,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         setIsLoadingDetail(false);
       }
     } else {
-      // 0.4초 후 로딩 해제 (원격 응답 대기)
-      setTimeout(() => setIsLoadingDetail(false), 400);
+      setTimeout(() => setIsLoadingDetail(false), 300);
     }
   };
 
@@ -848,19 +883,22 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         </main>
       </div>
 
-      {/* 4. 학생 필기 상세 조회 팝업 모달 */}
+      {/* 4. 학생 필기 상세 조회 팝업 모달 (검정색 칠판 테마 #131314 및 반응형 고화질 SVG 렌더러) */}
       {selectedStudentNote && (() => {
         const studentPages = (Array.isArray(selectedStudentNote.strokes_data?.pages) && selectedStudentNote.strokes_data.pages.length > 0)
           ? selectedStudentNote.strokes_data.pages
           : [{
               strokes: selectedStudentNote.strokes_data?.strokes || [],
               textItems: selectedStudentNote.strokes_data?.textItems || [],
-              fullPageBackground: selectedStudentNote.strokes_data?.fullPageBackground || null
+              fullPageBackground: selectedStudentNote.strokes_data?.fullPageBackground || null,
+              images: selectedStudentNote.strokes_data?.images || []
             }];
         const validPageIdx = Math.min(Math.max(0, selectedStudentPageIdx), studentPages.length - 1);
-        const currentPageData = studentPages[validPageIdx] || { strokes: [], textItems: [] };
+        const currentPageData = studentPages[validPageIdx] || { strokes: [], textItems: [], images: [] };
         const orientation = selectedStudentNote.strokes_data?.orientation || 'landscape';
-        const isLandscape = orientation === 'landscape';
+        const isPortrait = orientation === 'portrait';
+        const docWidth = isPortrait ? 1130 : 1600;
+        const docHeight = isPortrait ? 1600 : 1130;
 
         return (
           <div
@@ -868,109 +906,228 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
               position: 'fixed',
               inset: 0,
               zIndex: 10000,
-              background: 'rgba(0, 0, 0, 0.75)',
-              backdropFilter: 'blur(4px)',
+              background: 'rgba(0, 0, 0, 0.85)',
+              backdropFilter: 'blur(6px)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: '20px'
+              padding: '16px'
             }}
-            onClick={() => setSelectedStudentNote(null)}
+            onClick={() => {
+              setSelectedStudentNote(null);
+              selectedStudentKeyRef.current = null;
+            }}
           >
             <div
               style={{
                 width: '100%',
-                maxWidth: '1100px',
-                maxHeight: '92vh',
+                maxWidth: isPortrait ? '680px' : '1080px',
+                maxHeight: '94vh',
                 background: '#161b22',
                 borderRadius: '16px',
                 border: '1px solid #30363d',
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
-                boxShadow: '0 20px 40px rgba(0,0,0,0.8)'
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.9)'
               }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* 모달 헤더 */}
               <div
                 style={{
-                  padding: '16px 24px',
+                  padding: '14px 20px',
                   borderBottom: '1px solid #30363d',
                   display: 'flex',
                   justifyContent: 'space-between',
-                  alignItems: 'center'
+                  alignItems: 'center',
+                  background: '#1a202c',
+                  flexShrink: 0
                 }}
               >
-                <div>
-                  <h3 style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '20px' }}>👨‍🎓</span>
+                  <h3 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
                     {selectedStudentNote.student_grade}학년 {selectedStudentNote.student_class}반 {selectedStudentNote.student_num}번 {selectedStudentNote.student_name} 학생의 필기
                   </h3>
-                  <span style={{ fontSize: '12px', color: '#8b949e', marginTop: '2px', display: 'block' }}>
-                    {isLoadingDetail ? '⚡ 학생 기기로부터 실시간 최신 필기를 가져오는 중...' : '원본 필기 뷰어'}
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      color: '#93c5fd',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid rgba(59, 130, 246, 0.4)',
+                      fontWeight: 600
+                    }}
+                  >
+                    {isPortrait ? '📱 A4 세로' : '💻 A4 가로'}
                   </span>
+                  {studentPages.length > 1 && (
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        background: 'rgba(168, 85, 247, 0.2)',
+                        color: '#d8b4fe',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid rgba(168, 85, 247, 0.4)',
+                        fontWeight: 600
+                      }}
+                    >
+                      총 {studentPages.length}쪽
+                    </span>
+                  )}
+                  {isLoadingDetail && (
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        color: '#facc15',
+                        background: 'rgba(250, 204, 21, 0.15)',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid rgba(250, 204, 21, 0.3)'
+                      }}
+                    >
+                      ⚡ 최신 필기 동기화 중...
+                    </span>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   {/* 페이지 넘김 컨트롤 */}
                   {studentPages.length > 1 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#21262d', padding: '4px 10px', borderRadius: '8px', border: '1px solid #30363d' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        background: '#21262d',
+                        padding: '3px 10px',
+                        borderRadius: '8px',
+                        border: '1px solid #30363d'
+                      }}
+                    >
                       <button
                         type="button"
-                        style={{ background: 'transparent', border: 'none', color: '#ffffff', cursor: 'pointer', fontSize: '14px' }}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: validPageIdx === 0 ? '#484f58' : '#ffffff',
+                          cursor: validPageIdx === 0 ? 'default' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          padding: '2px 6px'
+                        }}
                         disabled={validPageIdx === 0}
                         onClick={() => setSelectedStudentPageIdx(prev => Math.max(0, prev - 1))}
                       >
-                        ◀
+                        ◀ 이전 쪽
                       </button>
                       <span style={{ fontSize: '12.5px', color: '#58a6ff', fontWeight: 700 }}>
                         {validPageIdx + 1} / {studentPages.length} 쪽
                       </span>
                       <button
                         type="button"
-                        style={{ background: 'transparent', border: 'none', color: '#ffffff', cursor: 'pointer', fontSize: '14px' }}
-                        disabled={validPageIdx === studentPages.length - 1}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: validPageIdx >= studentPages.length - 1 ? '#484f58' : '#ffffff',
+                          cursor: validPageIdx >= studentPages.length - 1 ? 'default' : 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          padding: '2px 6px'
+                        }}
+                        disabled={validPageIdx >= studentPages.length - 1}
                         onClick={() => setSelectedStudentPageIdx(prev => Math.min(studentPages.length - 1, prev + 1))}
                       >
-                        ▶
+                        다음 쪽 ▶
                       </button>
                     </div>
                   )}
 
                   <button
                     type="button"
-                    style={{ background: 'transparent', border: 'none', color: '#8b949e', fontSize: '20px', cursor: 'pointer', padding: '4px 8px' }}
-                    onClick={() => setSelectedStudentNote(null)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#8b949e',
+                      fontSize: '20px',
+                      cursor: 'pointer',
+                      padding: '4px 8px',
+                      lineHeight: 1
+                    }}
+                    onClick={() => {
+                      setSelectedStudentNote(null);
+                      selectedStudentKeyRef.current = null;
+                    }}
                   >
                     ✕
                   </button>
                 </div>
               </div>
 
-              {/* 캔버스 뷰어 본문 */}
+              {/* 필기 종이 뷰어 본문 (검정색 전자칠판 테마 #131314) */}
               <div
                 style={{
                   flex: 1,
-                  padding: '24px',
+                  padding: '16px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   overflow: 'auto',
-                  background: '#0d1117'
+                  background: '#0a0d12'
                 }}
               >
                 <div
                   style={{
                     position: 'relative',
-                    width: isLandscape ? '880px' : '620px',
-                    height: isLandscape ? '620px' : '880px',
-                    background: '#ffffff',
+                    width: '100%',
+                    aspectRatio: `${docWidth} / ${docHeight}`,
+                    maxHeight: '74vh',
+                    background: '#131314', // <=== 검정색 칠판 공책 배경 복원
+                    border: '1px solid #30363d',
                     borderRadius: '8px',
-                    boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
-                    overflow: 'hidden'
+                    overflow: 'hidden',
+                    boxShadow: 'inset 0 0 24px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
                   }}
                 >
-                  {/* 전체 배경 이미지 (있는 경우) */}
+                  {/* 로딩 스피너 오버레이 */}
+                  {isLoadingDetail && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'rgba(19, 19, 20, 0.75)',
+                        zIndex: 10
+                      }}
+                    >
+                      <span style={{ fontSize: '32px', display: 'inline-block', animation: 'spin 1s linear infinite' }}>🔄</span>
+                      <span style={{ marginTop: '10px', fontSize: '13px', color: '#93c5fd', fontWeight: 600 }}>
+                        학생 필기 데이터를 불러오는 중...
+                      </span>
+                    </div>
+                  )}
+
+                  {/* 은은한 모눈종이 배경 */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
+                      backgroundSize: '24px 24px',
+                      pointerEvents: 'none'
+                    }}
+                  />
+
+                  {/* 전체 배경 이미지 (PDF 또는 학습지) */}
                   {currentPageData.fullPageBackground && (
                     <img
                       src={currentPageData.fullPageBackground}
@@ -980,32 +1137,119 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                         inset: 0,
                         width: '100%',
                         height: '100%',
-                        objectFit: 'contain'
+                        objectFit: 'contain',
+                        pointerEvents: 'none',
+                        zIndex: 1
                       }}
                     />
                   )}
 
-                  {/* 캔버스 오버레이 */}
-                  <StudentNoteDetailCanvas
-                    pageData={currentPageData}
-                    width={isLandscape ? 880 : 620}
-                    height={isLandscape ? 620 : 880}
-                  />
+                  {/* 임베디드 문제/스티커 이미지들 */}
+                  {(currentPageData.images || []).map((img: any, idx: number) => {
+                    const src = img.src || img.dataUrl;
+                    if (!src) return null;
+                    return (
+                      <img
+                        key={img.id || idx}
+                        src={src}
+                        alt="Embedded Problem"
+                        style={{
+                          position: 'absolute',
+                          left: `${(img.x / docWidth) * 100}%`,
+                          top: `${(img.y / docHeight) * 100}%`,
+                          width: `${(img.width / docWidth) * 100}%`,
+                          height: `${(img.height / docHeight) * 100}%`,
+                          objectFit: 'fill',
+                          pointerEvents: 'none',
+                          borderRadius: '4px',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                          zIndex: 2
+                        }}
+                      />
+                    );
+                  })}
+
+                  {/* 벡터 스트로크 SVG 렌더러 (정확한 1600x1130 / 1130x1600 viewBox) */}
+                  <svg
+                    viewBox={`0 0 ${docWidth} ${docHeight}`}
+                    preserveAspectRatio="xMidYMid meet"
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      pointerEvents: 'none',
+                      zIndex: 3
+                    }}
+                  >
+                    {(currentPageData.strokes || []).map((stroke: any, idx: number) => {
+                      if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;
+                      let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
+                      for (let i = 1; i < stroke.points.length; i++) {
+                        pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
+                      }
+                      return (
+                        <path
+                          key={stroke.id || idx}
+                          d={pathData}
+                          fill="none"
+                          stroke={stroke.color || '#ffffff'}
+                          strokeWidth={stroke.size || 3}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
+                        />
+                      );
+                    })}
+                  </svg>
+
+                  {/* 텍스트 아이템 렌더러 (백분율 좌표) */}
+                  {(currentPageData.textItems || []).map((item: any, idx: number) => (
+                    <div
+                      key={item.id || idx}
+                      style={{
+                        position: 'absolute',
+                        left: `${(item.x / docWidth) * 100}%`,
+                        top: `${(item.y / docHeight) * 100}%`,
+                        color: item.color || '#ffffff',
+                        fontSize: `${item.fontSize || 16}px`,
+                        fontWeight: 600,
+                        textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+                        userSelect: 'none',
+                        zIndex: 4
+                      }}
+                    >
+                      {item.text}
+                    </div>
+                  ))}
+
+                  {/* 빈 페이지 안내 메시지 */}
+                  {(currentPageData.strokes?.length || 0) === 0 &&
+                   (currentPageData.textItems?.length || 0) === 0 &&
+                   !currentPageData.fullPageBackground &&
+                   (!currentPageData.images || currentPageData.images.length === 0) &&
+                   !isLoadingDetail && (
+                    <div style={{ color: '#8b949e', fontSize: '13px', zIndex: 5, textAlign: 'center' }}>
+                      ✏️ 이 페이지에 작성된 필기나 학습지가 없습니다.
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* 모달 푸터 (피드백) */}
+              {/* 모달 푸터 */}
               <div
                 style={{
-                  padding: '14px 24px',
+                  padding: '12px 20px',
                   borderTop: '1px solid #30363d',
                   display: 'flex',
                   justifyContent: 'space-between',
-                  alignItems: 'center'
+                  alignItems: 'center',
+                  background: '#161b22',
+                  flexShrink: 0
                 }}
               >
                 <span style={{ fontSize: '12px', color: '#8b949e' }}>
-                  💡 학생이 태블릿에서 추가로 필기하면 실시간으로 자동 반영됩니다.
+                  💡 학생이 태블릿에서 추가로 필기하거나 페이지를 넘기면 실시간으로 자동 반영됩니다.
                 </span>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button
@@ -1023,6 +1267,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     onClick={() => {
                       showToast(`🌟 ${selectedStudentNote.student_name} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);
                       setSelectedStudentNote(null);
+                      selectedStudentKeyRef.current = null;
                     }}
                   >
                     🌟 참 잘했어요!
@@ -1038,7 +1283,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                       fontSize: '12.5px',
                       cursor: 'pointer'
                     }}
-                    onClick={() => setSelectedStudentNote(null)}
+                    onClick={() => {
+                      setSelectedStudentNote(null);
+                      selectedStudentKeyRef.current = null;
+                    }}
                   >
                     닫기
                   </button>
@@ -1049,105 +1297,5 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         );
       })()}
     </div>
-  );
-};
-
-/**
- * 학생 필기 스트로크 및 텍스트 렌더링 전용 캔버스 컴포넌트
- */
-const StudentNoteDetailCanvas: React.FC<{
-  pageData: { strokes?: any[]; textItems?: any[]; images?: any[] };
-  width: number;
-  height: number;
-}> = ({ pageData, width, height }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, width, height);
-
-    // 1. 임베디드 이미지 렌더링
-    const images = pageData.images || [];
-    for (const item of images) {
-      if (item.dataUrl) {
-        const img = new Image();
-        img.onload = () => {
-          ctx.drawImage(img, item.x || 0, item.y || 0, item.width || 150, item.height || 150);
-        };
-        img.src = item.dataUrl;
-      }
-    }
-
-    // 2. 스트로크 렌더링
-    const strokes = pageData.strokes || [];
-    for (const stroke of strokes) {
-      if (!stroke.points || stroke.points.length === 0) continue;
-
-      ctx.save();
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-
-      let strokeColor = stroke.color || '#0f172a';
-      if (strokeColor === '#ffffff' || strokeColor === '#f8fafc') {
-        strokeColor = '#0f172a';
-      }
-
-      if (stroke.tool === 'highlighter') {
-        ctx.globalAlpha = 0.35;
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = (stroke.size || 3) * 3;
-      } else if (stroke.tool === 'eraser') {
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.lineWidth = (stroke.size || 3) * 4;
-      } else {
-        ctx.globalAlpha = 1.0;
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = stroke.size || 3;
-      }
-
-      if (stroke.points.length === 1) {
-        ctx.beginPath();
-        ctx.arc(stroke.points[0].x, stroke.points[0].y, ctx.lineWidth / 2, 0, Math.PI * 2);
-        ctx.fillStyle = strokeColor;
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-        for (let i = 1; i < stroke.points.length; i++) {
-          ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-        }
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // 3. 텍스트 아이템 렌더링
-    const textItems = pageData.textItems || [];
-    for (const item of textItems) {
-      ctx.save();
-      ctx.fillStyle = item.color || '#0f172a';
-      ctx.font = `600 ${item.fontSize || 16}px sans-serif`;
-      ctx.fillText(item.text, item.x, item.y);
-      ctx.restore();
-    }
-  }, [pageData, width, height]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={width}
-      height={height}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none'
-      }}
-    />
   );
 };
