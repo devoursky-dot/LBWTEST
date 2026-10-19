@@ -12,6 +12,7 @@ import { ImageCropModal } from './components/ImageCropModal';
 import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/EmbeddedImageLayer';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
+import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 
 interface StudentInfo {
   grade: string;
@@ -184,6 +185,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const imagePdfInputRef = useRef<HTMLInputElement>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [hasSavedNote, setHasSavedNote] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // 학생 제출 고유 ID (1인 1행 유지하여 중복 생성 및 타임아웃 방지)
@@ -899,46 +902,89 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [activePopup]);
 
-  // 이전 필기 복원 (학생이 다시 들어왔을 때 이전 내용 자동 로드 및 구버전 데이터 정규화)
+  // QR 접속 시 항상 깨끗한 신규 A4 페이지로 시작 (구버전 오염 데이터의 자동 덮어쓰기 원천 차단)
+  // 단, 학생이 이전 필기를 원할 경우 [설정] 메뉴에서 언제든 명시적으로 복원할 수 있도록 지원
   useEffect(() => {
     try {
-      let rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`);
-      if (!rawSaved) {
-        rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note`);
-      }
+      const rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
+                       localStorage.getItem(`lbw_lesson_${lessonId}_note`);
       if (rawSaved) {
         const data = JSON.parse(rawSaved);
-        if (data.pages && Array.isArray(data.pages) && data.pages.length > 0) {
-          setPages(data.pages);
-          setStrokes(data.pages[0].strokes || []);
-          setTextItems(data.pages[0].textItems || []);
-          setFullPageBackground(data.pages[0].fullPageBackground || null);
-          setEmbeddedImages(data.pages[0].images || []);
-        } else if (data.strokes) {
-          const legacyPage: LessonPage = {
-            id: 'page_1',
-            strokes: data.strokes || [],
-            textItems: data.textItems || [],
-            fullPageBackground: data.fullPageBackground || null,
-            images: data.images || []
-          };
-          setPages([legacyPage]);
-          setStrokes(data.strokes);
-          if (data.textItems) setTextItems(data.textItems);
-          if (data.fullPageBackground) setFullPageBackground(data.fullPageBackground);
-          if (data.images) setEmbeddedImages(data.images);
-        }
-        // orientation 복원: 유효한 값이면 적용, 없거나 알 수 없으면 A4 세로('portrait') 표준으로 정규화
-        if (data.orientation === 'landscape' || data.orientation === 'portrait') {
-          setOrientation(data.orientation);
-        } else {
-          setOrientation('portrait');
+        const hasContent = (data.pages && data.pages.some((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground)) ||
+                           (data.strokes && data.strokes.length > 0);
+        if (hasContent) {
+          setHasSavedNote(true);
         }
       }
     } catch (e) {
-      console.warn('Failed to restore note:', e);
+      console.warn('Failed to inspect saved note:', e);
     }
   }, [lessonId]);
+
+  // [이전 필기 불러오기 (수동 복원)]
+  const handleRestoreSavedNote = useCallback(() => {
+    try {
+      const rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
+                       localStorage.getItem(`lbw_lesson_${lessonId}_note`);
+      if (!rawSaved) {
+        showToast('ℹ️ 저장된 이전 필기 데이터가 없습니다.');
+        return;
+      }
+      const data = JSON.parse(rawSaved);
+      if (data.pages && Array.isArray(data.pages) && data.pages.length > 0) {
+        setPages(data.pages);
+        setStrokes(data.pages[0].strokes || []);
+        setTextItems(data.pages[0].textItems || []);
+        setFullPageBackground(data.pages[0].fullPageBackground || null);
+        setEmbeddedImages(data.pages[0].images || []);
+      } else if (data.strokes) {
+        const legacyPage: LessonPage = {
+          id: 'page_1',
+          strokes: data.strokes || [],
+          textItems: data.textItems || [],
+          fullPageBackground: data.fullPageBackground || null,
+          images: data.images || []
+        };
+        setPages([legacyPage]);
+        setStrokes(data.strokes);
+        if (data.textItems) setTextItems(data.textItems);
+        if (data.fullPageBackground) setFullPageBackground(data.fullPageBackground);
+        if (data.images) setEmbeddedImages(data.images);
+      }
+      if (data.orientation === 'landscape' || data.orientation === 'portrait') {
+        setOrientation(data.orientation);
+      } else {
+        setOrientation('portrait');
+      }
+      setCurrentPageIndex(0);
+      showToast('📂 이전 필기 내용을 성공적으로 불러왔습니다.');
+      setActivePopup(null);
+    } catch (err: any) {
+      showToast(`❌ 이전 필기 불러오기 실패: ${err.message}`);
+    }
+  }, [lessonId]);
+
+  // [깨끗한 새 A4 공책으로 새로 시작]
+  const handleStartFreshNotebook = useCallback(() => {
+    const newPage: LessonPage = {
+      id: `page_${Date.now()}`,
+      strokes: [],
+      textItems: [],
+      fullPageBackground: null,
+      images: []
+    };
+    setPages([newPage]);
+    setStrokes([]);
+    setTextItems([]);
+    setFullPageBackground(null);
+    setEmbeddedImages([]);
+    setSelectedImageId(null);
+    setUndoStack([]);
+    setRedoStack([]);
+    setCurrentPageIndex(0);
+    showToast('✨ 깨끗한 새 A4 공책이 생성되었습니다.');
+    setActivePopup(null);
+  }, []);
 
   // 학생 필기 포인트 최적화 헬퍼 (좌표 반올림 및 미세 떨림 필터링으로 데이터 60% 경량화)
   const optimizePoints = (points: StrokePoint[]): StrokePoint[] => {
@@ -1132,6 +1178,45 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       showToast(`❌ 등록 실패: ${err.message || '네트워크 오류'}`);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // [로컬 기기에 현재 필기 PDF 다운로드 저장]
+  const handleExportStudentPdf = async () => {
+    if (isExportingPdf) return;
+    setIsExportingPdf(true);
+    showToast('⏳ 필기 내용을 고화질 PDF로 생성하는 중입니다...');
+
+    try {
+      // 현재 쪽 데이터 최신 동기화
+      const pagesToExport = [...pages];
+      if (pagesToExport[currentPageIndex]) {
+        pagesToExport[currentPageIndex] = {
+          ...pagesToExport[currentPageIndex],
+          strokes,
+          textItems,
+          fullPageBackground,
+          images: embeddedImages
+        };
+      }
+
+      const res = await exportStudentNotebookToPdf({
+        lessonTitle,
+        studentInfo,
+        pages: pagesToExport,
+        orientation,
+        A4_WIDTH,
+        A4_HEIGHT
+      });
+
+      if (res.success) {
+        showToast(`📥 PDF가 성공적으로 저장되었습니다!\n(${res.fileName})`);
+      }
+    } catch (err: any) {
+      console.error('PDF 다운로드 실패:', err);
+      showToast(`❌ PDF 저장 실패: ${err.message || '알 수 없는 오류'}`);
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -1479,6 +1564,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         >
           +쪽
         </button>
+        <button
+          id="btn-quick-export-pdf"
+          type="button"
+          className="student-tool-btn"
+          disabled={isExportingPdf}
+          onClick={handleExportStudentPdf}
+          style={{
+            padding: '2px 7px',
+            fontSize: '11px',
+            height: '28px',
+            background: 'rgba(16, 185, 129, 0.2)',
+            color: '#6ee7b7',
+            border: '1px solid rgba(16, 185, 129, 0.4)',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px'
+          }}
+          title="현재까지 필기한 내용을 PDF 파일로 기기에 저장"
+        >
+          <span>📥</span>
+          <span>{isExportingPdf ? '...' : 'PDF'}</span>
+        </button>
       </div>
 
       {isTwoTierRow && <div className="toolbar-divider" />}
@@ -1654,6 +1762,31 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             title={isFullscreen ? '전체화면 종료' : '전체화면으로 몰입 필기'}
           >
             {isFullscreen ? '🗗 창모드' : '⛶ 전체화면'}
+          </button>
+
+          {/* PDF 로컬 다운로드 저장 버튼 */}
+          <button
+            id="btn-header-export-pdf"
+            type="button"
+            className="student-tool-btn"
+            style={{
+              fontSize: '12px',
+              fontWeight: 600,
+              padding: '6px 11px',
+              background: 'rgba(59, 130, 246, 0.2)',
+              color: '#93c5fd',
+              border: '1px solid rgba(59, 130, 246, 0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              borderRadius: '8px'
+            }}
+            disabled={isExportingPdf}
+            onClick={handleExportStudentPdf}
+            title="현재까지 작성한 필기 공책을 PDF 파일로 내 기기에 즉시 저장합니다."
+          >
+            <span>📥</span>
+            <span>{isExportingPdf ? 'PDF 생성 중...' : 'PDF 저장'}</span>
           </button>
 
           {/* 등록하기 제출 버튼 */}
@@ -2462,6 +2595,66 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 </button>
               </>
             )}
+
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
+
+            {/* 필기 보관 & 복원 관리 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', fontWeight: 600 }}>
+                📑 공책 및 필기 저장 관리
+              </div>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={handleExportStudentPdf}
+                disabled={isExportingPdf}
+                style={{
+                  justifyContent: 'center',
+                  fontSize: '11.5px',
+                  padding: '7px 10px',
+                  background: 'rgba(59, 130, 246, 0.2)',
+                  color: '#93c5fd',
+                  border: '1px solid rgba(59, 130, 246, 0.4)',
+                  fontWeight: 600
+                }}
+              >
+                📥 {isExportingPdf ? 'PDF 생성 중...' : '전체 필기 PDF로 기기에 저장'}
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={handleStartFreshNotebook}
+                style={{
+                  justifyContent: 'center',
+                  fontSize: '11.5px',
+                  padding: '7px 10px',
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  color: '#e2e8f0',
+                  border: '1px solid rgba(255, 255, 255, 0.12)'
+                }}
+              >
+                ✨ 새 A4 공책으로 시작 (초기화)
+              </button>
+              {hasSavedNote && (
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={handleRestoreSavedNote}
+                  style={{
+                    justifyContent: 'center',
+                    fontSize: '11.5px',
+                    padding: '7px 10px',
+                    background: 'rgba(168, 85, 247, 0.15)',
+                    color: '#d8b4fe',
+                    border: '1px solid rgba(168, 85, 247, 0.35)',
+                    fontWeight: 600
+                  }}
+                  title="이전에 기기에 저장되었던 필기를 불러옵니다."
+                >
+                  📂 이전 저장된 필기 불러오기
+                </button>
+              )}
+            </div>
           </div>
         )}
 
