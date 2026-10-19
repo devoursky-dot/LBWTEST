@@ -617,12 +617,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // [동적 확대/축소 배율 계산 (폭 맞춤 100% vs 전체 보기)]
   // - 100% 확대: 화면 가로 폭(Width)에 정확히 맞춤
   // - 전체 보기 (최대 축소): 한 페이지 전체(세로+가로)가 화면에 완전히 다 보일 때까지 축소
-  // - 축소 제한: 한 페이지 전체가 보이는 배율보다 더 작아지지 않음 (축소하더라도 한 페이지 전체가 보일 때까지만 축소)
+  // - 축소 제한: 화면 폭(100% 폭) 이하로 축소되지 않도록 철저히 제한 (정사각형/미니어처 축소 원천 차단)
   // ==========================================================================
   const getFitScales = useCallback(() => {
     const container = containerRef.current;
     if (!container) {
-      return { fitWidthScale: 1.0, fitPageScale: 0.6, minScale: 0.6, maxScale: 3.0 };
+      return { fitWidthScale: 1.0, fitPageScale: 0.6, minScale: 1.0, maxScale: 3.5 };
     }
 
     const availW = Math.max(200, container.clientWidth - 24);
@@ -634,9 +634,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     // 한 페이지 전체 보기 배율 (화면 높이와 폭 모두에 완전히 쏙 들어오는 최대 축소 기준)
     const fitPageScale = Math.min(availW / paperBaseWidth, availH / paperBaseHeight);
 
-    // 축소는 한 페이지 전체가 다 보일 때까지만 허용 (화면폭보다 작아서 의미 없는 축소 방지)
-    const minScale = fitPageScale;
-    const maxScale = Math.max(fitWidthScale * 3.0, 3.0);
+    // 사용자의 핵심 요구: "화면폭 이하로 축소 안되게"
+    // 따라서 핀치 줌 및 축소 버튼의 기본 최소 배율(minScale)은 무조건 화면 폭 100%(fitWidthScale)로 제한!
+    const minScale = fitWidthScale;
+    const maxScale = Math.max(fitWidthScale * 3.5, 3.5);
 
     return { fitWidthScale, fitPageScale, minScale, maxScale };
   }, [paperBaseWidth, paperBaseHeight]);
@@ -693,13 +694,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     showToast('📄 한 페이지 전체 보기에 맞췄습니다.');
   }, [getFitScales]);
 
-  // [2] 화면 폭 맞춤 100% (화면 폭 크기에 맞게 페이지 크기 맞춤)
+  // [2] 화면 폭 맞춤 100% (화면 폭 크기에 맞게 페이지 크기 맞춤 및 상단부터 정렬)
   const handleFitWidth = useCallback(() => {
     const { fitWidthScale: targetScale } = getFitScales();
     setZoomScale(targetScale);
-    setPanOffset(clampPanOffset({ x: 0, y: 0 }, targetScale));
+    const renderedHeight = paperBaseHeight * targetScale;
+    const containerHeight = containerRef.current?.clientHeight || 800;
+    const initialPanY = renderedHeight > containerHeight ? (renderedHeight - containerHeight) / 2 : 0;
+    setPanOffset({ x: 0, y: initialPanY });
     showToast('↔️ 화면 폭에 100% 맞췄습니다.');
-  }, [getFitScales, clampPanOffset]);
+  }, [getFitScales, paperBaseHeight]);
 
   // [3] 폭 맞춤 ↔ 전체 보기 원터치 토글
   const handleToggleZoomFit = useCallback(() => {
@@ -711,12 +715,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [getFitScales, zoomScale, handleFitPage, handleFitWidth]);
 
-  // 초기 로드 및 용지 방향(가로/세로) 전환 시 한 페이지 전체가 잘림 없이 보이도록 전체 보기에 자동 맞춤
+  // 초기 로드 및 용지 방향(가로/세로) 전환 시 화면 폭 100% 맞춤으로 최적 로드 (상단부터 시작)
   useEffect(() => {
     if (containerRef.current) {
-      const { fitPageScale: targetScale } = getFitScales();
+      const { fitWidthScale: targetScale } = getFitScales();
       setZoomScale(targetScale);
-      setPanOffset({ x: 0, y: 0 });
+      const renderedHeight = paperBaseHeight * targetScale;
+      const containerHeight = containerRef.current.clientHeight;
+      const initialPanY = renderedHeight > containerHeight ? (renderedHeight - containerHeight) / 2 : 0;
+      setPanOffset({ x: 0, y: initialPanY });
     }
   }, [orientation]);
 
@@ -776,7 +783,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // 2손가락 핀치 줌 & 팬 (캔버스 필기 상태와 완전 격리)
+  // 핀치 줌 / 팬 터치 제스처 중 리스너 재생성 및 프레임 드랍을 막기 위한 상태 Ref
+  const zoomScaleRef = useRef(zoomScale);
+  zoomScaleRef.current = zoomScale;
+  const panOffsetRef = useRef(panOffset);
+  panOffsetRef.current = panOffset;
+  const clampPanOffsetRef = useRef(clampPanOffset);
+  clampPanOffsetRef.current = clampPanOffset;
+  const getFitScalesRef = useRef(getFitScales);
+  getFitScalesRef.current = getFitScales;
+
+  // 2손가락 핀치 줌 & 팬 (캔버스 필기 상태와 완전 격리, 60fps/120fps 부드러운 하드웨어 제스처)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -787,8 +804,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         const t1 = e.touches[0];
         const t2 = e.touches[1];
         initialTouchDistanceRef.current = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-        initialScaleRef.current = zoomScale;
-        initialPanRef.current = { ...panOffset };
+        initialScaleRef.current = zoomScaleRef.current;
+        initialPanRef.current = { ...panOffsetRef.current };
         initialCenterRef.current = {
           x: (t1.clientX + t2.clientX) / 2,
           y: (t1.clientY + t2.clientY) / 2
@@ -809,8 +826,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
         if (initialTouchDistanceRef.current > 0) {
           const ratio = currentDist / initialTouchDistanceRef.current;
-          const { minScale: minS, maxScale: maxS } = getFitScales();
-          // 축소 시 한 페이지 전체가 보일 때까지만(minScale) 제한
+          const { minScale: minS, maxScale: maxS } = getFitScalesRef.current();
+          // 축소 시 화면 폭 이하로 작아지지 않도록 제한
           const nextScale = Math.min(maxS, Math.max(minS, initialScaleRef.current * ratio));
           setZoomScale(nextScale);
 
@@ -829,7 +846,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           const rawPanX = (initialPanRef.current.x * scaleChangeRatio) + (initialFocalRelX * (1 - scaleChangeRatio)) + translationX;
           const rawPanY = (initialPanRef.current.y * scaleChangeRatio) + (initialFocalRelY * (1 - scaleChangeRatio)) + translationY;
 
-          setPanOffset(clampPanOffset({ x: rawPanX, y: rawPanY }, nextScale));
+          setPanOffset(clampPanOffsetRef.current({ x: rawPanX, y: rawPanY }, nextScale));
         }
       }
     };
@@ -860,7 +877,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       container.removeEventListener('touchcancel', onTouchEnd);
       container.removeEventListener('selectstart', onSelectStart);
     };
-  }, [zoomScale, panOffset, clampPanOffset, getFitScales]);
+  }, []);
 
   // 팝오버 메뉴 외부 클릭 시 자동 닫기 (이벤트 버블링 및 렌더링 노드 분리 방어)
   useEffect(() => {
@@ -882,22 +899,40 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [activePopup]);
 
-  // 이전 필기 복원 (학생이 다시 들어왔을 때 이전 내용 자동 로드)
+  // 이전 필기 복원 (학생이 다시 들어왔을 때 이전 내용 자동 로드 및 구버전 데이터 정규화)
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`);
-      if (saved) {
-        const data = JSON.parse(saved);
+      let rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`);
+      if (!rawSaved) {
+        rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note`);
+      }
+      if (rawSaved) {
+        const data = JSON.parse(rawSaved);
         if (data.pages && Array.isArray(data.pages) && data.pages.length > 0) {
           setPages(data.pages);
           setStrokes(data.pages[0].strokes || []);
           setTextItems(data.pages[0].textItems || []);
+          setFullPageBackground(data.pages[0].fullPageBackground || null);
+          setEmbeddedImages(data.pages[0].images || []);
         } else if (data.strokes) {
+          const legacyPage: LessonPage = {
+            id: 'page_1',
+            strokes: data.strokes || [],
+            textItems: data.textItems || [],
+            fullPageBackground: data.fullPageBackground || null,
+            images: data.images || []
+          };
+          setPages([legacyPage]);
           setStrokes(data.strokes);
           if (data.textItems) setTextItems(data.textItems);
+          if (data.fullPageBackground) setFullPageBackground(data.fullPageBackground);
+          if (data.images) setEmbeddedImages(data.images);
         }
-        if (data.orientation) {
+        // orientation 복원: 유효한 값이면 적용, 없거나 알 수 없으면 A4 세로('portrait') 표준으로 정규화
+        if (data.orientation === 'landscape' || data.orientation === 'portrait') {
           setOrientation(data.orientation);
+        } else {
+          setOrientation('portrait');
         }
       }
     } catch (e) {
@@ -2460,9 +2495,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             transformOrigin: 'center center',
             transition: isGestureRef.current ? 'none' : 'transform 0.15s ease-out, width 0.2s ease, height 0.2s ease',
             position: 'relative',
-            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1)',
-            borderRadius: '12px',
-            background: '#131314',
+            boxShadow: '0 12px 48px rgba(0, 0, 0, 0.75), 0 0 0 1.5px rgba(255, 255, 255, 0.18)',
+            border: '1px solid rgba(255, 255, 255, 0.14)',
+            borderRadius: '8px',
+            background: '#16171a',
             overflow: 'hidden',
             touchAction: 'none',
             WebkitTouchCallout: 'none',
