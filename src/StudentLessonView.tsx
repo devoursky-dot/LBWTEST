@@ -174,9 +174,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const initialPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const initialCenterRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // 멀티터치 직선 생성 방지용 활성 포인터 추적
-  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  // 멀티터치 직선 생성 방지 및 스마트 팜리젝션(애플펜슬/손바닥 분리) 포인터 추적
+  const activePointersRef = useRef<Map<number, { x: number; y: number; type: string }>>(new Map());
   const activeDrawPointerIdRef = useRef<number | null>(null);
+  const activeDrawPointerTypeRef = useRef<string | null>(null);
 
   // 펜 모드 시 손가락 1개 드래그 이동(Pan) ref
   const isFingerPanningRef = useRef(false);
@@ -431,47 +432,60 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // [포인터 이벤트 핸들러 (터치 모드 & 펜 모드, 획 지우개, 멀티터치 직선 방지)]
   // ==========================================================================
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    tryAutoFullscreen();
-
-    // 활성 포인터 등록
-    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-    // 2개 이상의 터치가 감지되었거나 제스처 진행 중이면 즉시 필기 취소 (직선 생성 차단)
-    if (activePointersRef.current.size >= 2 || isGestureRef.current) {
-      if (isDrawingRef.current) {
-        isDrawingRef.current = false;
-        currentStrokeRef.current = null;
-        activeDrawPointerIdRef.current = null;
-        renderCanvas();
-      }
-      if (isFingerPanningRef.current) {
-        isFingerPanningRef.current = false;
-      }
-      return;
+    // 1. 브라우저 기본 제스처, 돋보기 루페, 텍스트 선택 모드 원천 차단
+    if (e.cancelable) {
+      e.preventDefault();
     }
 
     if (activePopup) {
       setActivePopup(null);
     }
 
-    // [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), 펜/마우스이면 필기!
+    // 2. 활성 포인터 등록 (포인터 타입 함께 보관)
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+
+    // 3. [스마트 팜리젝션 1]: 이미 애플펜슬/펜이 필기 중일 때 손바닥(touch)이 닿으면 펜 필기를 취소하지 않고 손바닥 터치만 무시!
+    if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') {
+      if (e.pointerType === 'touch') {
+        return; // 손바닥 터치 무시
+      }
+    }
+
+    // 4. [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), 펜/마우스이면 필기!
     if (penOnlyMode) {
       if (e.pointerType === 'touch') {
-        // 손가락 1개 드래그로 캔버스 위치 이동(Pan) 시작
-        isFingerPanningRef.current = true;
-        fingerPanStartRef.current = {
-          x: e.clientX,
-          y: e.clientY,
-          pan: { ...panOffset }
-        };
-        try {
-          e.currentTarget.setPointerCapture(e.pointerId);
-        } catch {}
+        if (activePointersRef.current.size === 1) {
+          isFingerPanningRef.current = true;
+          fingerPanStartRef.current = {
+            x: e.clientX,
+            y: e.clientY,
+            pan: { ...panOffset }
+          };
+        }
         return;
       }
 
-      // 펜/마우스가 아니면 무시 (손바닥 터치 차단 / 팜리젝션)
+      // 펜/마우스가 아니면 무시 (손바닥 터치 차단)
       if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') {
+        return;
+      }
+    }
+
+    // 5. [터치 모드에서의 멀티터치 감지]:
+    // 펜이 아닌 일반 손가락 터치 모드에서 2개 이상의 손가락 터치가 들어오거나 제스처 중이면 필기 취소
+    if (e.pointerType === 'touch') {
+      const touchPointers = Array.from(activePointersRef.current.values()).filter(p => p.type === 'touch');
+      if (touchPointers.length >= 2 || isGestureRef.current) {
+        if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
+          isDrawingRef.current = false;
+          currentStrokeRef.current = null;
+          activeDrawPointerIdRef.current = null;
+          activeDrawPointerTypeRef.current = null;
+          renderCanvas();
+        }
+        if (isFingerPanningRef.current) {
+          isFingerPanningRef.current = false;
+        }
         return;
       }
     }
@@ -484,16 +498,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    // 획 지우개 모드: 터치한 곳의 획 전체 즉시 삭제
+    // 6. 획 지우개 모드
     if (tool === 'eraser' && eraserMode === 'stroke') {
       strokeDragStartSnapshotRef.current = [...strokes];
       didEraseInGestureRef.current = false;
       isDrawingRef.current = true;
       activeDrawPointerIdRef.current = e.pointerId;
-
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      } catch {}
+      activeDrawPointerTypeRef.current = e.pointerType;
 
       const { x, y } = getCanvasCoords(e);
       const eraserRadius = Math.max(16, eraserSize / 2);
@@ -505,12 +516,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-
+    // 7. 일반 필기 시작
     isDrawingRef.current = true;
     activeDrawPointerIdRef.current = e.pointerId;
+    activeDrawPointerTypeRef.current = e.pointerType;
     strokeDragStartSnapshotRef.current = [...strokes];
 
     const { x, y } = getCanvasCoords(e);
@@ -539,8 +548,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+
     // 1. 펜 모드에서 손가락 1개로 드래그 위치 이동 중일 때
-    if (isFingerPanningRef.current) {
+    if (isFingerPanningRef.current && e.pointerType === 'touch') {
       const dx = e.clientX - fingerPanStartRef.current.x;
       const dy = e.clientY - fingerPanStartRef.current.y;
       setPanOffset(clampPanOffset({
@@ -550,25 +563,24 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    // 2. 2손가락 제스처 중이거나 2개 이상의 포인터가 활성화된 경우: 직선 생성 원천 방지
-    if (isGestureRef.current || activePointersRef.current.size >= 2) {
-      if (isDrawingRef.current) {
-        isDrawingRef.current = false;
-        currentStrokeRef.current = null;
-        activeDrawPointerIdRef.current = null;
-        renderCanvas();
-      }
+    // 2. 필기 중이 아니거나, 필기 중인 포인터 ID와 일치하지 않는 이벤트는 무시 (손바닥 터치 무시!)
+    if (!isDrawingRef.current || e.pointerId !== activeDrawPointerIdRef.current) {
       return;
     }
 
-    // 3. 필기 중인 포인터 ID와 일치하지 않으면 무시
-    if (!isDrawingRef.current || e.pointerId !== activeDrawPointerIdRef.current) {
+    // 3. 손가락 터치 필기 중일 때 두 손가락 핀치 제스처가 시작된 경우에만 필기 취소
+    if (activeDrawPointerTypeRef.current === 'touch' && isGestureRef.current) {
+      isDrawingRef.current = false;
+      currentStrokeRef.current = null;
+      activeDrawPointerIdRef.current = null;
+      activeDrawPointerTypeRef.current = null;
+      renderCanvas();
       return;
     }
 
     const { x, y } = getCanvasCoords(e);
 
-    // 획 지우개 모드: 이동 경로에서 스친 획 전체 삭제
+    // 4. 획 지우개 모드: 이동 경로에서 스친 획 전체 삭제
     if (tool === 'eraser' && eraserMode === 'stroke') {
       const eraserRadius = Math.max(16, eraserSize / 2);
       setStrokes(prev => {
@@ -581,13 +593,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    // 일반 필기 및 영역(픽셀) 지우개
+    // 5. 일반 필기 및 영역(픽셀) 지우개 실시간 증분 렌더링 (초당 120회 초고속 직결)
     if (!currentStrokeRef.current) return;
     const currentStroke = currentStrokeRef.current;
     const pressure = e.pressure > 0 ? e.pressure : 0.5;
     currentStroke.points.push({ x, y, pressure });
 
-    // 초고속 실시간 증분 렌더링
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext('2d');
@@ -627,9 +638,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
     if (e) {
       activePointersRef.current.delete(e.pointerId);
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch {}
     }
 
     // 손가락 팬 종료
@@ -639,20 +647,24 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     // 획 지우개 종료 및 Undo 히스토리 기록
     if (isDrawingRef.current && tool === 'eraser' && eraserMode === 'stroke') {
-      isDrawingRef.current = false;
-      activeDrawPointerIdRef.current = null;
-      if (didEraseInGestureRef.current) {
-        setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
-        setRedoStack([]);
-        didEraseInGestureRef.current = false;
+      if (!e || e.pointerId === activeDrawPointerIdRef.current) {
+        isDrawingRef.current = false;
+        activeDrawPointerIdRef.current = null;
+        activeDrawPointerTypeRef.current = null;
+        if (didEraseInGestureRef.current) {
+          setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
+          setRedoStack([]);
+          didEraseInGestureRef.current = false;
+        }
       }
       return;
     }
 
-    // 일반 필기 종료 처리
+    // 일반 필기 종료 처리 (현재 필기 중인 포인터가 떼어졌을 때만 저장)
     if (isDrawingRef.current && e && e.pointerId === activeDrawPointerIdRef.current) {
       isDrawingRef.current = false;
       activeDrawPointerIdRef.current = null;
+      activeDrawPointerTypeRef.current = null;
 
       const finishedStroke = currentStrokeRef.current;
       if (finishedStroke && finishedStroke.points.length > 0) {
@@ -664,7 +676,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     } else if (isDrawingRef.current && !e) {
       isDrawingRef.current = false;
       activeDrawPointerIdRef.current = null;
+      activeDrawPointerTypeRef.current = null;
       currentStrokeRef.current = null;
+    }
+  };
+
+  // 포인터 취소 이벤트 (iOS Safari 손바닥 분리 처리)
+  const handlePointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+
+    // 취소된 포인터가 현재 필기 중인 포인터인 경우에만 획 보존 후 종료
+    if (e.pointerId === activeDrawPointerIdRef.current) {
+      handlePointerUp(e);
     }
   };
 
@@ -899,7 +922,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (!container) return;
 
     const onTouchStart = (e: TouchEvent) => {
-      tryAutoFullscreen();
+      // 애플펜슬 필기 중 손바닥이 닿아 발생하는 터치는 핀치 제스처로 오인하지 않도록 완벽 무시
+      if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') {
+        return;
+      }
 
       if (e.touches.length >= 2) {
         isGestureRef.current = true;
@@ -908,6 +934,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           isDrawingRef.current = false;
           currentStrokeRef.current = null;
           activeDrawPointerIdRef.current = null;
+          activeDrawPointerTypeRef.current = null;
           renderCanvas();
         }
         if (isFingerPanningRef.current) {
@@ -979,14 +1006,20 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       }
     };
 
+    const onSelectStart = (e: Event) => {
+      e.preventDefault();
+    };
+
     container.addEventListener('touchstart', onTouchStart, { passive: true });
     container.addEventListener('touchmove', onTouchMove, { passive: false });
     container.addEventListener('touchend', onTouchEnd, { passive: true });
+    container.addEventListener('selectstart', onSelectStart);
 
     return () => {
       container.removeEventListener('touchstart', onTouchStart);
       container.removeEventListener('touchmove', onTouchMove);
       container.removeEventListener('touchend', onTouchEnd);
+      container.removeEventListener('selectstart', onSelectStart);
     };
   }, [zoomScale, panOffset, clampPanOffset]);
 
@@ -1217,7 +1250,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   return (
     <div
       className="student-app-container"
-      style={{ overflow: 'hidden', position: 'relative' }}
+      onContextMenu={(e) => e.preventDefault()}
+      style={{
+        overflow: 'hidden',
+        position: 'relative',
+        touchAction: 'none',
+        WebkitTouchCallout: 'none',
+        WebkitUserSelect: 'none',
+        userSelect: 'none'
+      }}
     >
       {/* 1. 상단 학생 식별 및 액션 바 */}
       <header className="student-header">
@@ -2201,6 +2242,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         ref={containerRef}
         className="student-canvas-wrapper"
         onWheel={handleWheel}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -2208,12 +2250,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           overflow: 'hidden',
           background: '#090b10',
           position: 'relative',
-          touchAction: 'none'
+          touchAction: 'none',
+          WebkitTouchCallout: 'none',
+          WebkitUserSelect: 'none',
+          userSelect: 'none'
         }}
       >
         {/* A4 실제 용지 시트 (하드웨어 가속 줌/팬 적용) */}
         <div
           ref={paperSheetRef}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
           style={{
             width: `${paperBaseWidth}px`,
             height: `${paperBaseHeight}px`,
@@ -2225,7 +2271,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             borderRadius: '12px',
             background: '#131314',
             overflow: 'hidden',
-            touchAction: 'none'
+            touchAction: 'none',
+            WebkitTouchCallout: 'none',
+            WebkitUserSelect: 'none',
+            userSelect: 'none'
           }}
         >
           <canvas
@@ -2234,12 +2283,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
+            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
             style={{
               width: '100%',
               height: '100%',
               display: 'block',
-              touchAction: 'none'
+              touchAction: 'none',
+              WebkitTouchCallout: 'none',
+              WebkitUserSelect: 'none',
+              userSelect: 'none',
+              WebkitTapHighlightColor: 'transparent'
             }}
           />
 

@@ -43,6 +43,8 @@ body {
   overflow: hidden;
   line-height: 1.5;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* ==========================================================================
@@ -851,14 +853,28 @@ body {
   background-color: #131314;
   color: #f1f3f4;
   overflow: hidden;
-  user-select: none;
-  touch-action: auto;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  touch-action: none !important;
+}
+
+.student-canvas-wrapper,
+.student-canvas {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  touch-action: none !important;
 }
 
 .student-header,
 .student-toolbar,
 .student-tool-btn {
   touch-action: manipulation;
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
 }
 
 .student-header {
