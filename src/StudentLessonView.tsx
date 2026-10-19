@@ -10,26 +10,14 @@ import {
 import { PdfPagePickerModal } from './components/PdfPagePickerModal';
 import { ImageCropModal } from './components/ImageCropModal';
 import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/EmbeddedImageLayer';
+import { DrawingCanvas } from './components/DrawingCanvas';
+import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
 
 interface StudentInfo {
   grade: string;
   classNum: string;
   studentNum: string;
   name: string;
-}
-
-interface StrokePoint {
-  x: number;
-  y: number;
-  pressure: number;
-}
-
-interface Stroke {
-  id: string;
-  tool: 'pen' | 'highlighter' | 'eraser';
-  color: string;
-  size: number;
-  points: StrokePoint[];
 }
 
 interface TextItem {
@@ -78,37 +66,6 @@ const EraserIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, co
   </svg>
 );
 
-// 점(px, py)에서 선분 (x1, y1)-(x2, y2)까지의 최단 거리
-function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
-  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  const projX = x1 + t * dx;
-  const projY = y1 + t * dy;
-  return Math.hypot(px - projX, py - projY);
-}
-
-// 스트로크와 지우개 반경 충돌 검사 (획 단위 지우개)
-function isStrokeHit(stroke: Stroke, px: number, py: number, eraserRadius: number): boolean {
-  if (!stroke.points || stroke.points.length === 0) return false;
-  const threshold = eraserRadius + (stroke.size || 3) / 2;
-
-  if (stroke.points.length === 1) {
-    return Math.hypot(px - stroke.points[0].x, py - stroke.points[0].y) <= threshold;
-  }
-
-  for (let i = 0; i < stroke.points.length - 1; i++) {
-    const p1 = stroke.points[i];
-    const p2 = stroke.points[i + 1];
-    if (distToSegment(px, py, p1.x, p1.y, p2.x, p2.y) <= threshold) {
-      return true;
-    }
-  }
-  return false;
-}
 
 export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   lessonId,
@@ -235,12 +192,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // DOM 참조
   const containerRef = useRef<HTMLDivElement>(null);
   const paperSheetRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  const isDrawingRef = useRef(false);
-  const currentStrokeRef = useRef<Stroke | null>(null);
-  const strokeDragStartSnapshotRef = useRef<Stroke[]>([]);
-  const didEraseInGestureRef = useRef<boolean>(false);
 
   // 제스처 및 스크롤 추적 ref
   const isGestureRef = useRef(false);
@@ -248,19 +199,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const initialScaleRef = useRef(1);
   const initialPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const initialCenterRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  // 멀티터치 직선 생성 방지 및 스마트 팜리젝션(애플펜슬/손바닥 분리) 포인터 추적
-  const activePointersRef = useRef<Map<number, { x: number; y: number; type: string }>>(new Map());
-  const activeDrawPointerIdRef = useRef<number | null>(null);
-  const activeDrawPointerTypeRef = useRef<string | null>(null);
-  // 글자 간격 펜 뗌 보호 스마트 팜리젝션 (애플펜슬/S펜 사용 후 1.2초간 손바닥 터치 오작동 완벽 차단)
-  const lastPenTimeRef = useRef<number>(0);
-  // 굿노트(GoodNotes) 아키텍처: 직접 그린 획 커밋 시 캔버스 전체 지우기/다시그리기 스킵 플래그 (0ms 딜레이)
-  const isInternalStrokeAddRef = useRef<boolean>(false);
-
-  // 펜 모드 시 손가락 1개 드래그 이동(Pan) ref
-  const isFingerPanningRef = useRef(false);
-  const fingerPanStartRef = useRef<{ x: number; y: number; pan: { x: number; y: number } }>({ x: 0, y: 0, pan: { x: 0, y: 0 } });
 
   // 첫 터치 시 자동 전체화면 플래그
   const hasRequestedFullscreenRef = useRef(false);
@@ -334,116 +272,21 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const A4_WIDTH = orientation === 'landscape' ? 1600 : 1130;
   const A4_HEIGHT = orientation === 'landscape' ? 1130 : 1600;
 
-  const resizeCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // --- 최우선 독립 필기 엔진 콜백 핸들러 ---
+  const handleUndoSnapshot = useCallback(() => {
+    setUndoStack(prev => [...prev.slice(-30), strokes]);
+    setRedoStack([]);
+  }, [strokes]);
 
-    if (canvas.width !== A4_WIDTH || canvas.height !== A4_HEIGHT) {
-      canvas.width = A4_WIDTH;
-      canvas.height = A4_HEIGHT;
-    }
-  }, [A4_WIDTH, A4_HEIGHT]);
+  const handleStrokeComplete = useCallback((newStroke: Stroke) => {
+    setStrokes(prev => [...prev, newStroke]);
+  }, []);
 
-  // 단일 스트로크 그리기 유틸리티
-  const drawSingleStroke = (ctx: CanvasRenderingContext2D, stroke: Stroke) => {
-    if (!stroke.points || stroke.points.length === 0) return;
+  const handleStrokesChange = useCallback((newStrokes: Stroke[]) => {
+    setStrokes(newStrokes);
+  }, []);
 
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
 
-    if (stroke.tool === 'highlighter') {
-      ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = stroke.size;
-    } else if (stroke.tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = stroke.size;
-    } else {
-      ctx.globalAlpha = 1.0;
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = stroke.size;
-    }
-
-    if (stroke.points.length === 1) {
-      ctx.beginPath();
-      ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.size / 2, 0, Math.PI * 2);
-      ctx.fillStyle = stroke.color;
-      ctx.fill();
-    } else if (stroke.points.length === 2) {
-      ctx.beginPath();
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-      ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
-      ctx.stroke();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-
-      for (let i = 1; i < stroke.points.length - 1; i++) {
-        const midX = (stroke.points[i].x + stroke.points[i + 1].x) / 2;
-        const midY = (stroke.points[i].y + stroke.points[i + 1].y) / 2;
-        ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y, midX, midY);
-      }
-      const last = stroke.points[stroke.points.length - 1];
-      ctx.lineTo(last.x, last.y);
-      ctx.stroke();
-    }
-    ctx.restore();
-  };
-
-  // 전체 캔버스 다시 그리기 (A4 모눈종이 + 스트로크)
-  const renderCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // 모눈종이 그리드 배경 (단, 전체 배경 PDF/이미지가 없을 때만 모눈종이를 표시하여 문제지가 선명하게 보이도록 함)
-    if (!fullPageBackground) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-      ctx.lineWidth = 1;
-      const gridSize = 32;
-
-      for (let x = gridSize; x < canvas.width; x += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
-      }
-      for (let y = gridSize; y < canvas.height; y += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // 완료된 모든 스트로크 그리기
-    for (const stroke of strokes) {
-      drawSingleStroke(ctx, stroke);
-    }
-
-    // 현재 실시간 드로잉 중인 획
-    if (isDrawingRef.current && currentStrokeRef.current) {
-      drawSingleStroke(ctx, currentStrokeRef.current);
-    }
-  }, [strokes, fullPageBackground]);
-
-  useEffect(() => {
-    // 굿노트(GoodNotes) 역추적 최적화:
-    // 방금 화면에 직접 필기한 획은 실시간 증분 렌더링으로 캔버스에 이미 그려져 있으므로
-    // 매 획마다 캔버스를 clearRect로 지우고 수십~수백 개의 획을 다시 그리는 50ms 랙 유발 루프를 완전히 생략합니다! (0ms 즉각 응답)
-    if (isInternalStrokeAddRef.current) {
-      isInternalStrokeAddRef.current = false;
-      return;
-    }
-    resizeCanvas();
-    renderCanvas();
-  }, [resizeCanvas, renderCanvas, orientation]);
 
   // ==========================================================================
   // [멀티페이지 전환 & 보존 관리]
@@ -702,326 +545,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
 
   // ==========================================================================
-  // [삼성노트 REA 좌표 변환 헬퍼 (줌 & 스크롤 반영)]
-  // ==========================================================================
-  const getCanvasCoords = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
 
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
-    return { x, y };
-  };
-
-  // ==========================================================================
-  // [포인터 이벤트 핸들러 (터치 모드 & 펜 모드, 획 지우개, 멀티터치 직선 방지)]
-  // ==========================================================================
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // 1. 브라우저 기본 제스처, 돋보기 루페, 텍스트 선택 모드 원천 차단
-    if (e.cancelable) {
-      e.preventDefault();
-    }
-
-    if (activePopup) {
-      setActivePopup(null);
-    }
-
-    // 2. 활성 포인터 등록 (포인터 타입 함께 보관)
-    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
-
-    // 3. [애플펜슬/S펜 스타일러스 최우선권 부여 및 스마트 팜리젝션]:
-    if (e.pointerType === 'pen') {
-      lastPenTimeRef.current = Date.now();
-      isGestureRef.current = false; // 제스처 즉시 해제
-
-      // 애플펜슬/S펜이 감지되면 자동으로 펜 전용 모드(스마트 팜리젝션)를 활성화하여 손바닥 터치 오작동을 영구 박멸!
-      if (!penOnlyMode) {
-        setPenOnlyMode(true);
-        try { localStorage.setItem('lbw_pen_mode', 'true'); } catch {}
-      }
-
-      // 혹시 이전에 손바닥(touch)으로 잘못 시작된 획이 있다면 즉시 파기 (캔버스 전체 clear 없이 조용히 종료)
-      if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
-        isDrawingRef.current = false;
-        currentStrokeRef.current = null;
-        activeDrawPointerIdRef.current = null;
-        activeDrawPointerTypeRef.current = null;
-      }
-
-      // [이전 획 안전 보존]: 혹시 빠른 필기로 인해 이전 획의 pointerup이 Safari에서 누락된 상태로 새 획이 들어온 경우
-      // 이전 획을 즉시 정상 보존하여 글자 획이 씹히거나 날아가지 않도록 보장
-      if (isDrawingRef.current && currentStrokeRef.current) {
-        const prevFinished = currentStrokeRef.current;
-        if (prevFinished.points.length > 0) {
-          isInternalStrokeAddRef.current = true;
-          setStrokes(prev => [...prev, prevFinished]);
-        }
-        isDrawingRef.current = false;
-        currentStrokeRef.current = null;
-      }
-    } else if (e.pointerType === 'touch') {
-      // 4. [글자 간격 펜 뗌 보호 스마트 팜리젝션]:
-      // 펜 필기 중이거나, 글자 사이 펜을 잠깐 뗀 직후(1.2초 이내) 닿은 손바닥(touch)은 100% 무시
-      const isRecentPenUser = Date.now() - lastPenTimeRef.current < 1200;
-      if ((isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') || isRecentPenUser) {
-        return; // 손바닥 터치 완벽 무시
-      }
-    }
-
-    // 5. [펜 모드 전용 특수 동작]: 손가락 터치이면 위치 이동(Pan), 펜/마우스이면 필기!
-    if (penOnlyMode) {
-      if (e.pointerType === 'touch') {
-        if (activePointersRef.current.size === 1) {
-          isFingerPanningRef.current = true;
-          fingerPanStartRef.current = {
-            x: e.clientX,
-            y: e.clientY,
-            pan: { ...panOffset }
-          };
-        }
-        return;
-      }
-
-      // 펜/마우스가 아니면 무시 (손바닥 터치 차단)
-      if (e.pointerType !== 'pen' && e.pointerType !== 'mouse') {
-        return;
-      }
-    }
-
-    // 5. [터치 모드에서의 멀티터치 감지]:
-    // 펜이 아닌 일반 손가락 터치 모드에서 2개 이상의 손가락 터치가 들어오거나 제스처 중이면 필기 취소
-    if (e.pointerType === 'touch') {
-      const touchPointers = Array.from(activePointersRef.current.values()).filter(p => p.type === 'touch');
-      if (touchPointers.length >= 2 || isGestureRef.current) {
-        if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
-          isDrawingRef.current = false;
-          currentStrokeRef.current = null;
-          activeDrawPointerIdRef.current = null;
-          activeDrawPointerTypeRef.current = null;
-        }
-        if (isFingerPanningRef.current) {
-          isFingerPanningRef.current = false;
-        }
-        return;
-      }
-    }
-
-    if (tool === 'image') {
-      setSelectedImageId(null);
-      return;
-    }
-
-    if (tool === 'text') {
-      const { x, y } = getCanvasCoords(e);
-      const newId = `text_${Date.now()}`;
-      setTextItems(prev => [...prev, { id: newId, x, y, text: '', color: penColor, fontSize: 18 }]);
-      setActiveTextId(newId);
-      return;
-    }
-
-    // 6. 획 지우개 모드
-    if (tool === 'eraser' && eraserMode === 'stroke') {
-      strokeDragStartSnapshotRef.current = [...strokes];
-      didEraseInGestureRef.current = false;
-      isDrawingRef.current = true;
-      activeDrawPointerIdRef.current = e.pointerId;
-      activeDrawPointerTypeRef.current = e.pointerType;
-
-      const { x, y } = getCanvasCoords(e);
-      const eraserRadius = Math.max(16, eraserSize / 2);
-      const hitStrokes = strokes.filter(s => isStrokeHit(s, x, y, eraserRadius));
-      if (hitStrokes.length > 0) {
-        didEraseInGestureRef.current = true;
-        setStrokes(prev => prev.filter(s => !hitStrokes.some(hs => hs.id === s.id)));
-      }
-      return;
-    }
-
-    // 7. 일반 필기 시작
-    isDrawingRef.current = true;
-    activeDrawPointerIdRef.current = e.pointerId;
-    activeDrawPointerTypeRef.current = e.pointerType;
-    strokeDragStartSnapshotRef.current = [...strokes];
-
-    const { x, y } = getCanvasCoords(e);
-    const pressure = e.pressure > 0 ? e.pressure : 0.5;
-
-    const currentSize = tool === 'pen' ? penSize : tool === 'highlighter' ? highlighterSize : eraserSize;
-    const currentColor = tool === 'highlighter' ? highlighterColor : penColor;
-
-    const newStroke: Stroke = {
-      id: `stroke_${Date.now()}_${Math.random()}`,
-      tool: tool as 'pen' | 'highlighter' | 'eraser',
-      color: currentColor,
-      size: currentSize,
-      points: [{ x, y, pressure }]
-    };
-
-    currentStrokeRef.current = newStroke;
-
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        drawSingleStroke(ctx, newStroke);
-      }
-    }
-  };
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.cancelable) {
-      e.preventDefault();
-    }
-
-    if (e.pointerType === 'pen') {
-      lastPenTimeRef.current = Date.now();
-    }
-
-    // 1. 펜 모드에서 손가락 1개로 드래그 위치 이동 중일 때
-    if (isFingerPanningRef.current && e.pointerType === 'touch') {
-      const dx = e.clientX - fingerPanStartRef.current.x;
-      const dy = e.clientY - fingerPanStartRef.current.y;
-      setPanOffset(clampPanOffset({
-        x: fingerPanStartRef.current.pan.x + dx,
-        y: fingerPanStartRef.current.pan.y + dy
-      }, zoomScale));
-      return;
-    }
-
-    // 2. 필기 중이 아니거나, 필기 중인 포인터 ID와 일치하지 않는 이벤트는 무시 (손바닥 터치 무시!)
-    if (!isDrawingRef.current || e.pointerId !== activeDrawPointerIdRef.current) {
-      return;
-    }
-
-    // 3. 손가락 터치 필기 중일 때 두 손가락 핀치 제스처가 시작된 경우에만 필기 취소
-    if (activeDrawPointerTypeRef.current === 'touch' && isGestureRef.current) {
-      isDrawingRef.current = false;
-      currentStrokeRef.current = null;
-      activeDrawPointerIdRef.current = null;
-      activeDrawPointerTypeRef.current = null;
-      return;
-    }
-
-    const { x, y } = getCanvasCoords(e);
-
-    // 4. 획 지우개 모드: 이동 경로에서 스친 획 전체 삭제
-    if (tool === 'eraser' && eraserMode === 'stroke') {
-      const eraserRadius = Math.max(16, eraserSize / 2);
-      setStrokes(prev => {
-        const remaining = prev.filter(s => !isStrokeHit(s, x, y, eraserRadius));
-        if (remaining.length !== prev.length) {
-          didEraseInGestureRef.current = true;
-        }
-        return remaining;
-      });
-      return;
-    }
-
-    // 5. 일반 필기 및 영역(픽셀) 지우개 실시간 증분 렌더링 (초당 120회 초고속 직결)
-    if (!currentStrokeRef.current) return;
-    const currentStroke = currentStrokeRef.current;
-    const pressure = e.pressure > 0 ? e.pressure : 0.5;
-    currentStroke.points.push({ x, y, pressure });
-
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        const pts = currentStroke.points;
-        if (pts.length >= 2) {
-          ctx.save();
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-
-          if (currentStroke.tool === 'highlighter') {
-            ctx.globalAlpha = 0.35;
-            ctx.strokeStyle = currentStroke.color;
-            ctx.lineWidth = currentStroke.size;
-          } else if (currentStroke.tool === 'eraser') {
-            ctx.globalCompositeOperation = 'destination-out';
-            ctx.lineWidth = currentStroke.size;
-          } else {
-            ctx.globalAlpha = 1.0;
-            ctx.strokeStyle = currentStroke.color;
-            ctx.lineWidth = currentStroke.size;
-          }
-
-          const p1 = pts[pts.length - 2];
-          const p2 = pts[pts.length - 1];
-
-          ctx.beginPath();
-          ctx.moveTo(p1.x, p1.y);
-          ctx.lineTo(p2.x, p2.y);
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-    }
-  };
-
-  const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e) {
-      activePointersRef.current.delete(e.pointerId);
-      if (e.pointerType === 'pen') {
-        lastPenTimeRef.current = Date.now();
-      }
-    }
-
-    // 손가락 팬 종료
-    if (isFingerPanningRef.current) {
-      isFingerPanningRef.current = false;
-    }
-
-    // 획 지우개 종료 및 Undo 히스토리 기록
-    if (isDrawingRef.current && tool === 'eraser' && eraserMode === 'stroke') {
-      if (!e || e.pointerId === activeDrawPointerIdRef.current) {
-        isDrawingRef.current = false;
-        activeDrawPointerIdRef.current = null;
-        activeDrawPointerTypeRef.current = null;
-        if (didEraseInGestureRef.current) {
-          setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
-          setRedoStack([]);
-          didEraseInGestureRef.current = false;
-        }
-      }
-      return;
-    }
-
-    // 일반 필기 종료 처리 (현재 필기 중인 포인터가 떼어졌을 때만 저장)
-    if (isDrawingRef.current && (!e || e.pointerId === activeDrawPointerIdRef.current || e.pointerType === 'pen')) {
-      isDrawingRef.current = false;
-      activeDrawPointerIdRef.current = null;
-      activeDrawPointerTypeRef.current = null;
-
-      const finishedStroke = currentStrokeRef.current;
-      if (finishedStroke && finishedStroke.points.length > 0) {
-        setUndoStack(prev => [...prev.slice(-30), strokeDragStartSnapshotRef.current]);
-        setRedoStack([]);
-        isInternalStrokeAddRef.current = true; // 굿노트 방식: 캔버스 재렌더링 생략
-        setStrokes(prev => [...prev, { ...finishedStroke, points: [...finishedStroke.points] }]);
-      }
-      currentStrokeRef.current = null;
-    } else if (isDrawingRef.current && !e) {
-      isDrawingRef.current = false;
-      activeDrawPointerIdRef.current = null;
-      activeDrawPointerTypeRef.current = null;
-      currentStrokeRef.current = null;
-    }
-  };
-
-  // 포인터 취소 이벤트 (iOS Safari 손바닥 분리 처리)
-  const handlePointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    activePointersRef.current.delete(e.pointerId);
-
-    // 취소된 포인터가 현재 필기 중인 포인터인 경우에만 획 보존 후 종료
-    if (e.pointerId === activeDrawPointerIdRef.current || e.pointerType === 'pen') {
-      handlePointerUp(e);
-    }
-  };
 
   // 실행 취소 & 다시 실행 (획 추가 및 획 삭제 모두 지원)
   const handleUndo = useCallback(() => {
@@ -1156,6 +680,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     return { x: clampedX, y: clampedY };
   }, [paperBaseWidth, paperBaseHeight]);
 
+  // 펜 전용 모드 시 캔버스 상에서 한 손가락 팬(스크롤) 이동 처리
+  const handleFingerPanMove = useCallback((dx: number, dy: number) => {
+    setPanOffset(prev => clampPanOffset({ x: prev.x + dx, y: prev.y + dy }, zoomScale));
+  }, [clampPanOffset, zoomScale]);
+
   // [1] 한 페이지 전체 보기 (최대 축소: 한 페이지 전체가 한눈에 다 보임)
   const handleFitPage = useCallback(() => {
     const { fitPageScale: targetScale } = getFitScales();
@@ -1247,32 +776,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // 삼성노트 REA 2손가락 핀치 줌 & 팬
+  // 2손가락 핀치 줌 & 팬 (캔버스 필기 상태와 완전 격리)
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const onTouchStart = (e: TouchEvent) => {
-      // 애플펜슬 필기 중이거나 글자 사이 펜을 잠깐 뗀 직후(1.2초) 손바닥이 닿아 발생하는 터치는 핀치 제스처로 오인하지 않도록 완벽 무시
-      const isRecentPenUser = Date.now() - lastPenTimeRef.current < 1200;
-      if ((isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') || isRecentPenUser) {
-        return;
-      }
-
       if (e.touches.length >= 2) {
         isGestureRef.current = true;
-
-        if (isDrawingRef.current) {
-          isDrawingRef.current = false;
-          currentStrokeRef.current = null;
-          activeDrawPointerIdRef.current = null;
-          activeDrawPointerTypeRef.current = null;
-          renderCanvas();
-        }
-        if (isFingerPanningRef.current) {
-          isFingerPanningRef.current = false;
-        }
-
         const t1 = e.touches[0];
         const t2 = e.touches[1];
         initialTouchDistanceRef.current = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
@@ -1286,11 +797,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      const isRecentPenUser = Date.now() - lastPenTimeRef.current < 1200;
-      if ((isDrawingRef.current && activeDrawPointerTypeRef.current === 'pen') || isRecentPenUser) {
-        return;
-      }
-
       if (isGestureRef.current && e.touches.length >= 2) {
         if (e.cancelable) e.preventDefault();
         const t1 = e.touches[0];
@@ -1335,12 +841,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           isGestureRef.current = false;
         }, 150);
       }
-      if (e.touches.length === 0) {
-        activePointersRef.current.clear();
-        isDrawingRef.current = false;
-        isFingerPanningRef.current = false;
-        activeDrawPointerIdRef.current = null;
-      }
     };
 
     const onSelectStart = (e: Event) => {
@@ -1360,22 +860,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       container.removeEventListener('touchcancel', onTouchEnd);
       container.removeEventListener('selectstart', onSelectStart);
     };
-  }, [zoomScale, panOffset, clampPanOffset]);
-
-  // 전역 window 레벨 포인터 종료 캡처 (애플펜슬을 빠르게 뗐을 때 캔버스 영역 밖으로 벗어나 pointerup이 유실되는 사파리 버그 완벽 방어)
-  useEffect(() => {
-    const handleGlobalPointerUp = (e: PointerEvent) => {
-      if (isDrawingRef.current && (e.pointerId === activeDrawPointerIdRef.current || e.pointerType === 'pen')) {
-        handlePointerUp(e as any);
-      }
-    };
-    window.addEventListener('pointerup', handleGlobalPointerUp);
-    window.addEventListener('pointercancel', handleGlobalPointerUp);
-    return () => {
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-      window.removeEventListener('pointercancel', handleGlobalPointerUp);
-    };
-  }, []);
+  }, [zoomScale, panOffset, clampPanOffset, getFitScales]);
 
   // 팝오버 메뉴 외부 클릭 시 자동 닫기 (이벤트 버블링 및 렌더링 노드 분리 방어)
   useEffect(() => {
@@ -3056,30 +2541,31 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             A4_HEIGHT={A4_HEIGHT}
           />
 
-          {/* Layer 2: 필기 캔버스 */}
-          <canvas
-            ref={canvasRef}
-            className="student-canvas"
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerCancel}
-            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: '100%',
-              display: 'block',
-              zIndex: tool === 'image' && selectedImageId ? 2 : 4,
-              pointerEvents: tool === 'image' ? 'none' : 'auto',
-              touchAction: 'none',
-              WebkitTouchCallout: 'none',
-              WebkitUserSelect: 'none',
-              userSelect: 'none',
-              WebkitTapHighlightColor: 'transparent'
+          {/* Layer 2: 최우선 독립 필기 캔버스 엔진 */}
+          <DrawingCanvas
+            strokes={strokes}
+            onStrokeComplete={handleStrokeComplete}
+            onStrokesChange={handleStrokesChange}
+            onUndoSnapshot={handleUndoSnapshot}
+            tool={tool}
+            penColor={penColor}
+            penSize={penSize}
+            highlighterColor={highlighterColor}
+            highlighterSize={highlighterSize}
+            eraserSize={eraserSize}
+            eraserMode={eraserMode}
+            penOnlyMode={penOnlyMode}
+            onAutoPenModeDetected={() => {
+              if (!penOnlyMode) {
+                setPenOnlyMode(true);
+                try { localStorage.setItem('lbw_pen_mode', 'true'); } catch {}
+              }
             }}
+            fullPageBackground={fullPageBackground}
+            A4_WIDTH={A4_WIDTH}
+            A4_HEIGHT={A4_HEIGHT}
+            selectedImageId={selectedImageId}
+            onFingerPanMove={handleFingerPanMove}
           />
 
           {/* 텍스트 타이핑 오버레이 레이어 */}
