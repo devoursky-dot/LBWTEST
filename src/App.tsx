@@ -125,11 +125,18 @@ export default function App() {
   // --- 학생 QR 수업 모드 감지 (?lessonId=...) ---
   const [studentLessonParam] = useState<{ lessonId: string; title: string } | null>(() => {
     if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const lessonId = params.get('lessonId');
-      const title = params.get('title') || '';
-      if (lessonId) {
-        return { lessonId, title: decodeURIComponent(title) };
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const lessonId = params.get('lessonId');
+        let title = params.get('title') || '';
+        if (lessonId) {
+          try {
+            title = decodeURIComponent(title);
+          } catch {}
+          return { lessonId, title };
+        }
+      } catch (e) {
+        console.error('URL 파라미터 파싱 오류:', e);
       }
     }
     return null;
@@ -708,8 +715,13 @@ export default function App() {
     setActiveModal('qr_lesson_viewer');
 
     const cleanTitle = item.name.replace('[QR수업]', '').trim();
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const studentUrl = `${origin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
+    // 로컬호스트(localhost)에서 수업 실행 시에도 외부 스마트폰/아이패드가 접속할 수 있도록 Vercel 라이브 도메인 연동
+    const baseOrigin = typeof window !== 'undefined'
+      ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? 'https://lbwtest.vercel.app'
+          : window.location.origin)
+      : 'https://lbwtest.vercel.app';
+    const studentUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
 
     try {
       const qrDataUrl = await QRCode.toDataURL(studentUrl, {
@@ -1893,7 +1905,10 @@ export default function App() {
                     style={{ flex: 1, fontSize: '12px', border: '1px solid var(--g-border)' }}
                     onClick={() => {
                       const cleanTitle = activeQrLesson.name.replace('[QR수업]', '').trim();
-                      const url = `${window.location.origin}/?lessonId=${activeQrLesson.folderId || activeQrLesson.id}&title=${encodeURIComponent(cleanTitle)}`;
+                      const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                        ? 'https://lbwtest.vercel.app'
+                        : window.location.origin;
+                      const url = `${baseOrigin}/?lessonId=${activeQrLesson.folderId || activeQrLesson.id}&title=${encodeURIComponent(cleanTitle)}`;
                       navigator.clipboard.writeText(url);
                       showToast('✅ 학생 접속 URL이 복사되었습니다.');
                     }}

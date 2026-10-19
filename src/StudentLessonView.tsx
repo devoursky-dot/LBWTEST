@@ -162,9 +162,25 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [textItems, setTextItems] = useState<TextItem[]>([]);
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
 
-  // --- 4. 필기 도구 상태 (삼성노트 REA 분리 모드) ---
+  // --- 4. 용지 테마 및 필기 도구 상태 ---
+  const [paperTheme, setPaperTheme] = useState<'white' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('lbw_paper_theme');
+      return (saved as 'white' | 'dark') || 'white'; // 기본값: 실제 공책 같은 깨끗한 흰색 종이
+    } catch {
+      return 'white';
+    }
+  });
+
   const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text' | 'image'>('pen');
-  const [penColor, setPenColor] = useState<string>('#ffffff');
+  const [penColor, setPenColor] = useState<string>(() => {
+    try {
+      const theme = localStorage.getItem('lbw_paper_theme') || 'white';
+      return theme === 'white' ? '#0f172a' : '#ffffff';
+    } catch {
+      return '#0f172a';
+    }
+  });
   const [penSize, setPenSize] = useState<number>(3);
   const [highlighterColor, setHighlighterColor] = useState<string>('#fde047');
   const [highlighterSize, setHighlighterSize] = useState<number>(18);
@@ -223,8 +239,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const initialPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const initialCenterRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // 첫 터치 시 자동 전체화면 플래그
-  const hasRequestedFullscreenRef = useRef(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -249,40 +263,48 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     showToast(`👨‍🎓 ${info.grade}학년 ${info.classNum}반 ${info.name} 학생으로 등록되었습니다.`);
   };
 
-  // 전체화면 토글
+  // 전체화면 토글 (iOS Safari 등 미지원 환경 안전 방어)
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().catch(() => {});
+    try {
+      const doc = document as any;
+      const docEl = document.documentElement as any;
+      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+        if (typeof docEl.requestFullscreen === 'function') {
+          docEl.requestFullscreen().catch(() => {});
+          setIsFullscreen(true);
+        } else if (typeof docEl.webkitRequestFullscreen === 'function') {
+          docEl.webkitRequestFullscreen();
+          setIsFullscreen(true);
+        } else {
+          showToast('ℹ️ 모바일 사파리는 브라우저 보안 정책상 전체화면 API를 지원하지 않습니다.');
+        }
+      } else {
+        if (typeof doc.exitFullscreen === 'function') {
+          doc.exitFullscreen().catch(() => {});
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          doc.webkitExitFullscreen();
+        }
+        setIsFullscreen(false);
       }
-      setIsFullscreen(false);
+    } catch (e) {
+      console.warn('전체화면 전환 예외:', e);
     }
   };
 
-  // 사용자 최초 터치/클릭 시 자동 전체화면 전환 (브라우저 User Gesture 보안 정책 준수)
-  const tryAutoFullscreen = useCallback(() => {
-    if (!hasRequestedFullscreenRef.current && !document.fullscreenElement) {
-      hasRequestedFullscreenRef.current = true;
-      document.documentElement.requestFullscreen().then(() => {
-        setIsFullscreen(true);
-      }).catch(() => {});
+  // 용지 테마 토글 (흰색 종이 ↔ 다크 모드)
+  const handleTogglePaperTheme = () => {
+    const next = paperTheme === 'white' ? 'dark' : 'white';
+    setPaperTheme(next);
+    try {
+      localStorage.setItem('lbw_paper_theme', next);
+    } catch {}
+    if (next === 'white' && (penColor === '#ffffff' || penColor === '#f8fafc')) {
+      setPenColor('#0f172a');
+    } else if (next === 'dark' && (penColor === '#0f172a' || penColor === '#000000' || penColor === '#1e293b')) {
+      setPenColor('#ffffff');
     }
-  }, []);
-
-  useEffect(() => {
-    const handleFirstGesture = () => {
-      tryAutoFullscreen();
-    };
-    window.addEventListener('pointerdown', handleFirstGesture, { once: true });
-    window.addEventListener('touchstart', handleFirstGesture, { once: true });
-    return () => {
-      window.removeEventListener('pointerdown', handleFirstGesture);
-      window.removeEventListener('touchstart', handleFirstGesture);
-    };
-  }, [tryAutoFullscreen]);
+    showToast(next === 'white' ? '📄 깨끗한 흰색 A4 공책 모드' : '🌙 눈이 편한 다크 모드 공책');
+  };
 
   // ==========================================================================
   // [A4 용지 규격 캔버스 초기화]
@@ -1612,13 +1634,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       <div className="toolbar-divider" />
 
-      {/* [B] 퀵 컬러 스와치 (원터치 빠른 색상 3개: 흰색, 빨강, 파랑) */}
+      {/* [B] 퀵 컬러 스와치 (원터치 빠른 색상 3개: 용지 테마에 맞춰 선명하게) */}
       <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexShrink: 0 }}>
-        {[
+        {(paperTheme === 'white' ? [
+          { color: '#0f172a', label: '검정' },
+          { color: '#ef4444', label: '빨강' },
+          { color: '#2563eb', label: '파랑' }
+        ] : [
           { color: '#ffffff', label: '흰색' },
           { color: '#ef4444', label: '빨강' },
-          { color: '#3b82f6', label: '파랑' }
-        ].map(({ color, label }) => (
+          { color: '#38bdf8', label: '파랑' }
+        ]).map(({ color, label }) => (
           <button
             key={color}
             type="button"
@@ -1627,7 +1653,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               backgroundColor: color,
               width: '20px',
               height: '20px',
-              border: '1px solid rgba(255,255,255,0.25)'
+              border: color === '#ffffff' ? '1px solid #94a3b8' : '1px solid rgba(255,255,255,0.25)',
+              boxShadow: penColor === color ? `0 0 0 2px var(--g-bg-main), 0 0 0 3.5px ${color}` : 'none'
             }}
             onClick={() => {
               setPenColor(color);
@@ -1639,6 +1666,30 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           />
         ))}
       </div>
+
+      <div className="toolbar-divider" />
+
+      {/* 용지 테마 원터치 토글 (흰색 모눈종이 ↔ 다크 모드) */}
+      <button
+        id="btn-toggle-paper-theme"
+        type="button"
+        className="student-tool-btn"
+        onClick={handleTogglePaperTheme}
+        style={{
+          padding: '3px 8px',
+          height: '34px',
+          fontSize: '11.5px',
+          background: paperTheme === 'white' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+          border: paperTheme === 'white' ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+          color: paperTheme === 'white' ? '#93c5fd' : '#cbd5e1',
+          gap: '3px',
+          flexShrink: 0,
+          fontWeight: 600
+        }}
+        title="용지 테마: 흰색 A4 종이 ↔ 다크 모드 전환"
+      >
+        {paperTheme === 'white' ? '📄 흰색 종이' : '🌙 다크 모드'}
+      </button>
 
       <div className="toolbar-divider" />
 
@@ -2816,6 +2867,43 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
             <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
+            {/* 용지 배경 테마 (흰색 A4 종이 vs 다크 모드) */}
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
+                📄 용지 테마 (배경 색상)
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${paperTheme === 'white' ? 'active' : ''}`}
+                  onClick={() => {
+                    setPaperTheme('white');
+                    try { localStorage.setItem('lbw_paper_theme', 'white'); } catch {}
+                    if (penColor === '#ffffff' || penColor === '#f8fafc') setPenColor('#0f172a');
+                    showToast('📄 깨끗한 흰색 A4 모눈종이 모드');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px', fontWeight: 600 }}
+                >
+                  📄 흰색 종이 (표준)
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${paperTheme === 'dark' ? 'active' : ''}`}
+                  onClick={() => {
+                    setPaperTheme('dark');
+                    try { localStorage.setItem('lbw_paper_theme', 'dark'); } catch {}
+                    if (penColor === '#0f172a' || penColor === '#000000') setPenColor('#ffffff');
+                    showToast('🌙 다크 모드 공책');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px', fontWeight: 600 }}
+                >
+                  🌙 다크 모드
+                </button>
+              </div>
+            </div>
+
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
+
             {/* 터치 모드 vs 펜 모드 (팜리젝션) */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
@@ -3085,10 +3173,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             transformOrigin: 'center center',
             transition: isGestureRef.current ? 'none' : 'transform 0.15s ease-out, width 0.2s ease, height 0.2s ease',
             position: 'relative',
-            boxShadow: '0 12px 48px rgba(0, 0, 0, 0.75), 0 0 0 1.5px rgba(255, 255, 255, 0.18)',
-            border: '1px solid rgba(255, 255, 255, 0.14)',
+            boxShadow: paperTheme === 'white'
+              ? '0 12px 48px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.08)'
+              : '0 12px 48px rgba(0, 0, 0, 0.75), 0 0 0 1.5px rgba(255, 255, 255, 0.18)',
+            border: paperTheme === 'white' ? '1px solid #cbd5e1' : '1px solid rgba(255, 255, 255, 0.14)',
             borderRadius: '8px',
-            background: '#16171a',
+            background: paperTheme === 'white' ? '#ffffff' : '#16171a',
             overflow: 'hidden',
             touchAction: 'none',
             WebkitTouchCallout: 'none',
@@ -3195,6 +3285,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onCanvasPointerDown={() => {
               if (activePopup) setActivePopup(null);
             }}
+            paperTheme={paperTheme}
           />
 
           {/* 텍스트 타이핑 오버레이 레이어 */}

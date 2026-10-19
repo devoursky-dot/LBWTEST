@@ -123,7 +123,8 @@ export function drawSingleStroke(ctx: CanvasRenderingContext2D, stroke: Stroke):
 export function renderCanvasGridAndStrokes(
   canvas: HTMLCanvasElement,
   strokes: Stroke[],
-  fullPageBackground: string | null
+  fullPageBackground: string | null,
+  paperTheme: 'white' | 'dark' | 'ivory' = 'white'
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -133,7 +134,13 @@ export function renderCanvasGridAndStrokes(
   // 모눈종이 그리드 배경 (전체 배경 PDF/이미지가 없을 때만 모눈종이 표시)
   if (!fullPageBackground) {
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    if (paperTheme === 'white') {
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.06)';
+    } else if (paperTheme === 'ivory') {
+      ctx.strokeStyle = 'rgba(180, 83, 9, 0.08)';
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    }
     ctx.lineWidth = 1;
     const gridSize = 32;
 

@@ -27,6 +27,7 @@ export interface DrawingCanvasProps {
   onFingerPanMove?: (dx: number, dy: number) => void;
   onFingerPanEnd?: () => void;
   onCanvasPointerDown?: () => void;
+  paperTheme?: 'white' | 'dark' | 'ivory';
 }
 
 /**
@@ -56,7 +57,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   selectedImageId,
   onFingerPanMove,
   onFingerPanEnd,
-  onCanvasPointerDown
+  onCanvasPointerDown,
+  paperTheme = 'white'
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -132,8 +134,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       return;
     }
 
-    renderCanvasGridAndStrokes(canvas, strokes, fullPageBackground);
-  }, [strokes, fullPageBackground, A4_WIDTH, A4_HEIGHT]);
+    renderCanvasGridAndStrokes(canvas, strokes, fullPageBackground, paperTheme);
+  }, [strokes, fullPageBackground, A4_WIDTH, A4_HEIGHT, paperTheme]);
 
   // ==========================================================================
   // [네이티브 하드웨어 직결 포인터 이벤트 리스너 (iOS Safari 완벽 방어)]
