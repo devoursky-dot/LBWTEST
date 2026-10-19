@@ -147,7 +147,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [highlighterSize, setHighlighterSize] = useState<number>(18);
   const [eraserSize, setEraserSize] = useState<number>(24);
   const [eraserMode, setEraserMode] = useState<'stroke' | 'pixel'>('stroke'); // 기본값: 획 지우개
-  const [penOnlyMode, setPenOnlyMode] = useState<boolean>(false); // false: 터치 모드, true: 펜 모드 (팜리젝션 & 1손가락 이동)
+  const [penOnlyMode, setPenOnlyMode] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('lbw_pen_mode');
+      return saved === 'true';
+    } catch {
+      return false;
+    }
+  }); // false: 터치 모드, true: 펜 모드 (팜리젝션 & 1손가락 이동)
   const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -459,6 +466,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       lastPenTimeRef.current = Date.now();
       isGestureRef.current = false; // 제스처 즉시 해제
 
+      // 애플펜슬/S펜이 감지되면 자동으로 펜 전용 모드(스마트 팜리젝션)를 활성화하여 손바닥 터치 오작동을 영구 박멸!
+      if (!penOnlyMode) {
+        setPenOnlyMode(true);
+        try { localStorage.setItem('lbw_pen_mode', 'true'); } catch {}
+      }
+
       // 혹시 이전에 손바닥(touch)으로 잘못 시작된 획이 있다면 즉시 파기 (캔버스 전체 clear 없이 조용히 종료)
       if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
         isDrawingRef.current = false;
@@ -517,7 +530,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           currentStrokeRef.current = null;
           activeDrawPointerIdRef.current = null;
           activeDrawPointerTypeRef.current = null;
-          renderCanvas();
         }
         if (isFingerPanningRef.current) {
           isFingerPanningRef.current = false;
@@ -614,7 +626,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       currentStrokeRef.current = null;
       activeDrawPointerIdRef.current = null;
       activeDrawPointerTypeRef.current = null;
-      renderCanvas();
       return;
     }
 
@@ -1621,6 +1632,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           onClick={() => {
             const next = !penOnlyMode;
             setPenOnlyMode(next);
+            try { localStorage.setItem('lbw_pen_mode', String(next)); } catch {}
             showToast(next ? '✏️ 펜 모드 ON (펜 전용 필기, 손가락은 화면 이동)' : '🖐️ 터치 모드 ON (손가락과 펜 모두 필기)');
           }}
           style={{
