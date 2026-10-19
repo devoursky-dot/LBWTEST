@@ -26,6 +26,7 @@ export interface DrawingCanvasProps {
   selectedImageId: string | null;
   onFingerPanMove?: (dx: number, dy: number) => void;
   onFingerPanEnd?: () => void;
+  onCanvasPointerDown?: () => void;
 }
 
 /**
@@ -54,7 +55,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   A4_HEIGHT,
   selectedImageId,
   onFingerPanMove,
-  onFingerPanEnd
+  onFingerPanEnd,
+  onCanvasPointerDown
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -85,6 +87,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onUndoSnapshot,
     onFingerPanMove,
     onFingerPanEnd,
+    onCanvasPointerDown,
     strokes
   });
 
@@ -103,6 +106,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onUndoSnapshot,
     onFingerPanMove,
     onFingerPanEnd,
+    onCanvasPointerDown,
     strokes
   };
 
@@ -150,6 +154,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     const handleNativePointerDown = (e: PointerEvent) => {
       const p = propsRef.current;
+
+      // 캔버스 터치 즉시 상단 열려있는 도구 팝오버 메뉴 즉시 닫기
+      if (p.onCanvasPointerDown) {
+        p.onCanvasPointerDown();
+      }
 
       // 텍스트나 이미지 편집 도구 중일 때는 캔버스 필기 패스
       if (p.tool === 'text' || p.tool === 'image') return;

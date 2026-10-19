@@ -13,6 +13,7 @@ import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/Embedde
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
 import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
+import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
 
 interface StudentInfo {
   grade: string;
@@ -196,6 +197,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [editingImageItem, setEditingImageItem] = useState<EmbeddedImageItem | null>(null);
 
   const imagePdfInputRef = useRef<HTMLInputElement>(null);
+  const notebookFileInputRef = useRef<HTMLInputElement>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -900,9 +902,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
   }, []);
 
-  // 팝오버 메뉴 외부 클릭 시 자동 닫기 (이벤트 버블링 및 렌더링 노드 분리 방어)
+  // 팝오버 메뉴 외부 터치/클릭 시 즉시 자동 닫기 (화면 가림 원천 해결)
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
+    const handleOutsideInteraction = (e: Event) => {
       const target = e.target as HTMLElement;
       if (!target || !target.isConnected) return;
       if (!target.closest('.student-toolbar') && !target.closest('.samsung-tool-popup')) {
@@ -910,12 +912,19 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       }
     };
     if (activePopup) {
+      // 30ms 후 캡처 단계에서 pointerdown/touchstart/mousedown/click 모두 감지하여 터치 즉시 닫힘 보장
       const timer = setTimeout(() => {
-        document.addEventListener('click', handleClickOutside);
-      }, 50);
+        document.addEventListener('pointerdown', handleOutsideInteraction, { capture: true });
+        document.addEventListener('touchstart', handleOutsideInteraction, { capture: true });
+        document.addEventListener('mousedown', handleOutsideInteraction, { capture: true });
+        document.addEventListener('click', handleOutsideInteraction, { capture: true });
+      }, 30);
       return () => {
         clearTimeout(timer);
-        document.removeEventListener('click', handleClickOutside);
+        document.removeEventListener('pointerdown', handleOutsideInteraction, { capture: true });
+        document.removeEventListener('touchstart', handleOutsideInteraction, { capture: true });
+        document.removeEventListener('mousedown', handleOutsideInteraction, { capture: true });
+        document.removeEventListener('click', handleOutsideInteraction, { capture: true });
       };
     }
   }, [activePopup]);
@@ -1361,6 +1370,58 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
+  // [공책 편집 파일(.lbwnote) 로컬 저장]
+  const handleExportNotebookFile = () => {
+    try {
+      const pagesToExport = [...pages];
+      if (pagesToExport[currentPageIndex]) {
+        pagesToExport[currentPageIndex] = {
+          ...pagesToExport[currentPageIndex],
+          strokes,
+          textItems,
+          fullPageBackground,
+          images: embeddedImages
+        };
+      }
+
+      const res = exportNotebookToFile({
+        lessonTitle,
+        studentInfo,
+        pages: pagesToExport,
+        currentPageIndex,
+        orientation,
+        A4_WIDTH,
+        A4_HEIGHT
+      });
+
+      if (res.success) {
+        showToast(`💾 필기 편집 파일이 저장되었습니다!\n(${res.fileName})`);
+        setActivePopup(null);
+      }
+    } catch (err: any) {
+      console.error('필기 파일 저장 실패:', err);
+      showToast(`❌ 필기 파일 저장 실패: ${err.message || '알 수 없는 오류'}`);
+    }
+  };
+
+  // [공책 편집 파일(.lbwnote / .json) 불러오기]
+  const handleImportNotebookFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    try {
+      showToast(`⏳ '${file.name}' 필기 파일을 불러오는 중입니다...`);
+      const notebook = await importNotebookFromFile(file);
+      applyLoadedPages(notebook.pages, notebook.currentPageIndex, notebook.orientation);
+      showToast(`📂 '${file.name}' 필기 파일(총 ${notebook.pages.length}쪽)을 불러왔습니다! 바로 이어서 편집할 수 있습니다.`);
+      setActivePopup(null);
+    } catch (err: any) {
+      console.error('필기 파일 불러오기 실패:', err);
+      showToast(`❌ 파일 불러오기 실패: ${err.message || '파일을 열 수 없습니다.'}`);
+    }
+  };
+
   // --- 툴바 서브 컴포넌트 렌더러 (1줄/2줄 반응형 레이아웃 공용) ---
   const renderDrawingAndModeTools = () => (
     <>
@@ -1715,6 +1776,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             padding: '2px 7px',
             fontSize: '11px',
             height: '28px',
+            background: 'rgba(59, 130, 246, 0.2)',
+            color: '#93c5fd',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px'
+          }}
+          title="현재까지 필기한 내용을 PDF 파일로 기기에 저장"
+        >
+          <span>📄</span>
+          <span>{isExportingPdf ? '...' : 'PDF'}</span>
+        </button>
+        <button
+          id="btn-quick-export-file"
+          type="button"
+          className="student-tool-btn"
+          onClick={handleExportNotebookFile}
+          style={{
+            padding: '2px 7px',
+            fontSize: '11px',
+            height: '28px',
             background: 'rgba(16, 185, 129, 0.2)',
             color: '#6ee7b7',
             border: '1px solid rgba(16, 185, 129, 0.4)',
@@ -1723,10 +1806,32 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             alignItems: 'center',
             gap: '3px'
           }}
-          title="현재까지 필기한 내용을 PDF 파일로 기기에 저장"
+          title="언제든 다시 불러와 편집할 수 있는 .lbwnote 필기 파일로 기기에 저장"
         >
-          <span>📥</span>
-          <span>{isExportingPdf ? '...' : 'PDF'}</span>
+          <span>💾</span>
+          <span>저장</span>
+        </button>
+        <button
+          id="btn-quick-import-file"
+          type="button"
+          className="student-tool-btn"
+          onClick={() => notebookFileInputRef.current?.click()}
+          style={{
+            padding: '2px 7px',
+            fontSize: '11px',
+            height: '28px',
+            background: 'rgba(234, 179, 8, 0.18)',
+            color: '#fde047',
+            border: '1px solid rgba(234, 179, 8, 0.4)',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px'
+          }}
+          title="기기에 저장된 .lbwnote 필기 파일을 열어 편집 이어하기"
+        >
+          <span>📂</span>
+          <span>열기</span>
         </button>
       </div>
 
@@ -2836,31 +2941,81 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             {/* 필기 보관 & 복원 관리 */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', fontWeight: 600 }}>
-                📑 공책 및 필기 저장 관리
+                📑 공책 및 필기 파일 관리 (PDF 및 편집 파일)
               </div>
+
+              {/* 1. PDF 저장 (인쇄/제출용 고화질 문서) */}
               <button
+                id="btn-settings-export-pdf"
                 type="button"
                 className="student-tool-btn"
                 onClick={handleExportStudentPdf}
                 disabled={isExportingPdf}
                 style={{
-                  justifyContent: 'center',
+                  justifyContent: 'flex-start',
                   fontSize: '11.5px',
                   padding: '7px 10px',
-                  background: 'rgba(59, 130, 246, 0.2)',
+                  background: 'rgba(59, 130, 246, 0.18)',
                   color: '#93c5fd',
                   border: '1px solid rgba(59, 130, 246, 0.4)',
                   fontWeight: 600
                 }}
+                title="모든 쪽의 필기를 고화질 인쇄/제출용 A4 PDF로 다운로드합니다."
               >
-                📥 {isExportingPdf ? 'PDF 생성 중...' : '전체 필기 PDF로 기기에 저장'}
+                <span>📄</span>
+                <span>{isExportingPdf ? 'PDF 생성 중...' : 'PDF 문서로 기기에 저장 (인쇄/제출용)'}</span>
               </button>
+
+              {/* 2. 편집 파일로 내보내기 (.lbwnote) */}
               <button
+                id="btn-settings-export-note-file"
+                type="button"
+                className="student-tool-btn"
+                onClick={handleExportNotebookFile}
+                style={{
+                  justifyContent: 'flex-start',
+                  fontSize: '11.5px',
+                  padding: '7px 10px',
+                  background: 'rgba(16, 185, 129, 0.18)',
+                  color: '#6ee7b7',
+                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                  fontWeight: 600
+                }}
+                title="언제든 다시 불러와 필기를 이어쓸 수 있는 전용 파일(.lbwnote)로 저장합니다."
+              >
+                <span>💾</span>
+                <span>필기 파일로 저장 (.lbwnote 편집 가능)</span>
+              </button>
+
+              {/* 3. 편집 파일 불러오기 (.lbwnote / .json) */}
+              <button
+                id="btn-settings-import-note-file"
+                type="button"
+                className="student-tool-btn"
+                onClick={() => notebookFileInputRef.current?.click()}
+                style={{
+                  justifyContent: 'flex-start',
+                  fontSize: '11.5px',
+                  padding: '7px 10px',
+                  background: 'rgba(234, 179, 8, 0.15)',
+                  color: '#fde047',
+                  border: '1px solid rgba(234, 179, 8, 0.35)',
+                  fontWeight: 600
+                }}
+                title="저장해둔 .lbwnote 필기 파일을 열어 그대로 편집을 이어갑니다."
+              >
+                <span>📂</span>
+                <span>내 기기에서 필기 파일 불러오기 (.lbwnote)</span>
+              </button>
+
+              {/* 4. 새 A4 공책으로 시작 */}
+              <button
+                id="btn-settings-start-fresh"
                 type="button"
                 className="student-tool-btn"
                 onClick={handleStartFreshNotebook}
                 style={{
-                  justifyContent: 'center',
+                  justifyContent: 'flex-start',
                   fontSize: '11.5px',
                   padding: '7px 10px',
                   background: 'rgba(255, 255, 255, 0.06)',
@@ -2868,15 +3023,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   border: '1px solid rgba(255, 255, 255, 0.12)'
                 }}
               >
-                ✨ 새 A4 공책으로 시작 (초기화)
+                <span>✨</span>
+                <span>새 A4 공책으로 시작 (초기화)</span>
               </button>
+
+              {/* 5. 자동 저장된 이전 필기 복원 (기존 캐시) */}
               {hasSavedNote && (
                 <button
                   type="button"
                   className="student-tool-btn"
                   onClick={handleRestoreSavedNote}
                   style={{
-                    justifyContent: 'center',
+                    justifyContent: 'flex-start',
                     fontSize: '11.5px',
                     padding: '7px 10px',
                     background: 'rgba(168, 85, 247, 0.15)',
@@ -2884,9 +3042,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     border: '1px solid rgba(168, 85, 247, 0.35)',
                     fontWeight: 600
                   }}
-                  title="이전에 기기에 저장되었던 필기를 불러옵니다."
+                  title="이전에 기기에 자동 저장되었던 필기를 복원합니다."
                 >
-                  📂 이전 저장된 필기 불러오기
+                  <span>🔄</span>
+                  <span>최근 자동 저장된 필기 복원</span>
                 </button>
               )}
             </div>
@@ -2898,6 +3057,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         ref={containerRef}
         className="student-canvas-wrapper"
         onWheel={handleWheel}
+        onPointerDown={() => {
+          if (activePopup) setActivePopup(null);
+        }}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         style={{
           display: 'flex',
@@ -3030,6 +3192,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             A4_HEIGHT={A4_HEIGHT}
             selectedImageId={selectedImageId}
             onFingerPanMove={handleFingerPanMove}
+            onCanvasPointerDown={() => {
+              if (activePopup) setActivePopup(null);
+            }}
           />
 
           {/* 텍스트 타이핑 오버레이 레이어 */}
@@ -3186,6 +3351,22 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           setCropModalOpen(false);
           setEditingImageItem(null);
         }}
+      />
+
+      {/* 7. 숨김 파일 입력 엘리먼트: PDF/이미지 및 .lbwnote 필기 파일 */}
+      <input
+        type="file"
+        ref={imagePdfInputRef}
+        onChange={handleFileSelect}
+        accept="application/pdf,image/*"
+        style={{ display: 'none' }}
+      />
+      <input
+        type="file"
+        ref={notebookFileInputRef}
+        onChange={handleImportNotebookFile}
+        accept=".lbwnote,.json"
+        style={{ display: 'none' }}
       />
     </div>
   );
