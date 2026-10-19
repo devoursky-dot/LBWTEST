@@ -67,6 +67,19 @@ const EraserIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, co
   </svg>
 );
 
+// 브라우저 새로고침(F5, 모바일 사파리 당겨서 리로드, 백그라운드 탭 리로드 등) 여부 정밀 감지 헬퍼
+const isPageReload = (): boolean => {
+  try {
+    const navEntries = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
+    if (navEntries && navEntries.length > 0) {
+      return navEntries[0].type === 'reload';
+    }
+    // eslint-disable-next-line deprecation/deprecation
+    return (performance as any)?.navigation?.type === 1;
+  } catch {
+    return false;
+  }
+};
 
 export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   lessonId,
@@ -187,7 +200,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [hasSavedNote, setHasSavedNote] = useState(false);
+  const [lastSavedTimeStr, setLastSavedTimeStr] = useState<string>('');
+  const [recoveryPromptDraft, setRecoveryPromptDraft] = useState<any | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const isInitialMountRef = useRef<boolean>(true);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // 학생 제출 고유 ID (1인 1행 유지하여 중복 생성 및 타임아웃 방지)
   const submissionIdRef = useRef<string | null>(null);
@@ -902,28 +920,156 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [activePopup]);
 
-  // QR 접속 시 항상 깨끗한 신규 A4 페이지로 시작 (구버전 오염 데이터의 자동 덮어쓰기 원천 차단)
-  // 단, 학생이 이전 필기를 원할 경우 [설정] 메뉴에서 언제든 명시적으로 복원할 수 있도록 지원
+  // 멀티페이지 데이터 일괄 복원 헬퍼
+  const applyLoadedPages = useCallback((loadedPages: LessonPage[], targetIdx = 0, targetOrientation?: 'portrait' | 'landscape') => {
+    if (!Array.isArray(loadedPages) || loadedPages.length === 0) return;
+    const safeIdx = Math.min(Math.max(0, targetIdx), loadedPages.length - 1);
+    setPages(loadedPages);
+    setCurrentPageIndex(safeIdx);
+    setStrokes(loadedPages[safeIdx].strokes || []);
+    setTextItems(loadedPages[safeIdx].textItems || []);
+    setFullPageBackground(loadedPages[safeIdx].fullPageBackground || null);
+    setEmbeddedImages(loadedPages[safeIdx].images || []);
+    setSelectedImageId(null);
+    setUndoStack([]);
+    setRedoStack([]);
+    if (targetOrientation === 'landscape' || targetOrientation === 'portrait') {
+      setOrientation(targetOrientation);
+    }
+  }, []);
+
+  // [브라우저 탭 닫기/실수 새로고침 방지 경고]
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const hasWork = strokes.length > 0 || pages.some(p => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
+      if (hasWork) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [strokes, pages]);
+
+  // [실시간 디바운스 자동 임시 저장 (0.6초)]
+  // 학생이 획을 긋거나 지울 때마다 기기 로컬에 실시간 자동 보관하여 새로고침 시 100% 복원 보장
+  useEffect(() => {
+    if (isInitialMountRef.current) return;
+
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = setTimeout(() => {
+      try {
+        const pagesToSave = [...pages];
+        if (pagesToSave[currentPageIndex]) {
+          pagesToSave[currentPageIndex] = {
+            ...pagesToSave[currentPageIndex],
+            strokes,
+            textItems,
+            fullPageBackground,
+            images: embeddedImages
+          };
+        }
+
+        const hasAnyContent = pagesToSave.some(
+          p => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground || (p.images?.length || 0) > 0
+        );
+
+        if (!hasAnyContent) {
+          return;
+        }
+
+        const draft = {
+          version: 'a4_v3',
+          lessonId,
+          timestamp: Date.now(),
+          pages: pagesToSave,
+          currentPageIndex,
+          orientation,
+          studentInfo
+        };
+
+        const draftJson = JSON.stringify(draft);
+        localStorage.setItem(`lbw_active_draft_${lessonId}_v3`, draftJson);
+        sessionStorage.setItem(`lbw_session_draft_${lessonId}`, draftJson);
+
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+        setLastSavedTimeStr(timeStr);
+      } catch (err) {
+        console.warn('자동 임시 저장 실패 (로컬 용량 등):', err);
+      }
+    }, 600);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [strokes, textItems, fullPageBackground, embeddedImages, pages, currentPageIndex, orientation, studentInfo, lessonId]);
+
+  // [초기 마운트 시 복구 판별]
+  // 1) 새로고침(Reload)인 경우: 작업 중이던 필기를 100% 무조건 자동 복원! (작업 손실 원천 차단)
+  // 2) 신규 진입(Navigate, QR코드 첫 촬영)인 경우: 깨끗한 신규 A4 페이지로 시작하되,
+  //    최근 저장된 작업이 있으면 상단에 [필기 이어하기] 배너를 제공하여 학생이 선택 가능하게 배려
   useEffect(() => {
     try {
+      const activeDraftRaw = localStorage.getItem(`lbw_active_draft_${lessonId}_v3`) ||
+                             sessionStorage.getItem(`lbw_session_draft_${lessonId}`);
+      const wasReload = isPageReload();
+
+      if (activeDraftRaw) {
+        const draft = JSON.parse(activeDraftRaw);
+        if (draft && draft.version === 'a4_v3' && Array.isArray(draft.pages) && draft.pages.length > 0) {
+          if (wasReload) {
+            // 새로고침 시 무조건 즉시 자동 복원!
+            applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
+            const now = new Date(draft.timestamp || Date.now());
+            const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+            setLastSavedTimeStr(timeStr);
+            showToast('🔄 새로고침 후 작성 중이던 필기를 안전하게 복원했습니다.');
+            isInitialMountRef.current = false;
+            return;
+          } else {
+            // 새 QR 진입인 경우: 신규 깨끗한 A4 페이지로 열리되, 이전 필기 복구 안내 배너 표시
+            setRecoveryPromptDraft(draft);
+            setHasSavedNote(true);
+          }
+        }
+      }
+
+      // 레거시 백업 확인 (설정 팝업용)
       const rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
                        localStorage.getItem(`lbw_lesson_${lessonId}_note`);
       if (rawSaved) {
-        const data = JSON.parse(rawSaved);
-        const hasContent = (data.pages && data.pages.some((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground)) ||
-                           (data.strokes && data.strokes.length > 0);
-        if (hasContent) {
-          setHasSavedNote(true);
-        }
+        setHasSavedNote(true);
       }
     } catch (e) {
-      console.warn('Failed to inspect saved note:', e);
+      console.warn('Failed to inspect draft on mount:', e);
+    } finally {
+      isInitialMountRef.current = false;
     }
-  }, [lessonId]);
+  }, [lessonId, applyLoadedPages]);
 
   // [이전 필기 불러오기 (수동 복원)]
   const handleRestoreSavedNote = useCallback(() => {
     try {
+      // 1. 활성 드래프트 우선 확인
+      const activeDraftRaw = localStorage.getItem(`lbw_active_draft_${lessonId}_v3`) ||
+                             sessionStorage.getItem(`lbw_session_draft_${lessonId}`);
+      if (activeDraftRaw) {
+        const draft = JSON.parse(activeDraftRaw);
+        if (draft && draft.version === 'a4_v3' && Array.isArray(draft.pages) && draft.pages.length > 0) {
+          applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
+          showToast('📂 최근 임시 저장된 필기 내용을 성공적으로 불러왔습니다.');
+          setActivePopup(null);
+          return;
+        }
+      }
+
+      // 2. 제출본 백업 확인
       const rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
                        localStorage.getItem(`lbw_lesson_${lessonId}_note`);
       if (!rawSaved) {
@@ -932,11 +1078,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       }
       const data = JSON.parse(rawSaved);
       if (data.pages && Array.isArray(data.pages) && data.pages.length > 0) {
-        setPages(data.pages);
-        setStrokes(data.pages[0].strokes || []);
-        setTextItems(data.pages[0].textItems || []);
-        setFullPageBackground(data.pages[0].fullPageBackground || null);
-        setEmbeddedImages(data.pages[0].images || []);
+        applyLoadedPages(data.pages, 0, data.orientation);
       } else if (data.strokes) {
         const legacyPage: LessonPage = {
           id: 'page_1',
@@ -945,27 +1087,23 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           fullPageBackground: data.fullPageBackground || null,
           images: data.images || []
         };
-        setPages([legacyPage]);
-        setStrokes(data.strokes);
-        if (data.textItems) setTextItems(data.textItems);
-        if (data.fullPageBackground) setFullPageBackground(data.fullPageBackground);
-        if (data.images) setEmbeddedImages(data.images);
+        applyLoadedPages([legacyPage], 0, data.orientation);
       }
-      if (data.orientation === 'landscape' || data.orientation === 'portrait') {
-        setOrientation(data.orientation);
-      } else {
-        setOrientation('portrait');
-      }
-      setCurrentPageIndex(0);
       showToast('📂 이전 필기 내용을 성공적으로 불러왔습니다.');
       setActivePopup(null);
     } catch (err: any) {
       showToast(`❌ 이전 필기 불러오기 실패: ${err.message}`);
     }
-  }, [lessonId]);
+  }, [lessonId, applyLoadedPages]);
 
   // [깨끗한 새 A4 공책으로 새로 시작]
   const handleStartFreshNotebook = useCallback(() => {
+    try {
+      localStorage.removeItem(`lbw_active_draft_${lessonId}_v3`);
+      sessionStorage.removeItem(`lbw_session_draft_${lessonId}`);
+    } catch {}
+    setRecoveryPromptDraft(null);
+    setLastSavedTimeStr('');
     const newPage: LessonPage = {
       id: `page_${Date.now()}`,
       strokes: [],
@@ -984,7 +1122,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setCurrentPageIndex(0);
     showToast('✨ 깨끗한 새 A4 공책이 생성되었습니다.');
     setActivePopup(null);
-  }, []);
+  }, [lessonId]);
 
   // 학생 필기 포인트 최적화 헬퍼 (좌표 반올림 및 미세 떨림 필터링으로 데이터 60% 경량화)
   const optimizePoints = (points: StrokePoint[]): StrokePoint[] => {
@@ -1101,6 +1239,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       };
       try {
         localStorage.setItem(`lbw_lesson_${lessonId}_note_v2`, JSON.stringify(studentPayload));
+        // 제출 성공 시 작성 중 드래프트 정리 (다음 진입 시 신규 깨끗한 상태 보장)
+        localStorage.removeItem(`lbw_active_draft_${lessonId}_v3`);
+        sessionStorage.removeItem(`lbw_session_draft_${lessonId}`);
       } catch (lsErr) {
         console.warn('LocalStorage 용량 초과(무시하고 클라우드 전송):', lsErr);
       }
@@ -1764,6 +1905,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             {isFullscreen ? '🗗 창모드' : '⛶ 전체화면'}
           </button>
 
+          {/* 실시간 자동 임시 저장 상태 배지 */}
+          {lastSavedTimeStr && (
+            <div
+              id="student-autosave-badge"
+              style={{
+                fontSize: '11px',
+                color: '#34d399',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                background: 'rgba(16, 185, 129, 0.14)',
+                padding: '4px 8px',
+                borderRadius: '6px',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                whiteSpace: 'nowrap'
+              }}
+              title="필기 내용이 기기 로컬에 실시간 자동 임시 저장되고 있습니다. 새로고침해도 안전합니다."
+            >
+              <span>💾</span>
+              <span>자동저장됨 ({lastSavedTimeStr})</span>
+            </div>
+          )}
+
           {/* PDF 로컬 다운로드 저장 버튼 */}
           <button
             id="btn-header-export-pdf"
@@ -1815,6 +1979,77 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           )}
         </div>
       </header>
+
+      {/* 1-1. 이전 필기 복구 안내 배너 (신규 QR 접속 시 최근 필기 드래프트가 남아있을 때 표시) */}
+      {recoveryPromptDraft && (
+        <div
+          id="banner-recovery-prompt"
+          style={{
+            position: 'absolute',
+            top: isTwoTier ? '108px' : '56px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1100,
+            background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98))',
+            border: '1px solid rgba(168, 85, 247, 0.6)',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
+            borderRadius: '12px',
+            padding: '8px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            backdropFilter: 'blur(8px)',
+            maxWidth: 'calc(100vw - 20px)'
+          }}
+        >
+          <div style={{ fontSize: '12.5px', color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>💡</span>
+            <span>이전에 작성하던 필기(총 {recoveryPromptDraft.pages?.length || 1}쪽)가 보관되어 있습니다.</span>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            <button
+              id="btn-confirm-recovery"
+              type="button"
+              onClick={() => {
+                applyLoadedPages(recoveryPromptDraft.pages, recoveryPromptDraft.currentPageIndex ?? 0, recoveryPromptDraft.orientation);
+                setRecoveryPromptDraft(null);
+                showToast('📂 이전 필기 내용을 불러왔습니다.');
+              }}
+              style={{
+                background: '#8b5cf6',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '5px 12px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              필기 이어하기
+            </button>
+            <button
+              id="btn-dismiss-recovery"
+              type="button"
+              onClick={() => {
+                setRecoveryPromptDraft(null);
+                showToast('✨ 새 A4 공책으로 시작합니다.');
+              }}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                color: '#94a3b8',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                borderRadius: '6px',
+                padding: '5px 9px',
+                fontSize: '12px',
+                cursor: 'pointer'
+              }}
+            >
+              새로 시작
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2. 툴바 (2줄 반응형 및 1줄 모드 토글 지원) */}
       {isTwoTier ? (

@@ -35,7 +35,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-body {
+html, body {
   font-family: var(--font-family);
   background-color: var(--g-bg-main);
   color: var(--g-text-main);
@@ -45,6 +45,8 @@ body {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  overscroll-behavior: none;
+  overscroll-behavior-y: none;
 }
 
 /* ==========================================================================
