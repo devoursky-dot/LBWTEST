@@ -1406,6 +1406,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     const unsubscribe = classroomRealtime.subscribe(async (signal) => {
       if (signal.lessonId !== lessonId) return;
 
+      if (signal.type === 'RESET_SESSION') {
+        setIsConnectedToBoard(false);
+        submissionIdRef.current = null;
+        showToast('📢 선생님이 새 수업을 시작하여 세션이 초기화되었습니다.');
+        return;
+      }
+
       const myKey = `${studentInfo.grade}_${studentInfo.classNum}_${studentInfo.studentNum}`;
       const isTargeted = signal.type === 'REQUEST_STUDENT_NOTE' && signal.targetStudentKey === myKey;
       const isAllSync = signal.type === 'REQUEST_ALL_SYNC';

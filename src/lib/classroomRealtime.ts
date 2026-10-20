@@ -16,7 +16,8 @@ export type RealtimeSignalType =
   | 'REQUEST_STUDENT_NOTE'   // 전자칠판 -> 특정 학생 필기 요청
   | 'RESPONSE_STUDENT_NOTE'  // 학생 -> 전자칠판 필기 응답
   | 'REQUEST_ALL_SYNC'       // 전자칠판 -> 전체 학생 일괄 동기화 (PDF 저장 전)
-  | 'STUDENT_SUBMIT';        // 학생이 명시적으로 등록/제출한 경우
+  | 'STUDENT_SUBMIT'         // 학생이 명시적으로 등록/제출한 경우
+  | 'RESET_SESSION';         // 전자칠판 -> 새 수업 시작 시 이전 접속 및 기록 초기화 브로드캐스트
 
 export interface RealtimeSignalPayload {
   type: RealtimeSignalType;
