@@ -1379,6 +1379,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         strokes_data: {
           pages: optimizedPages,
           orientation,
+          paperTheme,
           strokes: optimizedPages[0]?.strokes || [],
           textItems: optimizedPages[0]?.textItems || []
         },
@@ -1408,6 +1409,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           lessonId,
           pages: optimizedPages,
           orientation,
+          paperTheme,
           timestamp: now
         }));
       } catch {}

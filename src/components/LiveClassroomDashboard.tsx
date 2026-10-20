@@ -37,6 +37,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
   const [selectedStudentPageIdx, setSelectedStudentPageIdx] = useState<number>(0);
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
+  const [viewerPaperTheme, setViewerPaperTheme] = useState<'white' | 'dark'>('white');
   const selectedStudentKeyRef = useRef<string | null>(null);
 
   // PDF 일괄 컴파일 상태
@@ -139,6 +140,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
         if (selectedStudentKeyRef.current === recKey) {
           setSelectedStudentNote(record);
+          if (record.strokes_data?.paperTheme) {
+            setViewerPaperTheme(record.strokes_data.paperTheme);
+          }
           setIsLoadingDetail(false);
           showToast(`⚡ ${record.student_name} 학생의 최신 필기가 동기화되었습니다.`);
         }
@@ -240,7 +244,11 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     setSelectedStudentPageIdx(0);
     selectedStudentKeyRef.current = studentItem.key;
 
-    // A. 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
+    // A. 학생 공책 테마 동기화 (기본: 학생이 선택한 테마, 미지정 시 white)
+    const initialTheme = studentItem.submission?.strokes_data?.paperTheme || 'white';
+    setViewerPaperTheme(initialTheme);
+
+    // B. 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
     if (studentItem.submission?.strokes_data?.pages || studentItem.submission?.strokes_data?.strokes) {
       setSelectedStudentNote(studentItem.submission);
       const pages = (Array.isArray(studentItem.submission.strokes_data.pages) && studentItem.submission.strokes_data.pages.length > 0)
@@ -261,7 +269,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       });
     }
 
-    // B. 학생이 실시간 연결(online) 상태인 경우 원격 온디맨드 동기화 요청 신호 전송
+    // C. 학생이 실시간 연결(online) 상태인 경우 원격 온디맨드 동기화 요청 신호 전송
     if (studentItem.status === 'connected') {
       await classroomRealtime.sendSignal({
         type: 'REQUEST_STUDENT_NOTE',
@@ -270,7 +278,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       });
     }
 
-    // C. Supabase DB에서 최신 데이터 조회 (학번 기준 단건 조회)
+    // D. Supabase DB에서 최신 데이터 조회 (학번 기준 단건 조회)
     if (supabase && isSupabaseConfigured) {
       try {
         const { data, error } = await supabase
@@ -285,6 +293,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
         if (!error && data) {
           setSelectedStudentNote(data);
+          if (data.strokes_data?.paperTheme) {
+            setViewerPaperTheme(data.strokes_data.paperTheme);
+          }
           const pages = (Array.isArray(data.strokes_data?.pages) && data.strokes_data.pages.length > 0)
             ? data.strokes_data.pages
             : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
@@ -994,7 +1005,30 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   )}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {/* 종이 배경 테마 토글 버튼 (흰색 종이 vs 칠판 다크모드) */}
+                  <button
+                    type="button"
+                    style={{
+                      background: viewerPaperTheme === 'white' ? '#ffffff' : '#21262d',
+                      color: viewerPaperTheme === 'white' ? '#0f172a' : '#f0f6fc',
+                      border: '1px solid #30363d',
+                      borderRadius: '6px',
+                      padding: '3px 10px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
+                    }}
+                    onClick={() => setViewerPaperTheme(prev => prev === 'white' ? 'dark' : 'white')}
+                    title="공책 배경을 흰색 종이 또는 검정 칠판 모드로 전환합니다."
+                  >
+                    <span>{viewerPaperTheme === 'white' ? '📄 흰색 종이' : '🌙 칠판 모드'}</span>
+                  </button>
+
                   {/* 페이지 넘김 컨트롤 */}
                   {studentPages.length > 1 && (
                     <div
@@ -1067,7 +1101,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 </div>
               </div>
 
-              {/* 필기 종이 뷰어 본문 (검정색 전자칠판 테마 #131314) */}
+              {/* 필기 종이 뷰어 본문 (완벽한 A4 비율 고정 및 배경-필기 1:1 완벽 일체화) */}
               <div
                 style={{
                   flex: 1,
@@ -1079,17 +1113,22 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   background: '#0a0d12'
                 }}
               >
+                {/* A4 용지 실제 시트 (수학적으로 왜곡 없는 A4 가로/세로 비율 보장) */}
                 <div
                   style={{
                     position: 'relative',
-                    width: '100%',
+                    width: isPortrait
+                      ? 'min(100%, calc(72vh * 1130 / 1600))'
+                      : 'min(100%, calc(72vh * 1600 / 1130))',
                     aspectRatio: `${docWidth} / ${docHeight}`,
-                    maxHeight: '74vh',
-                    background: '#131314', // <=== 검정색 칠판 공책 배경 복원
-                    border: '1px solid #30363d',
+                    maxHeight: '72vh',
+                    background: viewerPaperTheme === 'white' ? '#ffffff' : '#131314',
+                    border: viewerPaperTheme === 'white' ? '1px solid #cbd5e1' : '1px solid #30363d',
                     borderRadius: '8px',
                     overflow: 'hidden',
-                    boxShadow: 'inset 0 0 24px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
+                    boxShadow: viewerPaperTheme === 'white'
+                      ? '0 12px 36px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.06)'
+                      : 'inset 0 0 24px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center'
@@ -1116,84 +1155,98 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     </div>
                   )}
 
-                  {/* 은은한 모눈종이 배경 */}
-                  <div
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)',
-                      backgroundSize: '24px 24px',
-                      pointerEvents: 'none'
-                    }}
-                  />
-
-                  {/* 전체 배경 이미지 (PDF 또는 학습지) */}
-                  {currentPageData.fullPageBackground && (
-                    <img
-                      src={currentPageData.fullPageBackground}
-                      alt="Worksheet Background"
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'contain',
-                        pointerEvents: 'none',
-                        zIndex: 1
-                      }}
-                    />
-                  )}
-
-                  {/* 임베디드 문제/스티커 이미지들 */}
-                  {(currentPageData.images || []).map((img: any, idx: number) => {
-                    const src = img.src || img.dataUrl;
-                    if (!src) return null;
-                    return (
-                      <img
-                        key={img.id || idx}
-                        src={src}
-                        alt="Embedded Problem"
-                        style={{
-                          position: 'absolute',
-                          left: `${(img.x / docWidth) * 100}%`,
-                          top: `${(img.y / docHeight) * 100}%`,
-                          width: `${(img.width / docWidth) * 100}%`,
-                          height: `${(img.height / docHeight) * 100}%`,
-                          objectFit: 'fill',
-                          pointerEvents: 'none',
-                          borderRadius: '4px',
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-                          zIndex: 2
-                        }}
-                      />
-                    );
-                  })}
-
-                  {/* 벡터 스트로크 SVG 렌더러 (정확한 1600x1130 / 1130x1600 viewBox) */}
+                  {/* 💥 통합 고화질 SVG 렌더러 (배경 이미지와 스트로크가 동일한 1600x1130 좌표계에 1:1 완벽 일체화) */}
                   <svg
                     viewBox={`0 0 ${docWidth} ${docHeight}`}
-                    preserveAspectRatio="xMidYMid meet"
+                    preserveAspectRatio="none"
                     style={{
                       position: 'absolute',
                       inset: 0,
                       width: '100%',
                       height: '100%',
-                      pointerEvents: 'none',
-                      zIndex: 3
+                      display: 'block',
+                      pointerEvents: 'none'
                     }}
                   >
+                    {/* 1. 용지 바탕색 */}
+                    <rect
+                      x="0"
+                      y="0"
+                      width={docWidth}
+                      height={docHeight}
+                      fill={viewerPaperTheme === 'white' ? '#ffffff' : '#131314'}
+                    />
+
+                    {/* 2. 모눈종이 패턴 그리드 (배경 이미지가 없거나 칠판 모드일 때) */}
+                    {!currentPageData.fullPageBackground && (
+                      <g>
+                        <defs>
+                          <pattern
+                            id={`grid-${docWidth}-${docHeight}`}
+                            width="32"
+                            height="32"
+                            patternUnits="userSpaceOnUse"
+                          >
+                            <path
+                              d="M 32 0 L 0 0 0 32"
+                              fill="none"
+                              stroke={viewerPaperTheme === 'white' ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'}
+                              strokeWidth="1"
+                            />
+                          </pattern>
+                        </defs>
+                        <rect width={docWidth} height={docHeight} fill={`url(#grid-${docWidth}-${docHeight})`} />
+                      </g>
+                    )}
+
+                    {/* 3. A4 전체 배경 이미지 (PDF 또는 학습지) - viewBox 안에서 xMidYMid meet로 동일하게 맞춤 */}
+                    {currentPageData.fullPageBackground && (
+                      <image
+                        href={currentPageData.fullPageBackground}
+                        x="0"
+                        y="0"
+                        width={docWidth}
+                        height={docHeight}
+                        preserveAspectRatio="xMidYMid meet"
+                      />
+                    )}
+
+                    {/* 4. 임베디드 문제/스티커 이미지들 */}
+                    {(currentPageData.images || []).map((img: any, idx: number) => {
+                      const src = img.src || img.dataUrl;
+                      if (!src) return null;
+                      return (
+                        <image
+                          key={img.id || idx}
+                          href={src}
+                          x={img.x}
+                          y={img.y}
+                          width={img.width}
+                          height={img.height}
+                          preserveAspectRatio="none"
+                        />
+                      );
+                    })}
+
+                    {/* 5. 벡터 스트로크 (학생 손글씨 필기) - 배경과 동일한 좌표계에 1:1 완벽 렌더링 */}
                     {(currentPageData.strokes || []).map((stroke: any, idx: number) => {
                       if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;
                       let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
                       for (let i = 1; i < stroke.points.length; i++) {
                         pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
                       }
+                      let strokeColor = stroke.color;
+                      if (viewerPaperTheme === 'white' && (strokeColor === '#ffffff' || strokeColor === '#f8fafc')) {
+                        strokeColor = '#0f172a';
+                      } else if (viewerPaperTheme === 'dark' && (strokeColor === '#000000' || strokeColor === '#0f172a')) {
+                        strokeColor = '#f8fafc';
+                      }
                       return (
                         <path
                           key={stroke.id || idx}
                           d={pathData}
                           fill="none"
-                          stroke={stroke.color || '#ffffff'}
+                          stroke={strokeColor || (viewerPaperTheme === 'white' ? '#0f172a' : '#ffffff')}
                           strokeWidth={stroke.size || 3}
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -1201,27 +1254,27 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                         />
                       );
                     })}
-                  </svg>
 
-                  {/* 텍스트 아이템 렌더러 (백분율 좌표) */}
-                  {(currentPageData.textItems || []).map((item: any, idx: number) => (
-                    <div
-                      key={item.id || idx}
-                      style={{
-                        position: 'absolute',
-                        left: `${(item.x / docWidth) * 100}%`,
-                        top: `${(item.y / docHeight) * 100}%`,
-                        color: item.color || '#ffffff',
-                        fontSize: `${item.fontSize || 16}px`,
-                        fontWeight: 600,
-                        textShadow: '0 2px 4px rgba(0,0,0,0.8)',
-                        userSelect: 'none',
-                        zIndex: 4
-                      }}
-                    >
-                      {item.text}
-                    </div>
-                  ))}
+                    {/* 6. 텍스트 아이템들 */}
+                    {(currentPageData.textItems || []).map((item: any, idx: number) => {
+                      let textColor = item.color;
+                      if (viewerPaperTheme === 'white' && textColor === '#ffffff') textColor = '#0f172a';
+                      if (viewerPaperTheme === 'dark' && textColor === '#000000') textColor = '#f8fafc';
+                      return (
+                        <text
+                          key={item.id || idx}
+                          x={item.x}
+                          y={(item.y || 0) + (item.fontSize || 16)}
+                          fill={textColor || (viewerPaperTheme === 'white' ? '#0f172a' : '#ffffff')}
+                          fontSize={item.fontSize || 16}
+                          fontWeight="600"
+                          fontFamily="sans-serif"
+                        >
+                          {item.text}
+                        </text>
+                      );
+                    })}
+                  </svg>
 
                   {/* 빈 페이지 안내 메시지 */}
                   {(currentPageData.strokes?.length || 0) === 0 &&
@@ -1229,7 +1282,14 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                    !currentPageData.fullPageBackground &&
                    (!currentPageData.images || currentPageData.images.length === 0) &&
                    !isLoadingDetail && (
-                    <div style={{ color: '#8b949e', fontSize: '13px', zIndex: 5, textAlign: 'center' }}>
+                    <div
+                      style={{
+                        color: viewerPaperTheme === 'white' ? '#64748b' : '#8b949e',
+                        fontSize: '13px',
+                        zIndex: 5,
+                        textAlign: 'center'
+                      }}
+                    >
                       ✏️ 이 페이지에 작성된 필기나 학습지가 없습니다.
                     </div>
                   )}
