@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
 import { generateClassSubmissionPdf } from '../lib/pdfGenerator';
+import { StudentNoteSheet } from './StudentNoteSheet';
 
 export interface LiveClassroomDashboardProps {
   lesson: {
@@ -1121,142 +1122,11 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     </div>
                   )}
 
-                  {/* 💥 통합 고화질 SVG 렌더러 (배경 이미지와 스트로크가 동일한 1600x1130 좌표계에 1:1 완벽 일체화) */}
-                  <svg
-                    viewBox={`0 0 ${docWidth} ${docHeight}`}
-                    preserveAspectRatio="none"
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      width: '100%',
-                      height: '100%',
-                      display: 'block',
-                      pointerEvents: 'none'
-                    }}
-                  >
-                    {/* 1. 용지 바탕색 (검정 칠판 다크모드 #131314 통일) */}
-                    <rect
-                      x="0"
-                      y="0"
-                      width={docWidth}
-                      height={docHeight}
-                      fill="#131314"
-                    />
-
-                    {/* 2. 모눈종이 패턴 그리드 (배경 이미지가 없을 때 은은한 분필 그리드) */}
-                    {!currentPageData.fullPageBackground && (
-                      <g>
-                        <defs>
-                          <pattern
-                            id={`grid-${docWidth}-${docHeight}`}
-                            width="32"
-                            height="32"
-                            patternUnits="userSpaceOnUse"
-                          >
-                            <path
-                              d="M 32 0 L 0 0 0 32"
-                              fill="none"
-                              stroke="rgba(255,255,255,0.06)"
-                              strokeWidth="1"
-                            />
-                          </pattern>
-                        </defs>
-                        <rect width={docWidth} height={docHeight} fill={`url(#grid-${docWidth}-${docHeight})`} />
-                      </g>
-                    )}
-
-                    {/* 3. A4 전체 배경 이미지 (PDF 또는 학습지) - 학생앱의 object-fit: contain과 1:1 완벽 일치 */}
-                    {currentPageData.fullPageBackground && (
-                      <image
-                        href={currentPageData.fullPageBackground}
-                        x="0"
-                        y="0"
-                        width={docWidth}
-                        height={docHeight}
-                        preserveAspectRatio="xMidYMid meet"
-                      />
-                    )}
-
-                    {/* 4. 임베디드 문제/스티커 이미지들 */}
-                    {(currentPageData.images || []).map((img: any, idx: number) => {
-                      const src = img.src || img.dataUrl;
-                      if (!src) return null;
-                      return (
-                        <image
-                          key={img.id || idx}
-                          href={src}
-                          x={img.x}
-                          y={img.y}
-                          width={img.width}
-                          height={img.height}
-                          preserveAspectRatio="none"
-                        />
-                      );
-                    })}
-
-                    {/* 5. 벡터 스트로크 (학생 손글씨 필기) - 배경과 동일한 좌표계에 1:1 완벽 렌더링 */}
-                    {(currentPageData.strokes || []).map((stroke: any, idx: number) => {
-                      if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;
-                      let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
-                      for (let i = 1; i < stroke.points.length; i++) {
-                        pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
-                      }
-                      let strokeColor = stroke.color;
-                      // 과거 검정 펜으로 필기한 내용도 다크 모드 칠판에서 선명하게 보이도록 화이트 분필색(#f8fafc)으로 자동 보정
-                      if (strokeColor === '#000000' || strokeColor === '#0f172a' || strokeColor === '#1e293b') {
-                        strokeColor = '#f8fafc';
-                      }
-                      return (
-                        <path
-                          key={stroke.id || idx}
-                          d={pathData}
-                          fill="none"
-                          stroke={strokeColor || '#ffffff'}
-                          strokeWidth={stroke.size || 3}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
-                        />
-                      );
-                    })}
-
-                    {/* 6. 텍스트 아이템들 */}
-                    {(currentPageData.textItems || []).map((item: any, idx: number) => {
-                      let textColor = item.color;
-                      if (textColor === '#000000' || textColor === '#0f172a') textColor = '#f8fafc';
-                      return (
-                        <text
-                          key={item.id || idx}
-                          x={item.x}
-                          y={(item.y || 0) + (item.fontSize || 16)}
-                          fill={textColor || '#ffffff'}
-                          fontSize={item.fontSize || 16}
-                          fontWeight="600"
-                          fontFamily="sans-serif"
-                        >
-                          {item.text}
-                        </text>
-                      );
-                    })}
-                  </svg>
-
-                  {/* 빈 페이지 안내 메시지 */}
-                  {(currentPageData.strokes?.length || 0) === 0 &&
-                   (currentPageData.textItems?.length || 0) === 0 &&
-                   !currentPageData.fullPageBackground &&
-                   (!currentPageData.images || currentPageData.images.length === 0) &&
-                   !isLoadingDetail && (
-                    <div
-                      style={{
-                        color: '#8b949e',
-                        fontSize: '13px',
-                        zIndex: 5,
-                        textAlign: 'center'
-                      }}
-                    >
-                      ✏️ 이 페이지에 작성된 필기나 학습지가 없습니다.
-                    </div>
-                  )}
+                  {/* 학생 필기앱과 100% 동일한 A4 전면 정합 뷰어 */}
+                  <StudentNoteSheet
+                    page={currentPageData}
+                    orientation={orientation}
+                  />
                 </div>
               </div>
 

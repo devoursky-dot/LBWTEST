@@ -7,6 +7,7 @@ import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
 import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
+import { StudentNoteSheet } from './components/StudentNoteSheet';
 import './index.css';
 
 // ============================================================================
@@ -2000,101 +2001,11 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 💥 통합 고화질 SVG 렌더러 (배경 이미지와 스트로크 1:1 일체화) */}
-                <svg
-                  viewBox={`0 0 ${docWidth} ${docHeight}`}
-                  preserveAspectRatio="none"
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    width: '100%',
-                    height: '100%',
-                    display: 'block',
-                    pointerEvents: 'none'
-                  }}
-                >
-                  <rect x="0" y="0" width={docWidth} height={docHeight} fill="#131314" />
-
-                  {!currentNotePage.fullPageBackground && (
-                    <g>
-                      <defs>
-                        <pattern id={`grid-app-${docWidth}-${docHeight}`} width="32" height="32" patternUnits="userSpaceOnUse">
-                          <path d="M 32 0 L 0 0 0 32" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-                        </pattern>
-                      </defs>
-                      <rect width={docWidth} height={docHeight} fill={`url(#grid-app-${docWidth}-${docHeight})`} />
-                    </g>
-                  )}
-
-                  {currentNotePage.fullPageBackground && (
-                    <image
-                      href={currentNotePage.fullPageBackground}
-                      x="0"
-                      y="0"
-                      width={docWidth}
-                      height={docHeight}
-                      preserveAspectRatio="xMidYMid meet"
-                    />
-                  )}
-
-                  {(currentNotePage.images || []).map((img: any, idx: number) => {
-                    const src = img.src || img.dataUrl;
-                    if (!src) return null;
-                    return (
-                      <image
-                        key={img.id || idx}
-                        href={src}
-                        x={img.x}
-                        y={img.y}
-                        width={img.width}
-                        height={img.height}
-                        preserveAspectRatio="none"
-                      />
-                    );
-                  })}
-
-                  {(currentNotePage.strokes || []).map((stroke: any, idx: number) => {
-                    if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;
-                    let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
-                    for (let i = 1; i < stroke.points.length; i++) {
-                      pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
-                    }
-                    let strokeColor = stroke.color;
-                    if (strokeColor === '#000000' || strokeColor === '#0f172a' || strokeColor === '#1e293b') {
-                      strokeColor = '#f8fafc';
-                    }
-                    return (
-                      <path
-                        key={stroke.id || idx}
-                        d={pathData}
-                        fill="none"
-                        stroke={strokeColor || '#ffffff'}
-                        strokeWidth={stroke.size || 3}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
-                      />
-                    );
-                  })}
-
-                  {(currentNotePage.textItems || []).map((item: any, idx: number) => {
-                    let textColor = item.color;
-                    if (textColor === '#000000' || textColor === '#0f172a') textColor = '#f8fafc';
-                    return (
-                      <text
-                        key={item.id || idx}
-                        x={item.x}
-                        y={(item.y || 0) + (item.fontSize || 16)}
-                        fill={textColor || '#ffffff'}
-                        fontSize={item.fontSize || 16}
-                        fontWeight="600"
-                        fontFamily="sans-serif"
-                      >
-                        {item.text}
-                      </text>
-                    );
-                  })}
-                </svg>
+                {/* 학생 필기앱과 100% 동일한 A4 전면 정합 뷰어 */}
+                <StudentNoteSheet
+                  page={currentNotePage}
+                  orientation={orientation}
+                />
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
