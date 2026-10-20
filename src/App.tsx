@@ -655,10 +655,15 @@ export default function App() {
         base64: configJsonBase64
       });
 
-      showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다!`);
+      const activePin = qrLessonPin.trim() || '1234';
+      try {
+        localStorage.setItem(`lbw_lesson_pin_${lessonFolderId}`, activePin);
+      } catch {}
+
+      showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다! (PIN: ${activePin})`);
       setActiveModal(null);
       setQrLessonTitle('');
-      setQrLessonPin('1234');
+      setQrLessonPin(Math.floor(1000 + Math.random() * 9000).toString());
       setQrLessonPdfFile(null);
       fetchDriveItems(currentFolder.id);
     } catch (err: any) {
@@ -1217,7 +1222,7 @@ export default function App() {
                     onClick={() => {
                       setIsNewMenuOpen(false);
                       setQrLessonTitle('');
-                      setQrLessonPin('1234');
+                      setQrLessonPin(Math.floor(1000 + Math.random() * 9000).toString());
                       setQrLessonPdfFile(null);
                       setActiveModal('new_qr_lesson');
                     }}
@@ -1744,19 +1749,30 @@ export default function App() {
 
               <div>
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
-                  선생님 PIN 번호 (4자리)
+                  수업 참여 PIN 번호 (4자리)
                 </label>
-                <input 
-                  type="text" 
-                  maxLength={4}
-                  className="g-form-input" 
-                  value={qrLessonPin}
-                  onChange={(e) => setQrLessonPin(e.target.value)}
-                  placeholder="1234"
-                  required
-                />
-                <span style={{ fontSize: '11.5px', color: 'var(--g-text-muted)', marginTop: '4px', display: 'block' }}>
-                  전자칠판에서 수업 대시보드 관리 시 본인 확인용으로 사용됩니다.
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <input 
+                    type="text" 
+                    maxLength={4}
+                    className="g-form-input" 
+                    style={{ fontSize: '16px', fontWeight: 700, letterSpacing: '2px', textAlign: 'center', width: '120px' }}
+                    value={qrLessonPin}
+                    onChange={(e) => setQrLessonPin(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="1234"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="g-btn g-btn-secondary"
+                    style={{ fontSize: '12px', padding: '6px 12px' }}
+                    onClick={() => setQrLessonPin(Math.floor(1000 + Math.random() * 9000).toString())}
+                  >
+                    🔄 새 PIN 자동 생성
+                  </button>
+                </div>
+                <span style={{ fontSize: '11.5px', color: '#93c5fd', marginTop: '4px', display: 'block' }}>
+                  💡 이전 수업이나 다른 반 학생의 무단 접속을 완벽히 차단합니다.
                 </span>
               </div>
 

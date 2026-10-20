@@ -105,6 +105,30 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [inputName, setInputName] = useState('');
   const [isChangingStudent, setIsChangingStudent] = useState(false);
 
+  // --- 1-2. 수업 참여 PIN 코드 상태 (다른 반 학생 무단 접속 방지) ---
+  const urlPin = typeof window !== 'undefined'
+    ? (new URLSearchParams(window.location.search).get('pin') || '')
+    : '';
+  const [lessonPin, setLessonPin] = useState<string>(() => {
+    if (urlPin) return urlPin.trim();
+    try {
+      const saved = localStorage.getItem(`lbw_student_pin_${lessonId}`);
+      if (saved) return saved.trim();
+    } catch {}
+    return '';
+  });
+  const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
+  const [inputPin, setInputPin] = useState<string>('');
+
+  useEffect(() => {
+    if (urlPin) {
+      setLessonPin(urlPin.trim());
+      try {
+        localStorage.setItem(`lbw_student_pin_${lessonId}`, urlPin.trim());
+      } catch {}
+    }
+  }, [urlPin, lessonId]);
+
   // --- 2. 삼성노트 REA 뷰포트 & A4 용지 규격 상태 ---
   // 기본 표준: A4 세로 (Portrait)
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
@@ -1176,7 +1200,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   // ==========================================================================
-  // [전자칠판 실시간 연결 및 출석 신호 전송 (초경량 100바이트)]
+  // [전자칠판 실시간 연결 및 출석 신호 전송 (PIN 검증 포함)]
   // ==========================================================================
   const handleConnectToBoard = async () => {
     if (!studentInfo || !studentInfo.name.trim()) {
@@ -1184,6 +1208,19 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setIsChangingStudent(true);
       return;
     }
+
+    // 칠판 수업 PIN 코드가 없으면 모달로 먼저 입력받음
+    if (!lessonPin) {
+      setInputPin('');
+      setIsPinModalOpen(true);
+      return;
+    }
+
+    await executeConnectToBoard(lessonPin);
+  };
+
+  const executeConnectToBoard = async (pinToUse: string) => {
+    if (!studentInfo) return;
 
     // 1. 브라우저 전체화면 요청
     try {
@@ -1203,17 +1240,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       console.warn('Wake Lock 활성화 경고:', wlErr);
     }
 
-    // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송
+    // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송 (PIN 동봉)
     setIsConnectedToBoard(true);
     classroomRealtime.joinLesson(lessonId);
     await classroomRealtime.sendSignal({
       type: 'STUDENT_PRESENCE',
       lessonId,
+      pin: pinToUse,
       student: studentInfo,
       status: 'connected'
     });
 
-    showToast(`📡 '${studentInfo.name}' 학생이 전자칠판에 연결되었습니다! (전체화면)`);
+    showToast(`📡 '${studentInfo.name}' 학생이 전자칠판에 연결되었습니다! (PIN: ${pinToUse})`);
   };
 
   // 수업 나가기 처리 (WakeLock 해제, 전체화면 종료, 이탈 신호)
@@ -1236,6 +1274,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       await classroomRealtime.sendSignal({
         type: 'STUDENT_PRESENCE',
         lessonId,
+        pin: lessonPin,
         student: studentInfo || undefined,
         status: 'left'
       });
@@ -1255,6 +1294,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       classroomRealtime.sendSignal({
         type: 'STUDENT_PRESENCE',
         lessonId,
+        pin: lessonPin,
         student: studentInfo,
         status: isAway ? 'away' : 'connected'
       });
@@ -1413,6 +1453,22 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         return;
       }
 
+      // PIN 코드 거부 시 (다른 반 학생이거나 이전 PIN인 경우)
+      if (signal.type === 'PIN_REJECTED') {
+        const myKey = `${studentInfo.grade}_${studentInfo.classNum}_${studentInfo.studentNum}`;
+        if (!signal.targetStudentKey || signal.targetStudentKey === myKey) {
+          setIsConnectedToBoard(false);
+          setLessonPin('');
+          try {
+            localStorage.removeItem(`lbw_student_pin_${lessonId}`);
+          } catch {}
+          showToast('❌ 수업 PIN 코드가 일치하지 않습니다. 전자칠판의 PIN을 다시 입력해주세요.');
+          setInputPin('');
+          setIsPinModalOpen(true);
+          return;
+        }
+      }
+
       const myKey = `${studentInfo.grade}_${studentInfo.classNum}_${studentInfo.studentNum}`;
       const isTargeted = signal.type === 'REQUEST_STUDENT_NOTE' && signal.targetStudentKey === myKey;
       const isAllSync = signal.type === 'REQUEST_ALL_SYNC';
@@ -1424,6 +1480,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             await classroomRealtime.sendSignal({
               type: 'RESPONSE_STUDENT_NOTE',
               lessonId,
+              pin: lessonPin,
               student: studentInfo,
               noteRecord: syncedRecord
             });
@@ -1437,12 +1494,19 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     return () => {
       unsubscribe();
     };
-  }, [isConnectedToBoard, studentInfo, lessonId, syncCurrentNoteToCloud]);
+  }, [isConnectedToBoard, studentInfo, lessonId, lessonPin, syncCurrentNoteToCloud]);
 
   // [등록 및 제출하기] 수동 버튼 클릭 핸들러
   const handleSubmitLesson = async () => {
     if (!studentInfo) {
       setIsChangingStudent(true);
+      return;
+    }
+
+    // PIN 번호가 없으면 먼저 입력받음
+    if (!lessonPin) {
+      setInputPin('');
+      setIsPinModalOpen(true);
       return;
     }
 
@@ -1452,10 +1516,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     try {
       const record = await syncCurrentNoteToCloud(false);
       if (record) {
-        // 실시간 채널에 제출 알림
+        // 실시간 채널에 제출 알림 (PIN 동봉)
         await classroomRealtime.sendSignal({
           type: 'STUDENT_SUBMIT',
           lessonId,
+          pin: lessonPin,
           student: studentInfo,
           noteRecord: record
         });
@@ -2134,6 +2199,32 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               👨‍🎓 학생 등록
             </button>
           )}
+
+          {/* 수업 참여 PIN 확인 및 입력 버튼 */}
+          <button
+            type="button"
+            onClick={() => {
+              setInputPin(lessonPin);
+              setIsPinModalOpen(true);
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              background: lessonPin ? 'rgba(59, 130, 246, 0.15)' : 'rgba(239, 68, 68, 0.2)',
+              border: lessonPin ? '1px solid #3b82f6' : '1px solid #ef4444',
+              padding: '4px 9px',
+              borderRadius: 'var(--radius-full)',
+              cursor: 'pointer',
+              fontSize: '11.5px',
+              color: lessonPin ? '#93c5fd' : '#fca5a5',
+              fontWeight: 700
+            }}
+            title="수업 참여 PIN 코드 확인/변경 (다른 반 학생 차단)"
+          >
+            <span>🔑</span>
+            <span>{lessonPin ? `PIN: ${lessonPin}` : 'PIN 입력'}</span>
+          </button>
 
           {/* 전체화면 토글 */}
           <button
@@ -3495,6 +3586,60 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 </button>
                 <button type="submit" className="g-btn g-btn-primary">
                   저장하기
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 4-2. 수업 참여 PIN 코드 입력 모달 (다른 반 학생 차단) */}
+      {isPinModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsPinModalOpen(false)}>
+          <div className="modal-box" style={{ maxWidth: '380px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>🔑 수업 참여 PIN 번호</h2>
+              <button className="modal-close-btn" onClick={() => setIsPinModalOpen(false)}>✕</button>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!inputPin.trim()) return;
+                const clean = inputPin.trim();
+                setLessonPin(clean);
+                try {
+                  localStorage.setItem(`lbw_student_pin_${lessonId}`, clean);
+                } catch {}
+                setIsPinModalOpen(false);
+                if (studentInfo) {
+                  executeConnectToBoard(clean);
+                }
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '10px' }}
+            >
+              <p style={{ margin: 0, fontSize: '13px', color: '#cbd5e1', lineHeight: 1.5 }}>
+                전자칠판 화면 좌측에 표시된 <strong>4자리 수업 PIN 번호</strong>를 입력하세요.<br />
+                <span style={{ fontSize: '11.5px', color: '#93c5fd' }}>(다른 반이나 이전 수업 학생의 접속을 차단합니다)</span>
+              </p>
+              <div>
+                <input
+                  type="text"
+                  maxLength={6}
+                  className="g-form-input"
+                  style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '4px', textAlign: 'center' }}
+                  placeholder="예: 1234"
+                  value={inputPin}
+                  onChange={(e) => setInputPin(e.target.value.replace(/[^0-9]/g, ''))}
+                  autoFocus
+                  required
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+                <button type="button" className="g-btn g-btn-text" onClick={() => setIsPinModalOpen(false)}>
+                  취소
+                </button>
+                <button type="submit" className="g-btn g-btn-primary">
+                  확인 및 연결
                 </button>
               </div>
             </form>

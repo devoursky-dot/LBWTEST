@@ -17,11 +17,13 @@ export type RealtimeSignalType =
   | 'RESPONSE_STUDENT_NOTE'  // 학생 -> 전자칠판 필기 응답
   | 'REQUEST_ALL_SYNC'       // 전자칠판 -> 전체 학생 일괄 동기화 (PDF 저장 전)
   | 'STUDENT_SUBMIT'         // 학생이 명시적으로 등록/제출한 경우
-  | 'RESET_SESSION';         // 전자칠판 -> 새 수업 시작 시 이전 접속 및 기록 초기화 브로드캐스트
+  | 'RESET_SESSION'          // 전자칠판 -> 새 수업 시작 시 이전 접속 및 기록 초기화 브로드캐스트
+  | 'PIN_REJECTED';          // 전자칠판 -> PIN 불일치 시 학생 연결 거부 알림
 
 export interface RealtimeSignalPayload {
   type: RealtimeSignalType;
   lessonId: string;
+  pin?: string;
   student?: {
     grade: string;
     classNum: string;
