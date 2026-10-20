@@ -1978,14 +1978,18 @@ export default function App() {
               {/* 필기 용지 컨테이너 */}
               <div style={{
                 position: 'relative',
-                width: '100%',
+                width: isPortrait
+                  ? 'min(calc(100% - 32px), calc(68vh * 1130 / 1600))'
+                  : 'min(calc(100% - 32px), calc(68vh * 1600 / 1130))',
+                height: isPortrait
+                  ? 'calc(min(calc(100% - 32px), calc(68vh * 1130 / 1600)) * 1600 / 1130)'
+                  : 'calc(min(calc(100% - 32px), calc(68vh * 1600 / 1130)) * 1130 / 1600)',
                 aspectRatio: `${docWidth} / ${docHeight}`,
-                maxHeight: '68vh',
                 background: '#131314',
                 border: '1px solid var(--g-border)',
                 borderRadius: '8px',
                 overflow: 'hidden',
-                margin: '10px 0',
+                margin: '10px auto',
                 boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)'
               }}>
                 {/* 비동기 상세 필기 로딩 스피너 */}
@@ -1996,84 +2000,101 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 모눈종이 배경 */}
-                <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
-
-                {/* 전체 배경 이미지 (PDF 또는 학습지) */}
-                {currentNotePage.fullPageBackground && (
-                  <img
-                    src={currentNotePage.fullPageBackground}
-                    alt="Worksheet Background"
-                    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none', zIndex: 1 }}
-                  />
-                )}
-
-                {/* 임베드된 문제/스티커 이미지들 */}
-                {(currentNotePage.images || []).map((img: any) => (
-                  <img
-                    key={img.id}
-                    src={img.src}
-                    alt="Embedded Problem"
-                    style={{
-                      position: 'absolute',
-                      left: `${(img.x / docWidth) * 100}%`,
-                      top: `${(img.y / docHeight) * 100}%`,
-                      width: `${(img.width / docWidth) * 100}%`,
-                      height: `${(img.height / docHeight) * 100}%`,
-                      objectFit: 'fill',
-                      pointerEvents: 'none',
-                      borderRadius: '4px',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
-                      zIndex: 2
-                    }}
-                  />
-                ))}
-
-                {/* 벡터 스트로크 SVG 렌더러 (정확한 1600x1130 / 1130x1600 viewBox) */}
+                {/* 💥 통합 고화질 SVG 렌더러 (배경 이미지와 스트로크 1:1 일체화) */}
                 <svg
                   viewBox={`0 0 ${docWidth} ${docHeight}`}
-                  preserveAspectRatio="xMidYMid meet"
-                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 3 }}
+                  preserveAspectRatio="none"
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    display: 'block',
+                    pointerEvents: 'none'
+                  }}
                 >
-                  {(currentNotePage.strokes || []).map((stroke: any) => {
+                  <rect x="0" y="0" width={docWidth} height={docHeight} fill="#131314" />
+
+                  {!currentNotePage.fullPageBackground && (
+                    <g>
+                      <defs>
+                        <pattern id={`grid-app-${docWidth}-${docHeight}`} width="32" height="32" patternUnits="userSpaceOnUse">
+                          <path d="M 32 0 L 0 0 0 32" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+                        </pattern>
+                      </defs>
+                      <rect width={docWidth} height={docHeight} fill={`url(#grid-app-${docWidth}-${docHeight})`} />
+                    </g>
+                  )}
+
+                  {currentNotePage.fullPageBackground && (
+                    <image
+                      href={currentNotePage.fullPageBackground}
+                      x="0"
+                      y="0"
+                      width={docWidth}
+                      height={docHeight}
+                      preserveAspectRatio="xMidYMid meet"
+                    />
+                  )}
+
+                  {(currentNotePage.images || []).map((img: any, idx: number) => {
+                    const src = img.src || img.dataUrl;
+                    if (!src) return null;
+                    return (
+                      <image
+                        key={img.id || idx}
+                        href={src}
+                        x={img.x}
+                        y={img.y}
+                        width={img.width}
+                        height={img.height}
+                        preserveAspectRatio="none"
+                      />
+                    );
+                  })}
+
+                  {(currentNotePage.strokes || []).map((stroke: any, idx: number) => {
                     if (!stroke.points || stroke.points.length === 0 || stroke.tool === 'eraser') return null;
                     let pathData = `M ${stroke.points[0].x} ${stroke.points[0].y}`;
                     for (let i = 1; i < stroke.points.length; i++) {
                       pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
                     }
+                    let strokeColor = stroke.color;
+                    if (strokeColor === '#000000' || strokeColor === '#0f172a' || strokeColor === '#1e293b') {
+                      strokeColor = '#f8fafc';
+                    }
                     return (
                       <path
-                        key={stroke.id}
+                        key={stroke.id || idx}
                         d={pathData}
                         fill="none"
-                        stroke={stroke.color}
-                        strokeWidth={stroke.size}
+                        stroke={strokeColor || '#ffffff'}
+                        strokeWidth={stroke.size || 3}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         opacity={stroke.tool === 'highlighter' ? 0.4 : 1.0}
                       />
                     );
                   })}
-                </svg>
 
-                {/* 텍스트 아이템 렌더러 (백분율 좌표) */}
-                {(currentNotePage.textItems || []).map((item: any) => (
-                  <div
-                    key={item.id}
-                    style={{
-                      position: 'absolute',
-                      left: `${(item.x / docWidth) * 100}%`,
-                      top: `${(item.y / docHeight) * 100}%`,
-                      color: item.color,
-                      fontSize: `${item.fontSize}px`,
-                      fontWeight: 600,
-                      textShadow: '0 2px 4px rgba(0,0,0,0.8)',
-                      userSelect: 'none'
-                    }}
-                  >
-                    {item.text}
-                  </div>
-                ))}
+                  {(currentNotePage.textItems || []).map((item: any, idx: number) => {
+                    let textColor = item.color;
+                    if (textColor === '#000000' || textColor === '#0f172a') textColor = '#f8fafc';
+                    return (
+                      <text
+                        key={item.id || idx}
+                        x={item.x}
+                        y={(item.y || 0) + (item.fontSize || 16)}
+                        fill={textColor || '#ffffff'}
+                        fontSize={item.fontSize || 16}
+                        fontWeight="600"
+                        fontFamily="sans-serif"
+                      >
+                        {item.text}
+                      </text>
+                    );
+                  })}
+                </svg>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -37,7 +37,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
   const [selectedStudentPageIdx, setSelectedStudentPageIdx] = useState<number>(0);
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
-  const [viewerPaperTheme, setViewerPaperTheme] = useState<'white' | 'dark'>('white');
   const selectedStudentKeyRef = useRef<string | null>(null);
 
   // PDF 일괄 컴파일 상태
@@ -140,9 +139,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
         if (selectedStudentKeyRef.current === recKey) {
           setSelectedStudentNote(record);
-          if (record.strokes_data?.paperTheme) {
-            setViewerPaperTheme(record.strokes_data.paperTheme);
-          }
           setIsLoadingDetail(false);
           showToast(`⚡ ${record.student_name} 학생의 최신 필기가 동기화되었습니다.`);
         }
@@ -244,11 +240,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     setSelectedStudentPageIdx(0);
     selectedStudentKeyRef.current = studentItem.key;
 
-    // A. 학생 공책 테마 동기화 (기본: 학생이 선택한 테마, 미지정 시 white)
-    const initialTheme = studentItem.submission?.strokes_data?.paperTheme || 'white';
-    setViewerPaperTheme(initialTheme);
-
-    // B. 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
+    // 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
     if (studentItem.submission?.strokes_data?.pages || studentItem.submission?.strokes_data?.strokes) {
       setSelectedStudentNote(studentItem.submission);
       const pages = (Array.isArray(studentItem.submission.strokes_data.pages) && studentItem.submission.strokes_data.pages.length > 0)
@@ -293,9 +285,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
         if (!error && data) {
           setSelectedStudentNote(data);
-          if (data.strokes_data?.paperTheme) {
-            setViewerPaperTheme(data.strokes_data.paperTheme);
-          }
           const pages = (Array.isArray(data.strokes_data?.pages) && data.strokes_data.pages.length > 0)
             ? data.strokes_data.pages
             : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
@@ -1006,29 +995,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {/* 종이 배경 테마 토글 버튼 (흰색 종이 vs 칠판 다크모드) */}
-                  <button
-                    type="button"
-                    style={{
-                      background: viewerPaperTheme === 'white' ? '#ffffff' : '#21262d',
-                      color: viewerPaperTheme === 'white' ? '#0f172a' : '#f0f6fc',
-                      border: '1px solid #30363d',
-                      borderRadius: '6px',
-                      padding: '3px 10px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.2)'
-                    }}
-                    onClick={() => setViewerPaperTheme(prev => prev === 'white' ? 'dark' : 'white')}
-                    title="공책 배경을 흰색 종이 또는 검정 칠판 모드로 전환합니다."
-                  >
-                    <span>{viewerPaperTheme === 'white' ? '📄 흰색 종이' : '🌙 칠판 모드'}</span>
-                  </button>
-
                   {/* 페이지 넘김 컨트롤 */}
                   {studentPages.length > 1 && (
                     <div
@@ -1118,17 +1084,17 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   style={{
                     position: 'relative',
                     width: isPortrait
-                      ? 'min(100%, calc(72vh * 1130 / 1600))'
-                      : 'min(100%, calc(72vh * 1600 / 1130))',
+                      ? 'min(calc(100% - 32px), calc(72vh * 1130 / 1600))'
+                      : 'min(calc(100% - 32px), calc(72vh * 1600 / 1130))',
+                    height: isPortrait
+                      ? 'calc(min(calc(100% - 32px), calc(72vh * 1130 / 1600)) * 1600 / 1130)'
+                      : 'calc(min(calc(100% - 32px), calc(72vh * 1600 / 1130)) * 1130 / 1600)',
                     aspectRatio: `${docWidth} / ${docHeight}`,
-                    maxHeight: '72vh',
-                    background: viewerPaperTheme === 'white' ? '#ffffff' : '#131314',
-                    border: viewerPaperTheme === 'white' ? '1px solid #cbd5e1' : '1px solid #30363d',
+                    background: '#131314',
+                    border: '1px solid #30363d',
                     borderRadius: '8px',
                     overflow: 'hidden',
-                    boxShadow: viewerPaperTheme === 'white'
-                      ? '0 12px 36px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.06)'
-                      : 'inset 0 0 24px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
+                    boxShadow: 'inset 0 0 24px rgba(0,0,0,0.8), 0 8px 30px rgba(0,0,0,0.6)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center'
@@ -1168,16 +1134,16 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                       pointerEvents: 'none'
                     }}
                   >
-                    {/* 1. 용지 바탕색 */}
+                    {/* 1. 용지 바탕색 (검정 칠판 다크모드 #131314 통일) */}
                     <rect
                       x="0"
                       y="0"
                       width={docWidth}
                       height={docHeight}
-                      fill={viewerPaperTheme === 'white' ? '#ffffff' : '#131314'}
+                      fill="#131314"
                     />
 
-                    {/* 2. 모눈종이 패턴 그리드 (배경 이미지가 없거나 칠판 모드일 때) */}
+                    {/* 2. 모눈종이 패턴 그리드 (배경 이미지가 없을 때 은은한 분필 그리드) */}
                     {!currentPageData.fullPageBackground && (
                       <g>
                         <defs>
@@ -1190,7 +1156,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                             <path
                               d="M 32 0 L 0 0 0 32"
                               fill="none"
-                              stroke={viewerPaperTheme === 'white' ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'}
+                              stroke="rgba(255,255,255,0.06)"
                               strokeWidth="1"
                             />
                           </pattern>
@@ -1199,7 +1165,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                       </g>
                     )}
 
-                    {/* 3. A4 전체 배경 이미지 (PDF 또는 학습지) - viewBox 안에서 xMidYMid meet로 동일하게 맞춤 */}
+                    {/* 3. A4 전체 배경 이미지 (PDF 또는 학습지) - 학생앱의 object-fit: contain과 1:1 완벽 일치 */}
                     {currentPageData.fullPageBackground && (
                       <image
                         href={currentPageData.fullPageBackground}
@@ -1236,9 +1202,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                         pathData += ` L ${stroke.points[i].x} ${stroke.points[i].y}`;
                       }
                       let strokeColor = stroke.color;
-                      if (viewerPaperTheme === 'white' && (strokeColor === '#ffffff' || strokeColor === '#f8fafc')) {
-                        strokeColor = '#0f172a';
-                      } else if (viewerPaperTheme === 'dark' && (strokeColor === '#000000' || strokeColor === '#0f172a')) {
+                      // 과거 검정 펜으로 필기한 내용도 다크 모드 칠판에서 선명하게 보이도록 화이트 분필색(#f8fafc)으로 자동 보정
+                      if (strokeColor === '#000000' || strokeColor === '#0f172a' || strokeColor === '#1e293b') {
                         strokeColor = '#f8fafc';
                       }
                       return (
@@ -1246,7 +1211,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                           key={stroke.id || idx}
                           d={pathData}
                           fill="none"
-                          stroke={strokeColor || (viewerPaperTheme === 'white' ? '#0f172a' : '#ffffff')}
+                          stroke={strokeColor || '#ffffff'}
                           strokeWidth={stroke.size || 3}
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -1258,14 +1223,13 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     {/* 6. 텍스트 아이템들 */}
                     {(currentPageData.textItems || []).map((item: any, idx: number) => {
                       let textColor = item.color;
-                      if (viewerPaperTheme === 'white' && textColor === '#ffffff') textColor = '#0f172a';
-                      if (viewerPaperTheme === 'dark' && textColor === '#000000') textColor = '#f8fafc';
+                      if (textColor === '#000000' || textColor === '#0f172a') textColor = '#f8fafc';
                       return (
                         <text
                           key={item.id || idx}
                           x={item.x}
                           y={(item.y || 0) + (item.fontSize || 16)}
-                          fill={textColor || (viewerPaperTheme === 'white' ? '#0f172a' : '#ffffff')}
+                          fill={textColor || '#ffffff'}
                           fontSize={item.fontSize || 16}
                           fontWeight="600"
                           fontFamily="sans-serif"
@@ -1284,7 +1248,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                    !isLoadingDetail && (
                     <div
                       style={{
-                        color: viewerPaperTheme === 'white' ? '#64748b' : '#8b949e',
+                        color: '#8b949e',
                         fontSize: '13px',
                         zIndex: 5,
                         textAlign: 'center'

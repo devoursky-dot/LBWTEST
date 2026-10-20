@@ -165,24 +165,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
 
   // --- 4. 용지 테마 및 필기 도구 상태 ---
-  const [paperTheme, setPaperTheme] = useState<'white' | 'dark'>(() => {
-    try {
-      const saved = localStorage.getItem('lbw_paper_theme');
-      return (saved as 'white' | 'dark') || 'white'; // 기본값: 실제 공책 같은 깨끗한 흰색 종이
-    } catch {
-      return 'white';
-    }
-  });
+  // 교실 통일성을 위해 항상 검정색 칠판 다크 모드(#131314)로 고정
+  const paperTheme = 'dark';
 
   const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text' | 'image'>('pen');
-  const [penColor, setPenColor] = useState<string>(() => {
-    try {
-      const theme = localStorage.getItem('lbw_paper_theme') || 'white';
-      return theme === 'white' ? '#0f172a' : '#ffffff';
-    } catch {
-      return '#0f172a';
-    }
-  });
+  const [penColor, setPenColor] = useState<string>('#ffffff'); // 기본값: 칠판에 가장 선명한 흰색 분필
   const [penSize, setPenSize] = useState<number>(3);
   const [highlighterColor, setHighlighterColor] = useState<string>('#fde047');
   const [highlighterSize, setHighlighterSize] = useState<number>(18);
@@ -297,20 +284,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // 용지 테마 토글 (흰색 종이 ↔ 다크 모드)
-  const handleTogglePaperTheme = () => {
-    const next = paperTheme === 'white' ? 'dark' : 'white';
-    setPaperTheme(next);
-    try {
-      localStorage.setItem('lbw_paper_theme', next);
-    } catch {}
-    if (next === 'white' && (penColor === '#ffffff' || penColor === '#f8fafc')) {
-      setPenColor('#0f172a');
-    } else if (next === 'dark' && (penColor === '#0f172a' || penColor === '#000000' || penColor === '#1e293b')) {
-      setPenColor('#ffffff');
-    }
-    showToast(next === 'white' ? '📄 깨끗한 흰색 A4 공책 모드' : '🌙 눈이 편한 다크 모드 공책');
-  };
+
 
   // ==========================================================================
   // [A4 용지 규격 캔버스 초기화]
@@ -1765,17 +1739,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       <div className="toolbar-divider" />
 
-      {/* [B] 퀵 컬러 스와치 (원터치 빠른 색상 3개: 용지 테마에 맞춰 선명하게) */}
+      {/* [B] 퀵 컬러 스와치 (원터치 빠른 5대 분필 색상: 다크모드 칠판 최적화) */}
       <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexShrink: 0 }}>
-        {(paperTheme === 'white' ? [
-          { color: '#0f172a', label: '검정' },
-          { color: '#ef4444', label: '빨강' },
-          { color: '#2563eb', label: '파랑' }
-        ] : [
+        {[
           { color: '#ffffff', label: '흰색' },
-          { color: '#ef4444', label: '빨강' },
-          { color: '#38bdf8', label: '파랑' }
-        ]).map(({ color, label }) => (
+          { color: '#fde047', label: '노랑' },
+          { color: '#38bdf8', label: '하늘' },
+          { color: '#f87171', label: '빨강' },
+          { color: '#4ade80', label: '초록' }
+        ].map(({ color, label }) => (
           <button
             key={color}
             type="button"
@@ -1791,36 +1763,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               setPenColor(color);
               if (tool === 'eraser') setTool('pen');
               setActivePopup(null);
-              showToast(`🖊️ ${label} 펜 선택`);
+              showToast(`🖊️ ${label} 분필 선택`);
             }}
-            title={`${label} 펜으로 원터치 전환`}
+            title={`${label} 분필로 원터치 전환`}
           />
         ))}
       </div>
-
-      <div className="toolbar-divider" />
-
-      {/* 용지 테마 원터치 토글 (흰색 모눈종이 ↔ 다크 모드) */}
-      <button
-        id="btn-toggle-paper-theme"
-        type="button"
-        className="student-tool-btn"
-        onClick={handleTogglePaperTheme}
-        style={{
-          padding: '3px 8px',
-          height: '34px',
-          fontSize: '11.5px',
-          background: paperTheme === 'white' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-          border: paperTheme === 'white' ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
-          color: paperTheme === 'white' ? '#93c5fd' : '#cbd5e1',
-          gap: '3px',
-          flexShrink: 0,
-          fontWeight: 600
-        }}
-        title="용지 테마: 흰색 A4 종이 ↔ 다크 모드 전환"
-      >
-        {paperTheme === 'white' ? '📄 흰색 종이' : '🌙 다크 모드'}
-      </button>
 
       <div className="toolbar-divider" />
 
@@ -3036,42 +2984,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               </div>
             </div>
 
-            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
-            {/* 용지 배경 테마 (흰색 A4 종이 vs 다크 모드) */}
-            <div>
-              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
-                📄 용지 테마 (배경 색상)
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                <button
-                  type="button"
-                  className={`student-tool-btn ${paperTheme === 'white' ? 'active' : ''}`}
-                  onClick={() => {
-                    setPaperTheme('white');
-                    try { localStorage.setItem('lbw_paper_theme', 'white'); } catch {}
-                    if (penColor === '#ffffff' || penColor === '#f8fafc') setPenColor('#0f172a');
-                    showToast('📄 깨끗한 흰색 A4 모눈종이 모드');
-                  }}
-                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px', fontWeight: 600 }}
-                >
-                  📄 흰색 종이 (표준)
-                </button>
-                <button
-                  type="button"
-                  className={`student-tool-btn ${paperTheme === 'dark' ? 'active' : ''}`}
-                  onClick={() => {
-                    setPaperTheme('dark');
-                    try { localStorage.setItem('lbw_paper_theme', 'dark'); } catch {}
-                    if (penColor === '#0f172a' || penColor === '#000000') setPenColor('#ffffff');
-                    showToast('🌙 다크 모드 공책');
-                  }}
-                  style={{ justifyContent: 'center', fontSize: '11.5px', padding: '6px', fontWeight: 600 }}
-                >
-                  🌙 다크 모드
-                </button>
-              </div>
-            </div>
 
             <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
@@ -3344,12 +3257,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             transformOrigin: 'center center',
             transition: isGestureRef.current ? 'none' : 'transform 0.15s ease-out, width 0.2s ease, height 0.2s ease',
             position: 'relative',
-            boxShadow: paperTheme === 'white'
-              ? '0 12px 48px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.08)'
-              : '0 12px 48px rgba(0, 0, 0, 0.75), 0 0 0 1.5px rgba(255, 255, 255, 0.18)',
-            border: paperTheme === 'white' ? '1px solid #cbd5e1' : '1px solid rgba(255, 255, 255, 0.14)',
+            boxShadow: '0 12px 48px rgba(0, 0, 0, 0.75), 0 0 0 1.5px rgba(255, 255, 255, 0.18)',
+            border: '1px solid rgba(255, 255, 255, 0.14)',
             borderRadius: '8px',
-            background: paperTheme === 'white' ? '#ffffff' : '#16171a',
+            background: '#131314',
             overflow: 'hidden',
             touchAction: 'none',
             WebkitTouchCallout: 'none',
