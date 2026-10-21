@@ -26,13 +26,17 @@ import {
   getCurrentSession,
   setCurrentSession
 } from './lib/auth';
-
-interface StudentInfo {
-  grade: string;
-  classNum: string;
-  studentNum: string;
-  name: string;
-}
+import {
+  type StudentInfo,
+  getSavedStudentInfo,
+  saveSavedStudentInfo,
+  studentInfoToId,
+  loadStudentDraft,
+  saveStudentDraft,
+  clearStudentDraft,
+  getStudentBackupKey,
+  parseLessonParam
+} from './lib/studentSessionManager';
 
 interface TextItem {
   id: string;
@@ -104,24 +108,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   onExit
 }) => {
   // --- 1. 학생 계정 로그인 상태 (영구 기억) ---
-  const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(() => {
-    try {
-      const saved = localStorage.getItem('lbw_student_info');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [studentInfo, setStudentInfo] = useState<StudentInfo | null>(() => getSavedStudentInfo());
 
-  // 학생 학번/비밀번호 인증 모달 상태
-  const [isChangingStudent, setIsChangingStudent] = useState(() => {
-    try {
-      const saved = localStorage.getItem('lbw_student_info');
-      return !saved; // 학생 정보가 없으면 수업 진입 시 바로 로그인 모달 오픈
-    } catch {
-      return true;
-    }
-  });
+  // 학생 학번/비밀번호 인증 모달 상태 (학생 정보가 없으면 수업 진입 시 바로 로그인 모달 오픈)
+  const [isChangingStudent, setIsChangingStudent] = useState(() => !getSavedStudentInfo());
 
   const [authStudentId, setAuthStudentId] = useState('');
   const [authStudentName, setAuthStudentName] = useState('');
@@ -271,14 +261,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return { id: initialPdfId, name: initialPdfName || '수업_학습지.pdf' };
     }
     if (typeof window !== 'undefined') {
-      try {
-        const p = new URLSearchParams(window.location.search);
-        const pid = p.get('pdfId');
-        const pname = p.get('pdfName');
-        if (pid) {
-          return { id: pid, name: pname ? decodeURIComponent(pname) : '수업_학습지.pdf' };
-        }
-      } catch {}
+      const parsed = parseLessonParam(window.location.search);
+      if (parsed?.pdfId) {
+        return { id: parsed.pdfId, name: parsed.pdfName || '수업_학습지.pdf' };
+      }
     }
     return null;
   });
@@ -399,12 +385,35 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setEditStudentNameInput(cleanName);
 
       setStudentInfo(info);
-      localStorage.setItem('lbw_student_info', JSON.stringify(info));
+      saveSavedStudentInfo(info);
       setIsChangingStudent(false);
       setAuthPassword('');
       setAuthNewPassword('');
       setAuthConfirmPassword('');
-      showToast(`👨‍🎓 ${info.grade}학년 ${info.classNum}반 ${info.name} 학생으로 로그인되었습니다.`);
+
+      // 공용 태블릿 완벽 대응: 변경/로그인된 학생의 독립 공책 드래프트 로드
+      const newStudentId = studentInfoToId(info);
+      const existingDraft = loadStudentDraft(lessonId, newStudentId);
+      if (existingDraft?.draft?.pages?.length) {
+        applyLoadedPages(existingDraft.draft.pages, existingDraft.draft.currentPageIndex ?? 0, existingDraft.draft.orientation);
+        showToast(`👨‍🎓 ${info.name} 학생의 이전 필기 내용을 불러왔습니다.`);
+      } else {
+        // 이 학생의 이전 필기가 없으면 깨끗한 1쪽으로 시작 (배경 학습지는 보존)
+        setStrokes([]);
+        setTextItems([]);
+        setEmbeddedImages([]);
+        setUndoStack([]);
+        setRedoStack([]);
+        setPages(prev => [{
+          id: 'page_1',
+          strokes: [],
+          textItems: [],
+          fullPageBackground: prev[0]?.fullPageBackground || null,
+          images: []
+        }]);
+        setCurrentPageIndex(0);
+        showToast(`👨‍🎓 ${info.grade}학년 ${info.classNum}반 ${info.name} 학생으로 로그인되었습니다.`);
+      }
     } catch {
       setAuthErrorMsg('인증 처리 중 네트워크 오류가 발생했습니다.');
     } finally {
@@ -422,14 +431,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    const studentIdStr = `${studentInfo.grade}${studentInfo.classNum}${parseInt(studentInfo.studentNum, 10) < 10 ? '0' + studentInfo.studentNum : studentInfo.studentNum}`;
+    const studentIdStr = studentInfoToId(studentInfo);
     const updatedInfo: StudentInfo = {
       ...studentInfo,
       name: cleanNewName
     };
 
     setStudentInfo(updatedInfo);
-    localStorage.setItem('lbw_student_info', JSON.stringify(updatedInfo));
+    saveSavedStudentInfo(updatedInfo);
     saveStoredStudentName(studentIdStr, cleanNewName);
 
     // 포털 세션 이름도 동기화
@@ -448,7 +457,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (!studentInfo) return;
     setAuthErrorMsg(null);
 
-    const studentIdStr = `${studentInfo.grade}${studentInfo.classNum}${parseInt(studentInfo.studentNum, 10) < 10 ? '0' + studentInfo.studentNum : studentInfo.studentNum}`;
+    const studentIdStr = studentInfoToId(studentInfo);
 
     if (!authPassword.trim()) {
       setAuthErrorMsg('⚠️ 현재 비밀번호를 입력해 주세요. (기본: 1234)');
@@ -488,6 +497,37 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setIsAuthSubmitting(false);
     }
   };
+
+  // [공책 처음부터 새로 쓰기 (자율 백지 리셋)]
+  const handleResetNotebookClean = useCallback(() => {
+    if (window.confirm('현재 작성 중인 필기를 모두 지우고 깨끗한 학습지 상태로 새로 시작하시겠습니까?\n(선생님의 학습지 배경은 그대로 유지되며, 내가 쓴 필기만 초기화됩니다.)')) {
+      // 획, 텍스트, 이미지 및 undo/redo 스택 초기화
+      setStrokes([]);
+      setTextItems([]);
+      setEmbeddedImages([]);
+      setUndoStack([]);
+      setRedoStack([]);
+
+      // 페이지 구성 리셋 (배경은 1쪽 유지)
+      setPages(prev => [{
+        id: 'page_1',
+        strokes: [],
+        textItems: [],
+        fullPageBackground: prev[0]?.fullPageBackground || null,
+        images: []
+      }]);
+      setCurrentPageIndex(0);
+
+      // 드래프트 삭제
+      const curStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
+      clearStudentDraft(lessonId, curStudentId);
+      setRecoveryPromptDraft(null);
+      setHasSavedNote(false);
+      setLastSavedTimeStr('');
+
+      showToast('✨ 내 공책을 깨끗한 백지 상태로 새로 시작합니다.');
+    }
+  }, [lessonId, studentInfo]);
 
   // 전체화면 토글 (iOS Safari 등 미지원 환경 안전 방어)
   const toggleFullscreen = () => {
@@ -1396,9 +1436,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           studentInfo
         };
 
-        const draftJson = JSON.stringify(draft);
-        localStorage.setItem(`lbw_active_draft_${lessonId}_v3`, draftJson);
-        sessionStorage.setItem(`lbw_session_draft_${lessonId}`, draftJson);
+        const currentStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
+        saveStudentDraft(lessonId, currentStudentId, draft);
 
         const now = new Date();
         const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
@@ -1421,32 +1460,32 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   //    최근 저장된 작업이 있으면 상단에 [필기 이어하기] 배너를 제공하여 학생이 선택 가능하게 배려
   useEffect(() => {
     try {
-      const activeDraftRaw = localStorage.getItem(`lbw_active_draft_${lessonId}_v3`) ||
-                             sessionStorage.getItem(`lbw_session_draft_${lessonId}`);
+      const currentStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
+      const loaded = loadStudentDraft(lessonId, currentStudentId);
       const wasReload = isPageReload();
 
-      if (activeDraftRaw) {
-        const draft = JSON.parse(activeDraftRaw);
-        if (draft && draft.version === 'a4_v3' && Array.isArray(draft.pages) && draft.pages.length > 0) {
-          if (wasReload) {
-            // 새로고침 시 무조건 즉시 자동 복원!
-            applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
-            const now = new Date(draft.timestamp || Date.now());
-            const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-            setLastSavedTimeStr(timeStr);
-            showToast('🔄 새로고침 후 작성 중이던 필기를 안전하게 복원했습니다.');
-            isInitialMountRef.current = false;
-            return;
-          } else {
-            // 새 QR 진입인 경우: 신규 깨끗한 A4 페이지로 열리되, 이전 필기 복구 안내 배너 표시
-            setRecoveryPromptDraft(draft);
-            setHasSavedNote(true);
-          }
+      if (loaded?.draft && Array.isArray(loaded.draft.pages) && loaded.draft.pages.length > 0) {
+        const draft = loaded.draft;
+        if (wasReload) {
+          // 새로고침 시 무조건 즉시 자동 복원!
+          applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
+          const now = new Date(draft.timestamp || Date.now());
+          const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+          setLastSavedTimeStr(timeStr);
+          showToast('🔄 새로고침 후 작성 중이던 필기를 안전하게 복원했습니다.');
+          isInitialMountRef.current = false;
+          return;
+        } else {
+          // 새 QR 진입인 경우: 신규 깨끗한 A4 페이지로 열리되, 이전 필기 복구 안내 배너 표시
+          setRecoveryPromptDraft(draft);
+          setHasSavedNote(true);
         }
       }
 
-      // 레거시 백업 확인 (설정 팝업용)
-      const rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
+      // 레거시/개별 백업 확인 (설정 팝업용)
+      const backupKey = getStudentBackupKey(lessonId, currentStudentId);
+      const rawSaved = localStorage.getItem(backupKey) ||
+                       localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
                        localStorage.getItem(`lbw_lesson_${lessonId}_note`);
       if (rawSaved) {
         setHasSavedNote(true);
@@ -1456,26 +1495,25 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     } finally {
       isInitialMountRef.current = false;
     }
-  }, [lessonId, applyLoadedPages]);
+  }, [lessonId, studentInfo, applyLoadedPages]);
 
   // [이전 필기 불러오기 (수동 복원)]
   const handleRestoreSavedNote = useCallback(() => {
     try {
-      // 1. 활성 드래프트 우선 확인
-      const activeDraftRaw = localStorage.getItem(`lbw_active_draft_${lessonId}_v3`) ||
-                             sessionStorage.getItem(`lbw_session_draft_${lessonId}`);
-      if (activeDraftRaw) {
-        const draft = JSON.parse(activeDraftRaw);
-        if (draft && draft.version === 'a4_v3' && Array.isArray(draft.pages) && draft.pages.length > 0) {
-          applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
-          showToast('📂 최근 임시 저장된 필기 내용을 성공적으로 불러왔습니다.');
-          setActivePopup(null);
-          return;
-        }
+      // 1. 활성 드래프트 우선 확인 (학생별 독립 키)
+      const currentStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
+      const loaded = loadStudentDraft(lessonId, currentStudentId);
+      if (loaded?.draft && Array.isArray(loaded.draft.pages) && loaded.draft.pages.length > 0) {
+        applyLoadedPages(loaded.draft.pages, loaded.draft.currentPageIndex ?? 0, loaded.draft.orientation);
+        showToast('📂 최근 임시 저장된 필기 내용을 성공적으로 불러왔습니다.');
+        setActivePopup(null);
+        return;
       }
 
       // 2. 제출본 백업 확인
-      const rawSaved = localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
+      const backupKey = getStudentBackupKey(lessonId, currentStudentId);
+      const rawSaved = localStorage.getItem(backupKey) ||
+                       localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
                        localStorage.getItem(`lbw_lesson_${lessonId}_note`);
       if (!rawSaved) {
         showToast('ℹ️ 저장된 이전 필기 데이터가 없습니다.');
@@ -1755,9 +1793,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         }
       }
 
-      // 5. 로컬 스토리지 안전 캐시
+      // 5. 로컬 스토리지 안전 캐시 (학생별 독립 키로 보관)
       try {
-        localStorage.setItem(`lbw_lesson_${lessonId}_note_v2`, JSON.stringify({
+        const curStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
+        const backupKey = getStudentBackupKey(lessonId, curStudentId);
+        localStorage.setItem(backupKey, JSON.stringify({
           student: studentInfo,
           lessonId,
           pages: optimizedPages,
@@ -2554,6 +2594,71 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               <span>💾</span>
               <span>자동저장됨 ({lastSavedTimeStr})</span>
             </div>
+          )}
+
+          {/* 공책 처음부터 다시 쓰기 (학생 자율 리셋 버튼) */}
+          <button
+            id="btn-header-clean-reset"
+            type="button"
+            className="student-tool-btn"
+            style={{
+              fontSize: '11.5px',
+              fontWeight: 600,
+              padding: '4px 8px',
+              background: 'rgba(249, 115, 22, 0.12)',
+              color: '#fdba74',
+              border: '1px solid rgba(249, 115, 22, 0.35)',
+              borderRadius: '6px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              cursor: 'pointer'
+            }}
+            onClick={handleResetNotebookClean}
+            title="현재 공책의 필기를 지우고 처음부터 깨끗한 백지/학습지로 다시 시작합니다."
+          >
+            <span>🔄</span>
+            <span>새로 쓰기</span>
+          </button>
+
+          {/* 개인 공책 모드일 때 칠판 수업 참여 버튼 */}
+          {lessonId.startsWith('student_note_') && (
+            <button
+              id="btn-header-join-lesson"
+              type="button"
+              className="student-tool-btn"
+              style={{
+                fontSize: '11.5px',
+                fontWeight: 700,
+                padding: '4px 9px',
+                background: 'rgba(168, 85, 247, 0.2)',
+                color: '#d8b4fe',
+                border: '1px solid rgba(168, 85, 247, 0.45)',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer'
+              }}
+              onClick={() => {
+                const target = window.prompt('선생님 전자칠판의 수업 ID 또는 수업 링크(URL)를 입력하세요:');
+                if (target && target.trim()) {
+                  const raw = target.trim();
+                  if (raw.includes('lessonId=')) {
+                    try {
+                      const urlObj = new URL(raw);
+                      window.location.href = urlObj.pathname + urlObj.search;
+                      return;
+                    } catch {}
+                  }
+                  window.location.search = `?lessonId=${encodeURIComponent(raw)}&title=${encodeURIComponent('수업 참여')}`;
+                }
+              }}
+              title="칠판의 수업 ID나 링크를 입력하여 실시간 수업에 참여합니다."
+            >
+              <span>📱</span>
+              <span>수업 참여</span>
+            </button>
           )}
 
           {/* 선생님 공유 수업 학습지 버튼 */}

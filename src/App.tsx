@@ -8,6 +8,7 @@ import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verif
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
+import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studentSessionManager';
 import './index.css';
 
 // ============================================================================
@@ -120,28 +121,9 @@ export default function App() {
   const canEdit = authMode === 'teacher' || authMode === 'admin';
 
   // --- 학생 QR 수업 모드 감지 (?lessonId=...) ---
-  const [studentLessonParam] = useState<{ lessonId: string; title: string; pdfId?: string; pdfName?: string } | null>(() => {
+  const [studentLessonParam] = useState<LessonParam | null>(() => {
     if (typeof window !== 'undefined') {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const lessonId = params.get('lessonId');
-        let title = params.get('title') || '';
-        const pdfId = params.get('pdfId') || undefined;
-        let pdfName = params.get('pdfName') || undefined;
-        if (lessonId) {
-          try {
-            title = decodeURIComponent(title);
-          } catch {}
-          if (pdfName) {
-            try {
-              pdfName = decodeURIComponent(pdfName);
-            } catch {}
-          }
-          return { lessonId, title, pdfId, pdfName };
-        }
-      } catch (e) {
-        console.error('URL 파라미터 파싱 오류:', e);
-      }
+      return parseLessonParam(window.location.search);
     }
     return null;
   });
@@ -734,13 +716,12 @@ export default function App() {
           ? 'https://devoursky-dot.github.io/LBWTEST'
           : `${window.location.origin}${currentPath}`)
       : 'https://devoursky-dot.github.io/LBWTEST';
-    let studentUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
-    if ((item as any).pdfFileId) {
-      studentUrl += `&pdfId=${encodeURIComponent((item as any).pdfFileId)}`;
-      if ((item as any).pdfFileName) {
-        studentUrl += `&pdfName=${encodeURIComponent((item as any).pdfFileName)}`;
-      }
-    }
+    const studentUrl = buildLessonUrl(baseOrigin, {
+      lessonId: currentLessonId,
+      title: cleanTitle,
+      pdfId: (item as any).pdfFileId,
+      pdfName: (item as any).pdfFileName
+    });
 
     try {
       const qrDataUrl = await QRCode.toDataURL(studentUrl, {

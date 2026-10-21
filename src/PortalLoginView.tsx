@@ -15,6 +15,7 @@ import {
   saveStoredStudentName,
   fetchStudentNameFromCloud
 } from './lib/auth';
+import { saveSavedStudentInfo } from './lib/studentSessionManager';
 
 interface PortalLoginViewProps {
   driveTeacherFolders: string[]; // 구글 드라이브에서 가져온 선생님 폴더 목록
@@ -202,15 +203,12 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
       saveStoredStudentName(studentId.trim(), cleanName);
 
       // 학생 브라우저 로컬 스토리지에 정보 영구 저장 (차후 자동 완성)
-      localStorage.setItem(
-        'lbw_student_info',
-        JSON.stringify({
-          grade: studentParsed.grade,
-          classNum: studentParsed.classNum,
-          studentNum: studentParsed.studentNum,
-          name: cleanName
-        })
-      );
+      saveSavedStudentInfo({
+        grade: studentParsed.grade,
+        classNum: studentParsed.classNum,
+        studentNum: studentParsed.studentNum,
+        name: cleanName
+      });
 
       const session: UserSession = {
         role: 'student',
