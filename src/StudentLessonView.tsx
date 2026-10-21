@@ -3902,7 +3902,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     type="password"
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}
-                    placeholder="비밀번호 입력 (초기: 1234)"
+                    placeholder="비밀번호 입력"
                     style={{
                       width: '100%',
                       padding: '11px 14px',

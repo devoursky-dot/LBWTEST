@@ -41,7 +41,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
   const [confirmStudentPw, setConfirmStudentPw] = useState('');
 
   // 관리자 폼 상태
-  const [adminId, setAdminId] = useState('admin');
+  const [adminId, setAdminId] = useState('');
   const [adminPw, setAdminPw] = useState('');
 
   // 공통 로딩 / 오류 / 성공 메시지
@@ -696,7 +696,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="password"
                 value={studentPw}
                 onChange={(e) => setStudentPw(e.target.value)}
-                placeholder="비밀번호 입력 (초기: 1234)"
+                placeholder="비밀번호 입력"
                 style={{
                   width: '100%',
                   padding: '12px 14px',
@@ -807,7 +807,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="text"
                 value={adminId}
                 onChange={(e) => setAdminId(e.target.value)}
-                placeholder="admin"
+                placeholder="관리자 아이디 입력"
                 style={{
                   width: '100%',
                   padding: '12px 14px',
