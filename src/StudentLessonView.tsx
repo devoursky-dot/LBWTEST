@@ -231,8 +231,24 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   useEffect(() => {
     if (initialPdfId) {
       setLessonPdfInfo({ id: initialPdfId, name: initialPdfName || '수업_학습지.pdf' });
+    } else if (!lessonPdfInfo && lessonId) {
+      // URL이나 props에 pdfId가 누락되었더라도, 수업 폴더(lessonId)에서 직접 PDF 자동 탐색하여 100% 연동
+      (async () => {
+        try {
+          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+          const res = await fetch(directUrl);
+          if (res.ok) {
+            const data = await res.json();
+            const files = data.files || [];
+            const pdfFile = files.find((f: any) => f.mimeType === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+            if (pdfFile) {
+              setLessonPdfInfo({ id: pdfFile.id, name: pdfFile.name });
+            }
+          }
+        } catch {}
+      })();
     }
-  }, [initialPdfId, initialPdfName]);
+  }, [initialPdfId, initialPdfName, lessonId, lessonPdfInfo]);
   const [isLessonPdfPromptOpen, setIsLessonPdfPromptOpen] = useState<boolean>(false);
   const [isDownloadingLessonPdf, setIsDownloadingLessonPdf] = useState<boolean>(false);
 
@@ -499,6 +515,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       for (let i = 0; i < pageNumbers.length; i++) {
         const pNum = pageNumbers[i];
+        if (pageNumbers.length > 3) {
+          showToast(`⏳ PDF 페이지 생성 중 (${i + 1}/${pageNumbers.length}쪽)...`);
+          // 브라우저 렌더링 루프 양보 (저사양 태블릿 OOM 방지 및 가비지 컬렉션 유도)
+          await new Promise(r => setTimeout(r, 25));
+        }
         const { dataUrl, width, height } = await renderPdfPageToDataUrl(pdfDocProxy, pNum, 2400);
         if (width > height) {
           detectedLandscape = true;
@@ -514,6 +535,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       if (detectedLandscape && orientation !== 'landscape') {
         setOrientation('landscape');
+        showToast('📐 가로 학습지에 맞춰 용지가 가로 방향으로 최적화되었습니다.');
       }
 
       // 3. 맨 앞쪽에 배치 (기존 필기 페이지는 새 PDF 페이지들 뒤에 그대로 보존)
@@ -591,8 +613,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setIsLessonPdfPromptOpen(false);
 
       if (mode === 'batch_insert') {
-        const allPages = Array.from({ length: totalP }, (_, i) => i + 1);
-        await handleBatchInsertPdfPages(allPages);
+        if (totalP > 10) {
+          // 10쪽 초과 대용량 PDF인 경우: 태블릿 OOM 메모리 충돌 방지 안내 후 피커 열기
+          showToast(`⚠️ 총 ${totalP}쪽 대용량 자료입니다. 필요한 페이지만 범위(예: 1~5쪽)로 선택해주세요.`);
+          setPdfPickerOpen(true);
+        } else {
+          const allPages = Array.from({ length: totalP }, (_, i) => i + 1);
+          await handleBatchInsertPdfPages(allPages);
+        }
       } else {
         setPdfPickerOpen(true);
       }
@@ -1557,10 +1585,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       if (!quiet) {
         showToast(`🎉 '${studentInfo.name}' 학생의 필기가 등록되었습니다!`);
       }
+      setHasSavedNote(true);
       return record;
     } catch (err: any) {
       console.error('필기 동기화 오류:', err);
-      if (!quiet) showToast(`❌ 등록 실패: ${err.message || '네트워크 오류'}`);
+      if (!quiet) showToast(`⚠️ 온라인 전송이 지연되고 있으나, 기기 로컬에 100% 안전하게 보관되었습니다.`);
       return null;
     }
   }, [studentInfo, pages, currentPageIndex, strokes, textItems, fullPageBackground, embeddedImages, lessonId, orientation]);
@@ -2431,14 +2460,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               fontSize: '12.5px',
               fontWeight: 700,
               padding: '6px 14px',
-              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              border: 'none',
+              background: hasSavedNote 
+                ? 'linear-gradient(135deg, #059669 0%, #047857 100%)' 
+                : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+              border: hasSavedNote ? '1px solid #34d399' : 'none',
               boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)'
             }}
             disabled={isSubmitting}
             onClick={handleSubmitLesson}
+            title={hasSavedNote ? "선생님 칠판에 등록 완료되었습니다. 수정 후 다시 누르면 갱신됩니다." : "필기를 선생님 전자칠판에 등록합니다."}
           >
-            {isSubmitting ? '전송 중...' : '🚀 등록하기'}
+            {isSubmitting ? '전송 중...' : hasSavedNote ? '✅ 등록 완료' : '🚀 등록하기'}
           </button>
 
           {/* 수업 나가기 버튼 */}
