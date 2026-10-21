@@ -50,26 +50,12 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'auto' | 'scroll'>('auto');
 
-  // 이번 수업 전용 참여 PIN 코드 (다른 반 학생 무단 접속 차단)
-  const [lessonPin, setLessonPin] = useState<string>(() => {
-    if (lesson.teacherPin && lesson.teacherPin.trim()) return lesson.teacherPin.trim();
-    try {
-      const saved = localStorage.getItem(`lbw_lesson_pin_${currentLessonId}`);
-      if (saved && saved.trim()) return saved.trim();
-    } catch {}
-    return '1234';
-  });
-  const lessonPinRef = useRef<string>(lessonPin);
-  useEffect(() => {
-    lessonPinRef.current = lessonPin;
-  }, [lessonPin]);
-
-  // 1. 학생 참여 QR 코드 및 전용 접속 URL 생성 (PIN 포함)
+  // 1. 학생 참여 QR 코드 및 전용 접속 URL 생성
   useEffect(() => {
     const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
       ? window.location.origin
       : 'https://lbwtest.vercel.app';
-    const generatedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}&pin=${encodeURIComponent(lessonPin)}`;
+    const generatedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}`;
     setStudentUrl(generatedUrl);
 
     QRCode.toDataURL(generatedUrl, {
@@ -79,23 +65,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }).then(setQrCodeDataUrl).catch((err) => {
       console.error('QR 생성 실패:', err);
     });
-  }, [currentLessonId, cleanLessonTitle, lessonPin]);
-
-  // PIN 변경 핸들러
-  const handleChangeLessonPin = (newPin: string) => {
-    const cleanPin = newPin.trim();
-    if (!cleanPin) return;
-    setLessonPin(cleanPin);
-    try {
-      localStorage.setItem(`lbw_lesson_pin_${currentLessonId}`, cleanPin);
-    } catch {}
-    // 새 PIN 발급 시 이전 세션 연결 기기들에 리셋 신호 전파하여 재인증 유도
-    classroomRealtime.sendSignal({
-      type: 'RESET_SESSION',
-      lessonId: currentLessonId
-    });
-    showToast(`🔑 새로운 참여 PIN [${cleanPin}]이 설정되었습니다. (다른 반 학생 차단)`);
-  };
+  }, [currentLessonId, cleanLessonTitle]);
 
   // 2. 초기 DB 제출 목록 조회 (strokes_data 포함하여 온디맨드 즉시 렌더링 지원)
   const fetchSubmissionsFromDb = async () => {
@@ -129,20 +99,13 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       setSelectedStudentNote(null);
       selectedStudentKeyRef.current = null;
 
-      // 새 PIN 자동 갱신 발급 (다른 반 학생의 재접속 원천 차단)
-      const nextPin = Math.floor(1000 + Math.random() * 9000).toString();
-      setLessonPin(nextPin);
-      try {
-        localStorage.setItem(`lbw_lesson_pin_${currentLessonId}`, nextPin);
-      } catch {}
-
       // 연결되어 있던 학생 기기들에 세션 리셋 신호 전파
       classroomRealtime.sendSignal({
         type: 'RESET_SESSION',
         lessonId: currentLessonId
       });
 
-      showToast(`✨ 수업 세션이 초기화되었으며, 새 PIN [${nextPin}]이 발급되었습니다.`);
+      showToast('✨ 수업 세션 및 출석 기록이 깨끗이 초기화되었습니다.');
     } catch (e: any) {
       console.error('초기화 오류:', e);
       showToast('❌ 초기화 중 오류가 발생했습니다.');
@@ -166,26 +129,12 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   }, [currentLessonId, initialClear]);
 
-  // 3. 실시간 신호 채널 구독 (학생 접속, 이탈, 제출, 응답 + PIN 검증)
+  // 3. 실시간 신호 채널 구독 (학생 접속, 이탈, 제출, 응답)
   useEffect(() => {
     classroomRealtime.joinLesson(currentLessonId);
 
     const unsubscribe = classroomRealtime.subscribe((signal: RealtimeSignalPayload) => {
       if (signal.lessonId !== currentLessonId) return;
-
-      // [보안 가드]: 학생 신호 수신 시 이번 수업의 PIN 번호 검증 (다른 반 학생 차단)
-      if (signal.student && lessonPinRef.current) {
-        if (signal.pin && signal.pin !== lessonPinRef.current) {
-          const key = `${signal.student.grade}_${signal.student.classNum}_${signal.student.studentNum}`;
-          classroomRealtime.sendSignal({
-            type: 'PIN_REJECTED',
-            lessonId: currentLessonId,
-            targetStudentKey: key
-          });
-          console.warn(`[PIN 불일치 차단] 학생 ${signal.student.name} 입력PIN:${signal.pin} != 현재PIN:${lessonPinRef.current}`);
-          return;
-        }
-      }
 
       // [1] 학생 접속 / 이탈 상태 알림
       if (signal.type === 'STUDENT_PRESENCE' && signal.student) {
@@ -742,73 +691,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
               </div>
             )}
 
-            {/* 이번 수업 참여 PIN 코드 (다른 반 학생 무단 접속 차단) */}
-            <div
-              style={{
-                marginTop: '14px',
-                width: '100%',
-                background: 'rgba(30, 41, 59, 0.7)',
-                border: '1.5px solid #3b82f6',
-                borderRadius: '12px',
-                padding: '10px',
-                textAlign: 'center',
-                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.2)'
-              }}
-            >
-              <div style={{ fontSize: '11.5px', color: '#93c5fd', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                <span>🔑</span>
-                <span>이번 수업 전용 참여 PIN</span>
-              </div>
-              <div style={{ fontSize: '28px', fontWeight: 900, letterSpacing: '4px', color: '#60a5fa', margin: '4px 0', fontFamily: 'monospace' }}>
-                {lessonPin}
-              </div>
-              <div style={{ fontSize: '11px', color: '#8b949e', marginBottom: '8px' }}>
-                다른 반/이전 수업 학생의 접속을 차단합니다
-              </div>
-              <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                <button
-                  type="button"
-                  style={{
-                    background: '#21262d',
-                    border: '1px solid #30363d',
-                    color: '#c9d1d9',
-                    borderRadius: '6px',
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    cursor: 'pointer'
-                  }}
-                  onClick={() => {
-                    const newPin = Math.floor(1000 + Math.random() * 9000).toString();
-                    handleChangeLessonPin(newPin);
-                  }}
-                  title="새로운 4자리 랜덤 PIN 생성 및 이전 세션 연결 초기화"
-                >
-                  🔄 새 PIN 발급
-                </button>
-                <button
-                  type="button"
-                  style={{
-                    background: '#21262d',
-                    border: '1px solid #30363d',
-                    color: '#c9d1d9',
-                    borderRadius: '6px',
-                    padding: '3px 8px',
-                    fontSize: '11px',
-                    cursor: 'pointer'
-                  }}
-                  onClick={() => {
-                    const custom = window.prompt('새로운 참여 PIN(4자리 등)을 입력하세요:', lessonPin);
-                    if (custom && custom.trim()) {
-                      handleChangeLessonPin(custom.trim());
-                    }
-                  }}
-                  title="PIN 번호 직접 변경"
-                >
-                  ✏️ 직접 변경
-                </button>
-              </div>
-            </div>
-
             <p style={{ fontSize: '12.5px', color: '#8b949e', textAlign: 'center', marginTop: '12px', lineHeight: 1.5 }}>
               태블릿 카메라로 QR을 스캔한 뒤<br />
               <strong>[📡 전자칠판 연결]</strong>을 누르면<br />
@@ -830,7 +712,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 }}
                 onClick={() => {
                   navigator.clipboard.writeText(studentUrl);
-                  showToast('✅ 학생 접속 URL(PIN 포함)이 복사되었습니다.');
+                  showToast('✅ 학생 접속 URL이 복사되었습니다.');
                 }}
               >
                 🔗 주소 복사
@@ -1024,7 +906,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     아직 접속한 학생이 없습니다.
                   </h3>
                   <p style={{ fontSize: '14px', textAlign: 'center', lineHeight: 1.6 }}>
-                    좌측 QR코드나 PIN 코드(<strong>{lessonPin}</strong>)로 학생들이 접속하고 <strong>[📡 전자칠판 연결]</strong>을 터치하면<br />
+                    좌측 QR코드로 학생들이 접속하고 <strong>[📡 전자칠판 연결]</strong>을 터치하면<br />
                     이곳에 학생별 출석 카드와 필기 현황이 학번순으로 나타납니다.
                   </p>
                 </div>
