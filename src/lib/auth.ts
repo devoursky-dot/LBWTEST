@@ -116,6 +116,106 @@ export function removeLocalCustomHash(id: string): void {
   localStorage.setItem(STORAGE_KEY_CUSTOM_HASHES, JSON.stringify(store));
 }
 
+// ============================================================================
+// [학생 이름 저장 및 자동 완성 헬퍼 (최초 1회 입력 영구 저장)]
+// ============================================================================
+const STORAGE_KEY_STUDENT_NAMES = 'lbw_student_names_map_v3';
+
+export function getStoredStudentNames(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_STUDENT_NAMES);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getStoredStudentName(id: string): string | null {
+  const map = getStoredStudentNames();
+  return map[id] || null;
+}
+
+export function saveStoredStudentName(id: string, name: string): void {
+  if (typeof window === 'undefined') return;
+  const cleanName = name.trim();
+  if (!cleanName) return;
+  const map = getStoredStudentNames();
+  map[id] = cleanName;
+  localStorage.setItem(STORAGE_KEY_STUDENT_NAMES, JSON.stringify(map));
+  syncStudentNameToCloud(id, cleanName);
+}
+
+export async function syncStudentNameToCloud(id: string, name: string): Promise<boolean> {
+  if (!supabase || !isSupabaseConfigured) return false;
+  try {
+    const cleanName = name.trim();
+    const { data: existing } = await supabase
+      .from('class_notes')
+      .select('id')
+      .eq('lesson_id', SYSTEM_AUTH_LESSON_ID)
+      .eq('student_grade', id)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      await supabase
+        .from('class_notes')
+        .update({
+          student_name: cleanName,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing[0].id);
+    } else {
+      const parsed = parseStudentId(id);
+      await supabase
+        .from('class_notes')
+        .insert({
+          lesson_id: SYSTEM_AUTH_LESSON_ID,
+          student_grade: id,
+          student_class: parsed.valid ? parsed.classNum : '0',
+          student_num: parsed.valid ? parsed.studentNum : '0',
+          student_name: cleanName,
+          strokes_data: {
+            passwordHash: DEFAULT_STUDENT_PW_HASH,
+            isModified: false,
+            grade: parsed.valid ? parsed.grade : '0',
+            updatedAt: new Date().toISOString()
+          }
+        });
+    }
+    return true;
+  } catch (err) {
+    console.warn('syncStudentNameToCloud warning:', err);
+    return false;
+  }
+}
+
+export async function fetchStudentNameFromCloud(id: string): Promise<string | null> {
+  const local = getStoredStudentName(id);
+  if (local) return local;
+
+  if (!supabase || !isSupabaseConfigured) return null;
+  try {
+    const { data } = await supabase
+      .from('class_notes')
+      .select('student_name')
+      .eq('lesson_id', SYSTEM_AUTH_LESSON_ID)
+      .eq('student_grade', id)
+      .limit(1);
+
+    if (data && data.length > 0 && data[0].student_name) {
+      const name = data[0].student_name.trim();
+      const map = getStoredStudentNames();
+      map[id] = name;
+      localStorage.setItem(STORAGE_KEY_STUDENT_NAMES, JSON.stringify(map));
+      return name;
+    }
+  } catch (err) {
+    console.warn('fetchStudentNameFromCloud err:', err);
+  }
+  return null;
+}
+
 // 하위 호환성을 위한 래퍼 함수 (구버전 코드 호출 대비)
 export function getCustomPasswords(): Record<string, string> {
   return getLocalCustomHashes();
@@ -498,12 +598,14 @@ export async function resetTeacherPasswordToDefault(teacherName: string): Promis
  */
 export function getAllStudentAccounts(customHashes: Record<string, string> = getLocalCustomHashes()): AccountRecord[] {
   const accounts: AccountRecord[] = [];
+  const storedNames = getStoredStudentNames();
 
   for (let g = 1; g <= 3; g++) {
     for (let c = 1; c <= 8; c++) {
       for (let n = 1; n <= 30; n++) {
         const id = `${g}${c}${n < 10 ? '0' + n : n}`;
-        const name = `${g}학년 ${c}반 ${n}번 학생`;
+        const customName = storedNames[id];
+        const name = customName ? `${g}학년 ${c}반 ${n}번 ${customName}` : `${g}학년 ${c}반 ${n}번 학생`;
         const isModified = Boolean(customHashes[id]);
         accounts.push({
           id,

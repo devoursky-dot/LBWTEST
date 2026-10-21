@@ -4,7 +4,7 @@ import { StudentLessonView } from './StudentLessonView';
 import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
 import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
-import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, type UserSession } from './lib/auth';
+import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, parseStudentId, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
@@ -1054,12 +1054,31 @@ export default function App() {
   }
 
   // 첫 화면: 인증 세션이 없으면 통합 포털 로그인 게이트웨이 렌더링
-  // (전자칠판에서 tch1234를 1회 입력해 두었다면 자동 통과)
+  // (전자칠판에서 1회 입력해 두었다면 영구 인증으로 자동 통과)
   if (!currentSession) {
     return (
       <PortalLoginView
         driveTeacherFolders={driveTeacherFolders}
         onLoginSuccess={handlePortalLoginSuccess}
+      />
+    );
+  }
+
+  // 학생 역할로 로그인한 경우: 전용 필기앱(StudentLessonView)을 즉시 실행
+  if (currentSession.role === 'student') {
+    const studentParsed = parseStudentId(currentSession.id);
+    const personalLessonId = `student_note_${currentSession.id}`;
+    const personalTitle = currentSession.name
+      ? `${currentSession.name}의 스마트 디지털 노트`
+      : `${studentParsed.label}의 스마트 디지털 노트`;
+
+    return (
+      <StudentLessonView
+        lessonId={personalLessonId}
+        lessonTitle={personalTitle}
+        onExit={() => {
+          handlePortalLogout();
+        }}
       />
     );
   }
@@ -1186,7 +1205,7 @@ export default function App() {
                 fontWeight: 600
               }}
             >
-              <span>{currentSession?.role === 'admin' ? '🛡️' : currentSession?.role === 'teacher' ? '👨‍🏫' : currentSession?.role === 'student' ? '👨‍🎓' : '🖥️'}</span>
+              <span>{currentSession?.role === 'admin' ? '🛡️' : currentSession?.role === 'teacher' ? '👨‍🏫' : '🖥️'}</span>
               <span>{currentSession?.name || '전자칠판 (기본모드)'}</span>
             </div>
 

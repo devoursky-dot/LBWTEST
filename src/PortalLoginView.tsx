@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   type UserRole,
   type UserSession,
@@ -10,7 +10,10 @@ import {
   changeTeacherPassword,
   setWhiteboardPermanentAuth,
   parseStudentId,
-  setCurrentSession
+  setCurrentSession,
+  getStoredStudentName,
+  saveStoredStudentName,
+  fetchStudentNameFromCloud
 } from './lib/auth';
 
 interface PortalLoginViewProps {
@@ -48,6 +51,21 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // 4자리 학번 입력 시 기존에 저장된 학생 이름 자동 완성 (1회 입력 시 영구 유지)
+  useEffect(() => {
+    const parsed = parseStudentId(studentId);
+    if (parsed.valid) {
+      const localName = getStoredStudentName(studentId.trim());
+      if (localName) {
+        setStudentName(localName);
+      } else {
+        fetchStudentNameFromCloud(studentId.trim()).then(name => {
+          if (name) setStudentName(name);
+        });
+      }
+    }
+  }, [studentId]);
 
   // 1. 전자칠판 로그인 핸들러
   const handleWhiteboardLogin = async (e: React.FormEvent) => {
@@ -179,6 +197,9 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
         }
         setSuccessMsg('🎉 비밀번호가 성공적으로 변경되었습니다!');
       }
+
+      // 학생 이름 로컬 및 클라우드 영구 저장 (차후 자동 완성)
+      saveStoredStudentName(studentId.trim(), cleanName);
 
       // 학생 브라우저 로컬 스토리지에 정보 영구 저장 (차후 자동 완성)
       localStorage.setItem(

@@ -16,7 +16,16 @@ import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
 import { classroomRealtime } from './lib/classroomRealtime';
 import { compressNotePagesForTransmission } from './lib/imageCompressor';
-import { parseStudentId, verifyStudentLogin, changeStudentPassword } from './lib/auth';
+import {
+  parseStudentId,
+  verifyStudentLogin,
+  changeStudentPassword,
+  saveStoredStudentName,
+  getStoredStudentName,
+  fetchStudentNameFromCloud,
+  getCurrentSession,
+  setCurrentSession
+} from './lib/auth';
 
 interface StudentInfo {
   grade: string;
@@ -122,6 +131,38 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isChangingPwMode, setIsChangingPwMode] = useState(false);
   const [authErrorMsg, setAuthErrorMsg] = useState<string | null>(null);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+
+  // 로그인 상태에서 학생 이름 수정 입력 상태
+  const [editStudentNameInput, setEditStudentNameInput] = useState(() => {
+    try {
+      const saved = localStorage.getItem('lbw_student_info');
+      return saved ? JSON.parse(saved).name : '';
+    } catch {
+      return '';
+    }
+  });
+
+  // studentInfo가 변경되거나 로드되면 이름 수정 인풋 동기화
+  useEffect(() => {
+    if (studentInfo?.name) {
+      setEditStudentNameInput(studentInfo.name);
+    }
+  }, [studentInfo]);
+
+  // 학번 입력 시 기존에 등록된 학생 이름 자동 완성 (1회 입력 후 영구 기억)
+  useEffect(() => {
+    const parsed = parseStudentId(authStudentId);
+    if (parsed.valid) {
+      const localName = getStoredStudentName(authStudentId.trim());
+      if (localName) {
+        setAuthStudentName(localName);
+      } else {
+        fetchStudentNameFromCloud(authStudentId.trim()).then(name => {
+          if (name) setAuthStudentName(name);
+        });
+      }
+    }
+  }, [authStudentId]);
 
   // --- 2. 삼성노트 REA 뷰포트 & A4 용지 규격 상태 ---
   // 기본 표준: A4 세로 (Portrait)
@@ -353,6 +394,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         name: cleanName
       };
 
+      // 학생 이름 로컬 및 클라우드 영구 저장 (1회 입력 후 계속 유지)
+      saveStoredStudentName(authStudentId.trim(), cleanName);
+      setEditStudentNameInput(cleanName);
+
       setStudentInfo(info);
       localStorage.setItem('lbw_student_info', JSON.stringify(info));
       setIsChangingStudent(false);
@@ -365,6 +410,36 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     } finally {
       setIsAuthSubmitting(false);
     }
+  };
+
+  // 로그인 상태에서 학생 이름만 단독 수정하는 핸들러
+  const handleStudentUpdateNameOnly = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!studentInfo) return;
+    const cleanNewName = editStudentNameInput.trim();
+    if (!cleanNewName) {
+      setAuthErrorMsg('⚠️ 수정할 학생 이름을 입력해 주세요.');
+      return;
+    }
+
+    const studentIdStr = `${studentInfo.grade}${studentInfo.classNum}${parseInt(studentInfo.studentNum, 10) < 10 ? '0' + studentInfo.studentNum : studentInfo.studentNum}`;
+    const updatedInfo: StudentInfo = {
+      ...studentInfo,
+      name: cleanNewName
+    };
+
+    setStudentInfo(updatedInfo);
+    localStorage.setItem('lbw_student_info', JSON.stringify(updatedInfo));
+    saveStoredStudentName(studentIdStr, cleanNewName);
+
+    // 포털 세션 이름도 동기화
+    const sess = getCurrentSession();
+    if (sess && sess.role === 'student') {
+      setCurrentSession({ ...sess, name: cleanNewName });
+    }
+
+    setAuthErrorMsg(null);
+    showToast(`✅ 학생 이름이 '${cleanNewName}'(으)로 수정되었습니다.`);
   };
 
   // 로그인 상태에서 비밀번호만 단독 변경하는 핸들러
@@ -2406,30 +2481,36 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         {/* 학생 정보 배지 및 조절 버튼 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           {studentInfo ? (
-            <div
+            <button
+              type="button"
+              id="btn-student-profile-badge"
               onClick={() => setIsChangingStudent(true)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'rgba(59, 130, 246, 0.15)',
-                border: '1px solid var(--g-primary-blue)',
-                padding: '4px 10px',
-                borderRadius: 'var(--radius-full)',
+                background: 'rgba(59, 130, 246, 0.18)',
+                border: '1px solid #3b82f6',
+                padding: '5px 12px',
+                borderRadius: '9999px',
                 cursor: 'pointer',
                 fontSize: '12px',
                 color: '#ffffff',
-                maxWidth: isNarrowScreen ? '140px' : '220px',
-                overflow: 'hidden'
+                maxWidth: isNarrowScreen ? '170px' : '280px',
+                overflow: 'hidden',
+                boxShadow: '0 2px 8px rgba(59, 130, 246, 0.25)',
+                transition: 'all 0.15s ease'
               }}
-              title="클릭하여 학생 계정 및 비밀번호 관리"
+              title="클릭하여 학생 이름 및 비밀번호 수정"
             >
               <span>👨‍🎓</span>
-              <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 {studentInfo.name}
               </span>
-              <span style={{ fontSize: '10px', color: '#93c5fd', background: 'rgba(59, 130, 246, 0.25)', padding: '1px 5px', borderRadius: '4px' }}>🔑 비번관리</span>
-            </div>
+              <span style={{ fontSize: '10px', fontWeight: 600, color: '#93c5fd', background: 'rgba(59, 130, 246, 0.35)', padding: '2px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                ✏️ 비번/이름 수정
+              </span>
+            </button>
           ) : (
             <button
               className="g-btn g-btn-primary"
@@ -4008,22 +4089,100 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 </div>
               </form>
             ) : (
-              // 2. 이미 로그인된 상태에서 비밀번호 변경 및 계정 전환 폼
+              // 2. 이미 로그인된 상태에서 이름 수정, 비밀번호 변경 및 로그아웃 관리 폼
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '14px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>현재 로그인된 학생</span>
-                  <div style={{ fontSize: '15px', fontWeight: 700, color: '#38bdf8', marginTop: '4px' }}>
-                    👨‍🎓 {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 {studentInfo.name}
+                {/* 현재 로그인된 학생 정보 카드 */}
+                <div style={{ background: 'rgba(59, 130, 246, 0.08)', padding: '14px 16px', borderRadius: '12px', border: '1px solid rgba(59, 130, 246, 0.25)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11.5px', color: '#93c5fd', fontWeight: 600 }}>현재 로그인 계정</span>
+                    <span style={{ fontSize: '11px', color: '#60a5fa', background: 'rgba(59,130,246,0.2)', padding: '2px 8px', borderRadius: '6px' }}>
+                      학번 {studentInfo.grade}{studentInfo.classNum}{parseInt(studentInfo.studentNum, 10) < 10 ? '0' + studentInfo.studentNum : studentInfo.studentNum}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: '#ffffff', marginTop: '6px' }}>
+                    👨‍🎓 {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 <span style={{ color: '#38bdf8' }}>{studentInfo.name}</span>
                   </div>
                 </div>
 
-                <form onSubmit={handleStudentChangePasswordOnly} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <h3 style={{ fontSize: '13px', fontWeight: 700, margin: 0, color: '#cbd5e1' }}>
-                    🔑 내 비밀번호 변경하기
-                  </h3>
+                {/* 1. 학생 이름 수정 폼 */}
+                <form
+                  onSubmit={handleStudentUpdateNameOnly}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    padding: '14px',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 255, 255, 0.08)'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 style={{ fontSize: '13px', fontWeight: 700, margin: 0, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>✏️</span> 학생 이름 수정
+                    </h3>
+                    <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>1회 저장 시 자동 기억</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      type="text"
+                      value={editStudentNameInput}
+                      onChange={(e) => setEditStudentNameInput(e.target.value)}
+                      placeholder="수정할 학생 이름 입력"
+                      style={{
+                        flex: 1,
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        color: '#ffffff',
+                        fontSize: '13px',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      required
+                    />
+                    <button
+                      type="submit"
+                      style={{
+                        padding: '9px 14px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                        color: '#ffffff',
+                        fontSize: '12.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
+                      }}
+                    >
+                      💾 이름 저장
+                    </button>
+                  </div>
+                </form>
+
+                {/* 2. 비밀번호 변경 폼 */}
+                <form
+                  onSubmit={handleStudentChangePasswordOnly}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    padding: '14px',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(255, 255, 255, 0.08)'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 style={{ fontSize: '13px', fontWeight: 700, margin: 0, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>🔑</span> 내 비밀번호 변경하기
+                    </h3>
+                    <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>초기: 1234</span>
+                  </div>
 
                   <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginBottom: '4px' }}>현재 비밀번호</label>
                     <input
                       type="password"
                       value={authPassword}
@@ -4031,7 +4190,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                       placeholder="현재 비밀번호 입력"
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
+                        padding: '9px 12px',
                         borderRadius: '8px',
                         border: '1px solid rgba(255, 255, 255, 0.15)',
                         background: 'rgba(15, 23, 42, 0.6)',
@@ -4044,16 +4203,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     />
                   </div>
 
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginBottom: '4px' }}>새 비밀번호 (4자리 이상)</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     <input
                       type="password"
                       value={authNewPassword}
                       onChange={(e) => setAuthNewPassword(e.target.value)}
-                      placeholder="새 비밀번호 입력"
+                      placeholder="새 비밀번호 (4자리+)"
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
+                        padding: '9px 12px',
                         borderRadius: '8px',
                         border: '1px solid rgba(255, 255, 255, 0.15)',
                         background: 'rgba(15, 23, 42, 0.6)',
@@ -4064,18 +4222,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                       }}
                       required
                     />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginBottom: '4px' }}>새 비밀번호 확인</label>
                     <input
                       type="password"
                       value={authConfirmPassword}
                       onChange={(e) => setAuthConfirmPassword(e.target.value)}
-                      placeholder="새 비밀번호 다시 입력"
+                      placeholder="새 비밀번호 확인"
                       style={{
                         width: '100%',
-                        padding: '10px 12px',
+                        padding: '9px 12px',
                         borderRadius: '8px',
                         border: '1px solid rgba(255, 255, 255, 0.15)',
                         background: 'rgba(15, 23, 42, 0.6)',
@@ -4092,25 +4246,27 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     type="submit"
                     disabled={isAuthSubmitting}
                     style={{
-                      padding: '11px',
-                      borderRadius: '10px',
+                      padding: '10px',
+                      borderRadius: '8px',
                       border: 'none',
                       background: isAuthSubmitting ? '#475569' : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
                       color: '#ffffff',
-                      fontSize: '13px',
+                      fontSize: '12.5px',
                       fontWeight: 700,
-                      cursor: isAuthSubmitting ? 'not-allowed' : 'pointer'
+                      cursor: isAuthSubmitting ? 'not-allowed' : 'pointer',
+                      marginTop: '2px'
                     }}
                   >
                     {isAuthSubmitting ? '변경 저장 중...' : '🔑 새 비밀번호 저장'}
                   </button>
                 </form>
 
+                {/* 3. 하단 로그아웃 및 닫기 버튼 */}
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <button
                     type="button"
                     onClick={() => {
-                      if (window.confirm('현재 학생 로그아웃 후 다른 학생으로 로그인하시겠습니까?')) {
+                      if (window.confirm('현재 학생 로그아웃 후 로그인 화면으로 돌아가시겠습니까?')) {
                         localStorage.removeItem('lbw_student_info');
                         setStudentInfo(null);
                         setAuthStudentId('');
@@ -4118,26 +4274,35 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                         setAuthPassword('');
                         setAuthNewPassword('');
                         setAuthConfirmPassword('');
-                        showToast('로그아웃되었습니다. 새 학생 계정으로 로그인하세요.');
+                        setIsChangingStudent(false);
+                        if (onExit) {
+                          onExit();
+                        } else {
+                          showToast('로그아웃되었습니다. 새 학생 계정으로 로그인하세요.');
+                        }
                       }
                     }}
                     style={{
                       background: 'transparent',
-                      border: '1px solid #475569',
-                      color: '#94a3b8',
+                      border: '1px solid #ef4444',
+                      color: '#f87171',
                       padding: '7px 12px',
                       borderRadius: '8px',
                       fontSize: '12px',
+                      fontWeight: 600,
                       cursor: 'pointer'
                     }}
                   >
-                    🔄 다른 학생으로 로그인
+                    🚪 로그아웃 / 계정 전환
                   </button>
 
                   <button
                     type="button"
                     className="g-btn g-btn-text"
-                    onClick={() => setIsChangingStudent(false)}
+                    onClick={() => {
+                      setIsChangingStudent(false);
+                      setAuthErrorMsg(null);
+                    }}
                     style={{ color: '#cbd5e1' }}
                   >
                     닫기
