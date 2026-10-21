@@ -55,53 +55,57 @@ function renderCoverPageDataUrl(
   ctx.strokeRect(48, 48, width - 96, height - 96);
 
   // 3. 중앙 원형 심볼
+  const centerY = Math.round(height * 0.17);
   ctx.fillStyle = '#2563eb';
   ctx.beginPath();
-  ctx.arc(width / 2, 190, 56, 0, Math.PI * 2);
+  ctx.arc(width / 2, centerY, 52, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = '#ffffff';
   ctx.font = '48px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('🏫', width / 2, 190);
+  ctx.fillText('🏫', width / 2, centerY);
 
   // 4. 메인 타이틀 (수업 학생 필기 모음집)
-  ctx.font = 'bold 50px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  const titleY = Math.round(height * 0.27);
+  ctx.font = 'bold 48px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('수업 학생 필기 모음집', width / 2, 310);
+  ctx.fillText('수업 학생 필기 모음집', width / 2, titleY);
 
   // 5. 세부 수업 제목
-  ctx.font = 'bold 38px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  const subTitleY = Math.round(height * 0.35);
+  ctx.font = 'bold 36px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#60a5fa';
-  ctx.fillText(title, width / 2, 390);
+  ctx.fillText(title, width / 2, subTitleY);
 
   // 6. 장식 구분선
+  const divY = Math.round(height * 0.40);
   ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(width / 2 - 280, 440);
-  ctx.lineTo(width / 2 + 280, 440);
+  ctx.moveTo(width / 2 - 280, divY);
+  ctx.lineTo(width / 2 + 280, divY);
   ctx.stroke();
 
   // 7. 메타 정보 박스
+  const bw = Math.min(width - 120, 720);
+  const bh = 140;
+  const bx = (width - bw) / 2;
+  const by = Math.round(height * 0.44);
   ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
   ctx.lineWidth = 1.5;
-  const bx = width / 2 - 360;
-  const by = 480;
-  const bw = 720;
-  const bh = 140;
   ctx.strokeRect(bx, by, bw, bh);
   ctx.fillRect(bx, by, bw, bh);
 
   ctx.font = 'bold 26px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#e2e8f0';
-  ctx.fillText(`👥 제출 학생 수: 총 ${totalStudents}명 (엄격 학번순 정렬)`, width / 2, 530);
+  ctx.fillText(`👥 제출 학생 수: 총 ${totalStudents}명 (엄격 학번순 정렬)`, width / 2, by + 50);
 
   ctx.font = '500 22px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#94a3b8';
-  ctx.fillText(`📅 생성 일시: ${dateFormatted}`, width / 2, 580);
+  ctx.fillText(`📅 생성 일시: ${dateFormatted}`, width / 2, by + 100);
 
   // 8. 제출 학생 명단 목록 (2줄 컴팩트 프리뷰)
   if (sortedNotes.length > 0) {
@@ -126,16 +130,17 @@ function renderCoverPageDataUrl(
       }
     }
 
-    ctx.fillText(line1, width / 2, 690);
+    const listY = Math.round(height * 0.62);
+    ctx.fillText(line1, width / 2, listY);
     if (line2) {
-      ctx.fillText(line2, width / 2, 730);
+      ctx.fillText(line2, width / 2, listY + 36);
     }
   }
 
   // 9. 하단 라벨
   ctx.font = '500 20px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#64748b';
-  ctx.fillText('전자칠판 스마트 드라이브 포털 (Smart Classroom System)', width / 2, 1020);
+  ctx.fillText('전자칠판 스마트 드라이브 포털 (Smart Classroom System)', width / 2, height - 50);
 
   return canvas.toDataURL('image/png', 0.95);
 }
@@ -384,13 +389,15 @@ export async function generateClassSubmissionPdf(options: GeneratePdfOptions): P
   });
 
   // 1. 표지 (한글 깨짐 없는 Canvas 1페이지 고화질 리포트 표지 렌더링)
+  const coverWidth = isLandscape ? 1600 : 1130;
+  const coverHeight = isLandscape ? 1130 : 1600;
   const coverImgData = renderCoverPageDataUrl(
     baseTitle,
     sortedNotes.length,
     now.toLocaleString('ko-KR'),
     sortedNotes,
-    1600,
-    1130
+    coverWidth,
+    coverHeight
   );
   if (coverImgData) {
     doc.addImage(coverImgData, 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');

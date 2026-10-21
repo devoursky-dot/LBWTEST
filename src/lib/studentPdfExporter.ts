@@ -48,10 +48,118 @@ function loadImageSafely(src: string): Promise<HTMLImageElement | null> {
 }
 
 /**
+ * [1페이지 전용 고화질 리포트 표지 Canvas 렌더러]
+ * - 맨 앞 1페이지에 세련된 다크 테마 표지(제목, 학생/작성자 정보, 저장일시, 설명)를 배치
+ * - 가로/세로(Orientation) 비율에 따라 자동 비율 조정
+ */
+function renderStudentCoverPageDataUrl(
+  title: string,
+  studentLabel: string,
+  totalPages: number,
+  dateFormatted: string,
+  width: number,
+  height: number
+): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+
+  // 1. 다크 네이비 그라데이션 배경
+  const grad = ctx.createLinearGradient(0, 0, width, height);
+  grad.addColorStop(0, '#0a0e17');
+  grad.addColorStop(0.5, '#131926');
+  grad.addColorStop(1, '#070a10');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, width, height);
+
+  // 2. 우아한 블루/실버 프리미엄 장식 테두리
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(36, 36, width - 72, height - 72);
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(48, 48, width - 96, height - 96);
+
+  // 3. 중앙 원형 아이콘
+  const centerY = Math.round(height * 0.17);
+  ctx.fillStyle = '#2563eb';
+  ctx.beginPath();
+  ctx.arc(width / 2, centerY, 52, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '46px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('📓', width / 2, centerY);
+
+  // 4. 메인 제목
+  const titleY = Math.round(height * 0.27);
+  ctx.font = 'bold 46px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('수업 필기 공책', width / 2, titleY);
+
+  // 5. 수업 상세 제목
+  const subTitleY = Math.round(height * 0.35);
+  ctx.font = 'bold 36px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#60a5fa';
+  ctx.fillText(title, width / 2, subTitleY);
+
+  // 6. 구분선
+  const divY = Math.round(height * 0.40);
+  ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(width / 2 - 240, divY);
+  ctx.lineTo(width / 2 + 240, divY);
+  ctx.stroke();
+
+  // 7. 메타 정보 카드 박스
+  const boxW = Math.min(width - 120, 700);
+  const boxH = 220;
+  const boxX = (width - boxW) / 2;
+  const boxY = Math.round(height * 0.45);
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+
+  // 메타 정보 텍스트 (4줄)
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold 26px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillText(`👤 작성자: ${studentLabel}`, width / 2, boxY + 45);
+
+  ctx.font = '500 22px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#cbd5e1';
+  ctx.fillText(`📄 페이지 구성: 총 ${totalPages}쪽 필기 노트`, width / 2, boxY + 95);
+
+  ctx.fillText(`📅 저장 일시: ${dateFormatted}`, width / 2, boxY + 140);
+
+  ctx.font = '500 19px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillText(`✨ 칠판 다크모드 원본 필기 100% 보존`, width / 2, boxY + 182);
+
+  // 8. 하단 설명 푸터
+  ctx.font = '500 19px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#64748b';
+  ctx.fillText('전자칠판 스마트 드라이브 포털 (Smart Classroom System)', width / 2, height - 64);
+
+  return canvas.toDataURL('image/png', 0.95);
+}
+
+/**
  * [학생 필기 로컬 PDF 내보내기 모듈]
- * - 다중 페이지 공책(A4 표준)을 고해상도 PDF로 렌더링하여 학생 기기(태블릿/PC)에 즉시 저장
- * - 한글 폰트 100% 보존, 전체 배경 PDF/이미지 및 임베드 스티커 이미지 완벽 합성
- * - 다크 모드 펜 색상 자동 보정(흰색 펜 -> 선명한 다크 네이비 잉크 변환)
+ * - 1페이지: 제목 및 메타정보가 담긴 독립 표지(Cover Page) 생성
+ * - 2페이지부터: 상단 제목줄(헤더)을 일체 제거하고 1:1 풀화면 원본 다크모드 필기 보존
+ * - 한글 폰트 100% 보존, 전체 배경 PDF/이미지 및 임베드 스티커 이미지 완벽 무왜곡 합성
  */
 export async function exportStudentNotebookToPdf(
   options: StudentPdfExportOptions
@@ -84,29 +192,52 @@ export async function exportStudentNotebookToPdf(
   const hours = String(now.getHours()).padStart(2, '0');
   const minutes = String(now.getMinutes()).padStart(2, '0');
   const dateTimeStr = `${year}${month}${day}_${hours}${minutes}`;
+  const dateFormatted = `${year}-${month}-${day} ${hours}:${minutes}`;
 
   const studentNameStr = (studentInfo && studentInfo.name)
     ? `${studentInfo.grade}학년${studentInfo.classNum}반_${studentInfo.name}`
     : '학생필기';
+  const studentLabel = (studentInfo && studentInfo.name)
+    ? `${studentInfo.grade}학년 ${studentInfo.classNum}반 ${studentInfo.studentNum}번 ${studentInfo.name}`
+    : '선생님 전자칠판 필기 공책';
+
   const cleanTitle = (lessonTitle || '수업필기').replace(/[/\\?%*:|"<>]/g, '_').trim();
   const fileName = `[필기저장]_${cleanTitle}_${studentNameStr}_${dateTimeStr}.pdf`;
 
   const totalPages = Math.max(1, pages.length);
 
+  // =========================================================================
+  // 1. 맨 앞 1페이지: 독립 표지(Cover Page) 생성 (제목, 작성자, 일시, 설명 수록)
+  // =========================================================================
+  const coverImgData = renderStudentCoverPageDataUrl(
+    cleanTitle,
+    studentLabel,
+    totalPages,
+    dateFormatted,
+    A4_WIDTH,
+    A4_HEIGHT
+  );
+  if (coverImgData) {
+    doc.addImage(coverImgData, 'PNG', 0, 0, pageWidthMm, pageHeightMm, undefined, 'FAST');
+  }
+
+  // =========================================================================
+  // 2. 2페이지부터: 각 필기 페이지 렌더링 (상단 제목줄 없이 1:1 풀화면 다크 캔버스)
+  // =========================================================================
   for (let pIdx = 0; pIdx < totalPages; pIdx++) {
     const page = pages[pIdx] || { strokes: [], textItems: [] };
-    if (pIdx > 0) {
-      doc.addPage('a4', orientation);
-    }
+    
+    // 항상 새 페이지 추가 (1페이지는 표지이므로)
+    doc.addPage('a4', orientation);
 
-    // 1. A4 고해상도 오프스크린 캔버스 생성
+    // A4 고해상도 오프스크린 캔버스 생성
     const offCanvas = document.createElement('canvas');
     offCanvas.width = A4_WIDTH;
     offCanvas.height = A4_HEIGHT;
     const ctx = offCanvas.getContext('2d');
     if (!ctx) continue;
 
-    // 2. 배경 렌더링
+    // (1) 배경 렌더링 (상단 제목줄 없이 0, 0부터 1:1 전체 배치)
     let hasCustomBackground = false;
     if (page.fullPageBackground) {
       const bgImg = await loadImageSafely(page.fullPageBackground);
@@ -141,7 +272,7 @@ export async function exportStudentNotebookToPdf(
       ctx.restore();
     }
 
-    // 3. 임베드 이미지(문제 스티커) 렌더링
+    // (2) 임베드 이미지(문제 스티커) 렌더링
     if (page.images && page.images.length > 0) {
       for (const imgItem of page.images) {
         const loadedImg = await loadImageSafely(imgItem.src);
@@ -153,55 +284,59 @@ export async function exportStudentNotebookToPdf(
       }
     }
 
-    // 4. 필기 스트로크 렌더링 (다크 모드 원본 색상 100% 보존)
+    // (3) 필기 스트로크 렌더링 (다크 모드 원본 색상 100% 보존)
     for (const stroke of (page.strokes || [])) {
       drawSingleStroke(ctx, stroke);
     }
 
-    // 5. 텍스트 입력 아이템 렌더링
+    // (4) 텍스트 입력 아이템 렌더링 (다크모드 원본 색상 보존)
     if (page.textItems && page.textItems.length > 0) {
       for (const item of page.textItems) {
         ctx.save();
         ctx.font = `bold ${Math.max(16, item.fontSize || 18) * 1.4}px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`;
-        ctx.fillStyle = (!hasCustomBackground && (item.color === '#ffffff' || item.color === '#fff'))
-          ? '#0f172a'
-          : item.color || '#0f172a';
+        ctx.fillStyle = item.color || '#ffffff';
         ctx.textBaseline = 'top';
         ctx.fillText(item.text, item.x, item.y);
         ctx.restore();
       }
     }
 
-    // 6. 상단 학습 헤더 및 하단 페이지 번호 뱃지 렌더링
+    // (5) 상단 제목줄은 완전히 제거!
+    // 대신 학습지를 침범하지 않도록 우측 하단에 초소형 미니 식별 태그만 은은하게 렌더링
     ctx.save();
-    // 상단 반투명 헤더 바
-    ctx.fillStyle = hasCustomBackground ? 'rgba(15, 23, 42, 0.85)' : 'rgba(248, 250, 252, 0.95)';
-    ctx.fillRect(0, 0, A4_WIDTH, 48);
-    ctx.strokeStyle = hasCustomBackground ? 'rgba(255, 255, 255, 0.2)' : '#e2e8f0';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(0, 0, A4_WIDTH, 48);
+    const tagText = `${pIdx + 1} / ${totalPages} 쪽 | ${studentLabel}`;
+    ctx.font = 'bold 16px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+    const textWidth = ctx.measureText(tagText).width;
+    const tagPadding = 12;
+    const tagH = 32;
+    const tagW = textWidth + tagPadding * 2;
+    const tagX = A4_WIDTH - tagW - 20;
+    const tagY = A4_HEIGHT - tagH - 16;
 
-    ctx.font = 'bold 18px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-    ctx.fillStyle = hasCustomBackground ? '#ffffff' : '#1e293b';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if ((ctx as any).roundRect) {
+      (ctx as any).roundRect(tagX, tagY, tagW, tagH, 8);
+    } else {
+      ctx.rect(tagX, tagY, tagW, tagH);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#e2e8f0';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const studentLabel = (studentInfo && studentInfo.name)
-      ? `${studentInfo.grade}학년 ${studentInfo.classNum}반 ${studentInfo.studentNum}번 ${studentInfo.name}`
-      : '학생 필기';
-    ctx.fillText(`📚 ${cleanTitle} | ${studentLabel}`, 20, 24);
-
-    ctx.font = '14px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-    ctx.fillStyle = hasCustomBackground ? '#cbd5e1' : '#64748b';
-    ctx.textAlign = 'right';
-    ctx.fillText(`${pIdx + 1} / ${totalPages} 쪽  (${year}-${month}-${day} ${hours}:${minutes})`, A4_WIDTH - 20, 24);
+    ctx.fillText(tagText, tagX + tagPadding, tagY + tagH / 2);
     ctx.restore();
 
-    // 7. 캔버스 이미지를 jsPDF에 추가
+    // (6) 캔버스 이미지를 jsPDF에 추가 (1:1 풀 해상도)
     const imgDataUrl = offCanvas.toDataURL('image/jpeg', 0.92);
     doc.addImage(imgDataUrl, 'JPEG', 0, 0, pageWidthMm, pageHeightMm, undefined, 'FAST');
   }
 
-  // 8. 브라우저 로컬 기기 다운로드 트리거
+  // 3. 브라우저 로컬 기기 다운로드 트리거
   doc.save(fileName);
 
   return { success: true, fileName };
