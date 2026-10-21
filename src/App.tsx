@@ -263,6 +263,11 @@ export default function App() {
     showToast('👋 로그아웃되었습니다.');
   };
 
+  // GitHub Pages 등 정적 호스팅 환경 대비 Vercel API 프록시 베이스 URL 자동 지정
+  const apiBase = typeof window !== 'undefined' && window.location.hostname.includes('github.io')
+    ? 'https://lbwtest.vercel.app'
+    : '';
+
   // ==========================================================================
   // [드라이브 폴더 데이터 실시간 로드]
   // ==========================================================================
@@ -279,7 +284,7 @@ export default function App() {
         ...(googleApiKey ? { apiKey: googleApiKey } : {})
       });
 
-      const res = await fetch(`/api/drive?${queryParams.toString()}`, { cache: 'no-store' });
+      const res = await fetch(`${apiBase}/api/drive?${queryParams.toString()}`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (data.items && Array.isArray(data.items)) {
@@ -316,7 +321,7 @@ export default function App() {
                 viewUrl: isFolder 
                   ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
                   : `https://drive.google.com/file/d/${file.id}/view?usp=sharing`,
-                downloadUrl: `/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
+                downloadUrl: `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
               };
             });
             setItems(directItems);
@@ -455,8 +460,12 @@ export default function App() {
   const executeDriveAction = async (payload: any): Promise<any> => {
     const finalGasUrl = gasUploadUrl || DEFAULT_GAS_UPLOAD_URL;
 
+    const apiBase = typeof window !== 'undefined' && window.location.hostname.includes('github.io')
+      ? 'https://lbwtest.vercel.app'
+      : '';
+
     try {
-      const res = await fetch('/api/drive', {
+      const res = await fetch(`${apiBase}/api/drive`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...payload, gasUrl: finalGasUrl })
@@ -506,10 +515,7 @@ export default function App() {
     showToast(`⚡ '${item.name}' 다운로드를 시작합니다...`);
 
     // 1. 호스트 환경에 따른 최적 다운로드 URL 결정 (로컬/Vercel 프록시 vs GitHub Pages)
-    let proxyUrl = `/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
-    if (typeof window !== 'undefined' && window.location.hostname.includes('github.io')) {
-      proxyUrl = `https://lbwtest.vercel.app/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
-    }
+    let proxyUrl = `${apiBase}/api/drive?action=download&fileId=${item.id}&fileName=${encodeURIComponent(item.name)}`;
 
     // 2. 구형 전자칠판 내장 브라우저 (Android 7~10 WebKit/Chromium) 특화:
     // 화면 이탈(화면 깜빡임 또는 빈 화면) 없이 시스템 다운로더를 트리거하는 숨겨진 iframe 활용
@@ -719,12 +725,12 @@ export default function App() {
     setActiveModal('qr_lesson_viewer');
 
     const cleanTitle = item.name.replace('[QR수업]', '').trim();
-    // 로컬호스트(localhost)에서 수업 실행 시에도 외부 스마트폰/아이패드가 접속할 수 있도록 Vercel 라이브 도메인 연동
+    const currentPath = typeof window !== 'undefined' ? window.location.pathname.replace(/\/$/, '') : '';
     const baseOrigin = typeof window !== 'undefined'
       ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-          ? 'https://lbwtest.vercel.app'
-          : window.location.origin)
-      : 'https://lbwtest.vercel.app';
+          ? 'https://devoursky-dot.github.io/LBWTEST'
+          : `${window.location.origin}${currentPath}`)
+      : 'https://devoursky-dot.github.io/LBWTEST';
     const studentUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
 
     try {

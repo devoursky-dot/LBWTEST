@@ -52,9 +52,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
   // 1. 학생 참여 QR 코드 및 전용 접속 URL 생성
   useEffect(() => {
+    const currentPath = window.location.pathname.replace(/\/$/, '');
     const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-      ? window.location.origin
-      : 'https://lbwtest.vercel.app';
+      ? 'https://devoursky-dot.github.io/LBWTEST'
+      : `${window.location.origin}${currentPath}`;
     const generatedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}`;
     setStudentUrl(generatedUrl);
 
