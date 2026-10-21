@@ -115,9 +115,6 @@ export default function App() {
     if (initialSession?.role === 'teacher') return 'teacher';
     return 'guest';
   });
-  const [teacherPw, setTeacherPw] = useState<string>(() => {
-    return localStorage.getItem('lbw_teacher_pw') || '';
-  });
 
   // 편집 권한 (선생님/관리자만 폴더생성/수정/삭제/업로드 가능, 기본 전자칠판 모드는 다운로드만 가능)
   const canEdit = authMode === 'teacher' || authMode === 'admin';
@@ -222,7 +219,6 @@ export default function App() {
   const [tempRootFolderId, setTempRootFolderId] = useState(rootFolderId);
   const [tempApiKey, setTempApiKey] = useState(googleApiKey);
   const [tempGasUrl, setTempGasUrl] = useState(gasUploadUrl);
-  const [tempTeacherPw, setTempTeacherPw] = useState(teacherPw);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentFolder = folderHistory[folderHistory.length - 1];
@@ -983,7 +979,7 @@ export default function App() {
 
     if (loginTab === 'teacher') {
       const isCorrect = await verifyWhiteboardPassword(inputTeacherPw.trim());
-      if (isCorrect || (teacherPw && inputTeacherPw.trim() === teacherPw.trim())) {
+      if (isCorrect) {
         setAuthMode('teacher');
         localStorage.setItem('lbw_auth_mode', 'teacher');
         setActiveModal(null);
@@ -1156,19 +1152,22 @@ export default function App() {
           >
             🔄
           </button>
-          <button 
-            className="gdrive-icon-btn" 
-            title="시스템 설정"
-            onClick={() => {
-              setTempRootFolderId(rootFolderId);
-              setTempApiKey(googleApiKey);
-              setTempGasUrl(gasUploadUrl);
-              setTempTeacherPw(teacherPw);
-              setActiveModal('settings');
-            }}
-          >
-            ⚙️
-          </button>
+          {/* 드라이브 시스템 설정 (루트 폴더 ID, API 키, GAS URL 등) - 오직 관리자(Admin)에게만 노출 */}
+          {currentSession?.role === 'admin' && (
+            <button 
+              id="btn-settings-open"
+              className="gdrive-icon-btn" 
+              title="시스템 인프라 설정 (관리자 전용)"
+              onClick={() => {
+                setTempRootFolderId(rootFolderId);
+                setTempApiKey(googleApiKey);
+                setTempGasUrl(gasUploadUrl);
+                setActiveModal('settings');
+              }}
+            >
+              ⚙️
+            </button>
+          )}
 
           {/* 관리자일 경우 비번 관리 센터 원클릭 바로가기 버튼 */}
           {currentSession?.role === 'admin' && (
@@ -2296,12 +2295,15 @@ export default function App() {
       {/* ====================================================================
           모달 4: 드라이브 시스템 설정
           ==================================================================== */}
-      {activeModal === 'settings' && (
+      {activeModal === 'settings' && currentSession?.role === 'admin' && (
         <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
           <div className="modal-box" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>드라이브 연결 설정</h2>
+              <h2>⚙️ 드라이브 시스템 설정 (관리자 전용)</h2>
               <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
+            </div>
+            <div style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.25)', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', color: '#fde047', lineHeight: 1.5, marginBottom: '14px' }}>
+              🛡️ <strong>관리자 보안 안내:</strong> 드라이브 루트 폴더 ID, Google API 키 및 앱스 스크립트 URL은 시스템 인프라 정보로 일반 교사 및 학생에게는 숨겨지며 오직 관리자만 변경할 수 있습니다.
             </div>
             <form onSubmit={(e) => {
               e.preventDefault();
@@ -2315,25 +2317,9 @@ export default function App() {
               const finalGas = tempGasUrl.trim() || DEFAULT_GAS_UPLOAD_URL;
               setGasUploadUrl(finalGas);
               localStorage.setItem('lbw_gas_upload_url', finalGas);
-              if (tempTeacherPw.trim()) {
-                setTeacherPw(tempTeacherPw.trim());
-                localStorage.setItem('lbw_teacher_pw', tempTeacherPw.trim());
-              }
               setActiveModal(null);
-              showToast('✅ 설정이 저장되었습니다.');
+              showToast('✅ 드라이브 인프라 설정이 저장되었습니다.');
             }} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
-                  👨‍🏫 선생님 비밀번호 변경
-                </label>
-                <input 
-                  type="text" 
-                  className="g-form-input" 
-                  value={tempTeacherPw}
-                  onChange={(e) => setTempTeacherPw(e.target.value)}
-                  placeholder="새 비밀번호 입력"
-                />
-              </div>
 
               <div>
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
