@@ -21,11 +21,21 @@ export interface CropRect {
 
 /**
  * PDF 파일을 로드하여 PDFDocumentProxy 인스턴스를 반환합니다.
+ * (File, Blob, ArrayBuffer, URL 문자열 모두 지원)
  */
-export async function loadPdfDocument(file: File): Promise<any> {
-  const arrayBuffer = await file.arrayBuffer();
-  const loadingTask = (pdfjsLib as any).getDocument({ data: arrayBuffer });
-  return await loadingTask.promise;
+export async function loadPdfDocument(source: File | Blob | ArrayBuffer | string): Promise<any> {
+  if (typeof source === 'string') {
+    const loadingTask = (pdfjsLib as any).getDocument(source);
+    return await loadingTask.promise;
+  } else if (source instanceof ArrayBuffer) {
+    const loadingTask = (pdfjsLib as any).getDocument({ data: source });
+    return await loadingTask.promise;
+  } else if (source instanceof Blob) {
+    const arrayBuffer = await source.arrayBuffer();
+    const loadingTask = (pdfjsLib as any).getDocument({ data: arrayBuffer });
+    return await loadingTask.promise;
+  }
+  throw new Error('지원되지 않는 PDF 데이터 형식입니다.');
 }
 
 /**

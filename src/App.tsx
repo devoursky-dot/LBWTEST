@@ -125,17 +125,24 @@ export default function App() {
   const canEdit = authMode === 'teacher' || authMode === 'admin';
 
   // --- 학생 QR 수업 모드 감지 (?lessonId=...) ---
-  const [studentLessonParam] = useState<{ lessonId: string; title: string } | null>(() => {
+  const [studentLessonParam] = useState<{ lessonId: string; title: string; pdfId?: string; pdfName?: string } | null>(() => {
     if (typeof window !== 'undefined') {
       try {
         const params = new URLSearchParams(window.location.search);
         const lessonId = params.get('lessonId');
         let title = params.get('title') || '';
+        const pdfId = params.get('pdfId') || undefined;
+        let pdfName = params.get('pdfName') || undefined;
         if (lessonId) {
           try {
             title = decodeURIComponent(title);
           } catch {}
-          return { lessonId, title };
+          if (pdfName) {
+            try {
+              pdfName = decodeURIComponent(pdfName);
+            } catch {}
+          }
+          return { lessonId, title, pdfId, pdfName };
         }
       } catch (e) {
         console.error('URL 파라미터 파싱 오류:', e);
@@ -733,7 +740,13 @@ export default function App() {
           ? 'https://devoursky-dot.github.io/LBWTEST'
           : `${window.location.origin}${currentPath}`)
       : 'https://devoursky-dot.github.io/LBWTEST';
-    const studentUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
+    let studentUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanTitle)}`;
+    if ((item as any).pdfFileId) {
+      studentUrl += `&pdfId=${encodeURIComponent((item as any).pdfFileId)}`;
+      if ((item as any).pdfFileName) {
+        studentUrl += `&pdfName=${encodeURIComponent((item as any).pdfFileName)}`;
+      }
+    }
 
     try {
       const qrDataUrl = await QRCode.toDataURL(studentUrl, {
@@ -1031,6 +1044,8 @@ export default function App() {
       <StudentLessonView
         lessonId={studentLessonParam.lessonId}
         lessonTitle={studentLessonParam.title}
+        initialPdfId={studentLessonParam.pdfId}
+        initialPdfName={studentLessonParam.pdfName}
         onExit={() => {
           window.location.href = window.location.pathname;
         }}

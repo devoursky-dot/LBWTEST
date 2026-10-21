@@ -56,7 +56,13 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
       ? 'https://devoursky-dot.github.io/LBWTEST'
       : `${window.location.origin}${currentPath}`;
-    const generatedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}`;
+    let generatedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}`;
+    if ((lesson as any).pdfFileId) {
+      generatedUrl += `&pdfId=${encodeURIComponent((lesson as any).pdfFileId)}`;
+      if ((lesson as any).pdfFileName) {
+        generatedUrl += `&pdfName=${encodeURIComponent((lesson as any).pdfFileName)}`;
+      }
+    }
     setStudentUrl(generatedUrl);
 
     QRCode.toDataURL(generatedUrl, {
@@ -66,7 +72,29 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }).then(setQrCodeDataUrl).catch((err) => {
       console.error('QR 생성 실패:', err);
     });
-  }, [currentLessonId, cleanLessonTitle]);
+
+    // 폴더 내에 PDF 파일이 있는지 비동기 조회하여 URL 및 QR 코드 자동 보강
+    if (!(lesson as any).pdfFileId) {
+      (async () => {
+        try {
+          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+          const res = await fetch(directUrl);
+          if (res.ok) {
+            const data = await res.json();
+            const files = data.files || [];
+            const pdfFile = files.find((f: any) => f.mimeType === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+            if (pdfFile) {
+              const enrichedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}&pdfId=${encodeURIComponent(pdfFile.id)}&pdfName=${encodeURIComponent(pdfFile.name)}`;
+              setStudentUrl(enrichedUrl);
+              QRCode.toDataURL(enrichedUrl, { width: 400, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
+                .then(setQrCodeDataUrl)
+                .catch(() => {});
+            }
+          }
+        } catch {}
+      })();
+    }
+  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName]);
 
   // 2. 초기 DB 제출 목록 조회 (strokes_data 포함하여 온디맨드 즉시 렌더링 지원)
   const fetchSubmissionsFromDb = async () => {
