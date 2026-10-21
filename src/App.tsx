@@ -4,7 +4,7 @@ import { StudentLessonView } from './StudentLessonView';
 import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
 import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
-import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, type UserSession } from './lib/auth';
+import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
@@ -28,9 +28,7 @@ interface DriveItem {
 const DEFAULT_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
 const DEFAULT_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
 const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
-const DEFAULT_TEACHER_PW = 'tch1234';
 const ADMIN_ID = 'admin';
-const ADMIN_PW = 'admin!@#$1234';
 
 type AuthMode = 'guest' | 'teacher' | 'admin';
 
@@ -118,7 +116,7 @@ export default function App() {
     return 'guest';
   });
   const [teacherPw, setTeacherPw] = useState<string>(() => {
-    return localStorage.getItem('lbw_teacher_pw') || DEFAULT_TEACHER_PW;
+    return localStorage.getItem('lbw_teacher_pw') || '';
   });
 
   // 편집 권한 (선생님/관리자만 폴더생성/수정/삭제/업로드 가능, 기본 전자칠판 모드는 다운로드만 가능)
@@ -979,22 +977,24 @@ export default function App() {
   // ==========================================================================
   // [인증 로그인 처리: 선생님 / 최고 관리자]
   // ==========================================================================
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
 
     if (loginTab === 'teacher') {
-      if (inputTeacherPw.trim() === teacherPw.trim() || inputTeacherPw.trim() === 'tch1234') {
+      const isCorrect = await verifyWhiteboardPassword(inputTeacherPw.trim());
+      if (isCorrect || (teacherPw && inputTeacherPw.trim() === teacherPw.trim())) {
         setAuthMode('teacher');
         localStorage.setItem('lbw_auth_mode', 'teacher');
         setActiveModal(null);
         setInputTeacherPw('');
         showToast('👨‍🏫 선생님 모드로 인증되었습니다.');
       } else {
-        setLoginError('선생님 비밀번호가 일치하지 않습니다. (기본: tch1234)');
+        setLoginError('선생님 비밀번호가 일치하지 않습니다.');
       }
     } else {
-      if (inputAdminId.trim() === ADMIN_ID && inputAdminPw.trim() === ADMIN_PW) {
+      const isCorrect = await verifyAdminPassword(inputAdminPw.trim());
+      if (inputAdminId.trim() === ADMIN_ID && isCorrect) {
         setAuthMode('admin');
         localStorage.setItem('lbw_auth_mode', 'admin');
         setActiveModal(null);
@@ -2195,7 +2195,7 @@ export default function App() {
               {loginTab === 'teacher' ? (
                 <div>
                   <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
-                    선생님 비밀번호 (기본: tch1234)
+                    선생님 / 전자칠판 비밀번호
                   </label>
                   <input
                     type="password"
@@ -2312,7 +2312,7 @@ export default function App() {
                   className="g-form-input" 
                   value={tempTeacherPw}
                   onChange={(e) => setTempTeacherPw(e.target.value)}
-                  placeholder="예: tch1234"
+                  placeholder="새 비밀번호 입력"
                 />
               </div>
 

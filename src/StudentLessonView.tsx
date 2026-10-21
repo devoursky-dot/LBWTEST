@@ -16,6 +16,7 @@ import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
 import { classroomRealtime } from './lib/classroomRealtime';
 import { compressNotePagesForTransmission } from './lib/imageCompressor';
+import { parseStudentId, verifyStudentLogin, changeStudentPassword } from './lib/auth';
 
 interface StudentInfo {
   grade: string;
@@ -103,11 +104,24 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   });
 
-  const [inputGrade, setInputGrade] = useState('3');
-  const [inputClassNum, setInputClassNum] = useState('1');
-  const [inputStudentNum, setInputStudentNum] = useState('15');
-  const [inputName, setInputName] = useState('');
-  const [isChangingStudent, setIsChangingStudent] = useState(false);
+  // 학생 학번/비밀번호 인증 모달 상태
+  const [isChangingStudent, setIsChangingStudent] = useState(() => {
+    try {
+      const saved = localStorage.getItem('lbw_student_info');
+      return !saved; // 학생 정보가 없으면 수업 진입 시 바로 로그인 모달 오픈
+    } catch {
+      return true;
+    }
+  });
+
+  const [authStudentId, setAuthStudentId] = useState('');
+  const [authStudentName, setAuthStudentName] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authNewPassword, setAuthNewPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [isChangingPwMode, setIsChangingPwMode] = useState(false);
+  const [authErrorMsg, setAuthErrorMsg] = useState<string | null>(null);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
 
   // --- 2. 삼성노트 REA 뷰포트 & A4 용지 규격 상태 ---
   // 기본 표준: A4 세로 (Portrait)
@@ -288,20 +302,116 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }, 3000);
   };
 
-  // 학생 등록/변경
-  const handleSaveStudentInfo = (e: React.FormEvent) => {
+  // 학생 로그인 및 학번 인증 핸들러
+  const handleStudentAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputName.trim()) return;
-    const info: StudentInfo = {
-      grade: inputGrade.trim(),
-      classNum: inputClassNum.trim(),
-      studentNum: inputStudentNum.trim(),
-      name: inputName.trim()
-    };
-    setStudentInfo(info);
-    localStorage.setItem('lbw_student_info', JSON.stringify(info));
-    setIsChangingStudent(false);
-    showToast(`👨‍🎓 ${info.grade}학년 ${info.classNum}반 ${info.name} 학생으로 등록되었습니다.`);
+    setAuthErrorMsg(null);
+
+    const parsed = parseStudentId(authStudentId);
+    if (!parsed.valid) {
+      setAuthErrorMsg('⚠️ 올바른 4자리 학번(예: 1101 ~ 3830)을 입력하세요.');
+      return;
+    }
+
+    if (!authPassword.trim()) {
+      setAuthErrorMsg('⚠️ 비밀번호를 입력해 주세요. (초기 비밀번호: 1234)');
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    try {
+      const verifyRes = await verifyStudentLogin(authStudentId.trim(), authPassword.trim());
+      if (!verifyRes.success) {
+        setAuthErrorMsg(verifyRes.message || '❌ 비밀번호가 일치하지 않습니다. 비밀번호를 잊어버린 경우 관리자 선생님께 1234 초기화를 요청하세요.');
+        return;
+      }
+
+      const cleanName = authStudentName.trim() || `${parsed.grade}-${parsed.classNum} ${parsed.studentNum}번`;
+
+      // 비밀번호 변경 요청이 활성화된 경우
+      if (isChangingPwMode) {
+        if (!authNewPassword.trim() || authNewPassword.trim().length < 4) {
+          setAuthErrorMsg('⚠️ 새 비밀번호는 최소 4자리 이상이어야 합니다.');
+          return;
+        }
+        if (authNewPassword.trim() !== authConfirmPassword.trim()) {
+          setAuthErrorMsg('⚠️ 새 비밀번호와 비밀번호 확인이 일치하지 않습니다.');
+          return;
+        }
+        const changeRes = await changeStudentPassword(authStudentId.trim(), authNewPassword.trim(), cleanName);
+        if (!changeRes.success) {
+          setAuthErrorMsg(changeRes.message || '비밀번호 변경 실패');
+          return;
+        }
+        showToast('🎉 비밀번호가 안전하게 변경되었습니다!');
+      }
+
+      const info: StudentInfo = {
+        grade: parsed.grade,
+        classNum: parsed.classNum,
+        studentNum: parsed.studentNum,
+        name: cleanName
+      };
+
+      setStudentInfo(info);
+      localStorage.setItem('lbw_student_info', JSON.stringify(info));
+      setIsChangingStudent(false);
+      setAuthPassword('');
+      setAuthNewPassword('');
+      setAuthConfirmPassword('');
+      showToast(`👨‍🎓 ${info.grade}학년 ${info.classNum}반 ${info.name} 학생으로 로그인되었습니다.`);
+    } catch {
+      setAuthErrorMsg('인증 처리 중 네트워크 오류가 발생했습니다.');
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  };
+
+  // 로그인 상태에서 비밀번호만 단독 변경하는 핸들러
+  const handleStudentChangePasswordOnly = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!studentInfo) return;
+    setAuthErrorMsg(null);
+
+    const studentIdStr = `${studentInfo.grade}${studentInfo.classNum}${parseInt(studentInfo.studentNum, 10) < 10 ? '0' + studentInfo.studentNum : studentInfo.studentNum}`;
+
+    if (!authPassword.trim()) {
+      setAuthErrorMsg('⚠️ 현재 비밀번호를 입력해 주세요. (기본: 1234)');
+      return;
+    }
+    if (!authNewPassword.trim() || authNewPassword.trim().length < 4) {
+      setAuthErrorMsg('⚠️ 새 비밀번호는 최소 4자리 이상이어야 합니다.');
+      return;
+    }
+    if (authNewPassword.trim() !== authConfirmPassword.trim()) {
+      setAuthErrorMsg('⚠️ 새 비밀번호와 비밀번호 확인이 일치하지 않습니다.');
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    try {
+      const verifyRes = await verifyStudentLogin(studentIdStr, authPassword.trim());
+      if (!verifyRes.success) {
+        setAuthErrorMsg('❌ 현재 비밀번호가 일치하지 않습니다. 비밀번호를 잊어버린 경우 관리자 선생님께 1234 초기화를 요청하세요.');
+        return;
+      }
+
+      const changeRes = await changeStudentPassword(studentIdStr, authNewPassword.trim(), studentInfo.name);
+      if (!changeRes.success) {
+        setAuthErrorMsg(changeRes.message || '비밀번호 변경 실패');
+        return;
+      }
+
+      setAuthPassword('');
+      setAuthNewPassword('');
+      setAuthConfirmPassword('');
+      setIsChangingStudent(false);
+      showToast('🎉 비밀번호가 안전하게 변경되었습니다!');
+    } catch {
+      setAuthErrorMsg('비밀번호 변경 중 오류가 발생했습니다.');
+    } finally {
+      setIsAuthSubmitting(false);
+    }
   };
 
   // 전체화면 토글 (iOS Safari 등 미지원 환경 안전 방어)
@@ -2312,13 +2422,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 maxWidth: isNarrowScreen ? '140px' : '220px',
                 overflow: 'hidden'
               }}
-              title="클릭하여 학생 정보 수정"
+              title="클릭하여 학생 계정 및 비밀번호 관리"
             >
               <span>👨‍🎓</span>
               <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 {studentInfo.name}
               </span>
-              <span style={{ fontSize: '10px', color: '#93c5fd' }}>✏️</span>
+              <span style={{ fontSize: '10px', color: '#93c5fd', background: 'rgba(59, 130, 246, 0.25)', padding: '1px 5px', borderRadius: '4px' }}>🔑 비번관리</span>
             </div>
           ) : (
             <button
@@ -2326,7 +2436,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               style={{ fontSize: '12px', padding: '4px 10px' }}
               onClick={() => setIsChangingStudent(true)}
             >
-              👨‍🎓 학생 등록
+              👨‍🎓 학생 로그인
             </button>
           )}
 
@@ -3705,76 +3815,336 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </div>
       </main>
 
-      {/* 4. 학생 정보 등록/수정 모달 */}
+      {/* 4. 학생 계정 로그인 & 비밀번호 관리 모달 */}
       {isChangingStudent && (
-        <div className="modal-backdrop" onClick={() => setIsChangingStudent(false)}>
-          <div className="modal-box" style={{ maxWidth: '400px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2>👨‍🎓 학생 정보 등록</h2>
-              <button className="modal-close-btn" onClick={() => setIsChangingStudent(false)}>✕</button>
-            </div>
-            <form onSubmit={handleSaveStudentInfo} style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '10px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--g-text-secondary)', marginBottom: '4px' }}>학년</label>
-                  <select
-                    className="g-form-input"
-                    value={inputGrade}
-                    onChange={(e) => setInputGrade(e.target.value)}
-                  >
-                    <option value="1">1학년</option>
-                    <option value="2">2학년</option>
-                    <option value="3">3학년</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--g-text-secondary)', marginBottom: '4px' }}>반</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="15"
-                    className="g-form-input"
-                    value={inputClassNum}
-                    onChange={(e) => setInputClassNum(e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', color: 'var(--g-text-secondary)', marginBottom: '4px' }}>번호</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="40"
-                    className="g-form-input"
-                    value={inputStudentNum}
-                    onChange={(e) => setInputStudentNum(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-
+        <div className="modal-backdrop" onClick={() => { if (studentInfo) setIsChangingStudent(false); }}>
+          <div className="modal-box" style={{ maxWidth: '440px', background: '#1c202c', color: '#ffffff', borderRadius: '18px', border: '1px solid rgba(255,255,255,0.15)', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '12px', marginBottom: '16px' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '12px', color: 'var(--g-text-secondary)', marginBottom: '4px' }}>이름</label>
-                <input
-                  type="text"
-                  className="g-form-input"
-                  placeholder="예: 홍길동"
-                  value={inputName}
-                  onChange={(e) => setInputName(e.target.value)}
-                  required
-                  autoFocus
-                />
+                <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
+                  {studentInfo ? '👨‍🎓 학생 계정 & 비밀번호 관리' : '👨‍🎓 학생 수업 참여 로그인'}
+                </h2>
+                <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  {studentInfo ? '비밀번호를 변경하거나 다른 학생으로 전환합니다' : '4자리 학번(1101~3830)과 비밀번호로 로그인하세요'}
+                </span>
               </div>
+              {studentInfo && (
+                <button className="modal-close-btn" onClick={() => setIsChangingStudent(false)}>✕</button>
+              )}
+            </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '10px' }}>
-                <button type="button" className="g-btn g-btn-text" onClick={() => setIsChangingStudent(false)}>
-                  취소
-                </button>
-                <button type="submit" className="g-btn g-btn-primary">
-                  저장하기
-                </button>
+            {authErrorMsg && (
+              <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '10px 14px', borderRadius: '10px', fontSize: '12.5px', marginBottom: '14px', lineHeight: 1.5 }}>
+                {authErrorMsg}
               </div>
-            </form>
+            )}
+
+            {!studentInfo ? (
+              // 1. 처음 수업 진입 시: 학번 + 비밀번호 로그인 폼
+              <form onSubmit={handleStudentAuthSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                    <label style={{ fontSize: '12px', color: '#cbd5e1', fontWeight: 600 }}>학번 (4자리 숫자)</label>
+                    {parseStudentId(authStudentId).valid && (
+                      <span style={{ fontSize: '11px', color: '#86efac', fontWeight: 600 }}>
+                        ✓ {parseStudentId(authStudentId).label}
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    value={authStudentId}
+                    onChange={(e) => setAuthStudentId(e.target.value.replace(/[^0-9]/g, ''))}
+                    placeholder="예: 1101, 2315, 3830"
+                    style={{
+                      width: '100%',
+                      padding: '11px 14px',
+                      borderRadius: '10px',
+                      border: parseStudentId(authStudentId).valid ? '1px solid #22c55e' : '1px solid rgba(255, 255, 255, 0.15)',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      color: '#ffffff',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      outline: 'none',
+                      boxSizing: 'border-box'
+                    }}
+                    autoFocus
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '5px', fontWeight: 600 }}>학생 이름</label>
+                  <input
+                    type="text"
+                    value={authStudentName}
+                    onChange={(e) => setAuthStudentName(e.target.value)}
+                    placeholder="예: 홍길동"
+                    style={{
+                      width: '100%',
+                      padding: '11px 14px',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      color: '#ffffff',
+                      fontSize: '14px',
+                      outline: 'none',
+                      boxSizing: 'border-box'
+                    }}
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '5px', fontWeight: 600 }}>비밀번호</label>
+                  <input
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="비밀번호 입력 (초기: 1234)"
+                    style={{
+                      width: '100%',
+                      padding: '11px 14px',
+                      borderRadius: '10px',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      background: 'rgba(15, 23, 42, 0.6)',
+                      color: '#ffffff',
+                      fontSize: '14px',
+                      outline: 'none',
+                      boxSizing: 'border-box'
+                    }}
+                    required
+                  />
+                </div>
+
+                {/* 로그인 시 비밀번호 동시 변경 토글 */}
+                <div style={{ borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: '10px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsChangingPwMode(!isChangingPwMode)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#60a5fa',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>{isChangingPwMode ? '▲ 비밀번호 변경 취소' : '🔑 비밀번호 지금 변경하기'}</span>
+                  </button>
+
+                  {isChangingPwMode && (
+                    <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <input
+                        type="password"
+                        value={authNewPassword}
+                        onChange={(e) => setAuthNewPassword(e.target.value)}
+                        placeholder="새 비밀번호 입력 (4자리 이상)"
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          border: '1px solid rgba(96, 165, 250, 0.4)',
+                          background: 'rgba(15, 23, 42, 0.8)',
+                          color: '#ffffff',
+                          fontSize: '13px',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                      <input
+                        type="password"
+                        value={authConfirmPassword}
+                        onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                        placeholder="새 비밀번호 확인"
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          border: '1px solid rgba(96, 165, 250, 0.4)',
+                          background: 'rgba(15, 23, 42, 0.8)',
+                          color: '#ffffff',
+                          fontSize: '13px',
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '10px 12px', borderRadius: '10px', fontSize: '11.5px', color: '#93c5fd', lineHeight: 1.5 }}>
+                  💡 <strong>비밀번호 안내:</strong> 초기 비밀번호는 <code>1234</code>입니다. 분실한 경우 관리자 선생님께 1234 초기화를 요청하세요.
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+                  {onExit && (
+                    <button type="button" className="g-btn g-btn-text" onClick={onExit} style={{ color: '#94a3b8' }}>
+                      수업 나가기
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={isAuthSubmitting}
+                    style={{
+                      padding: '11px 20px',
+                      borderRadius: '10px',
+                      border: 'none',
+                      background: isAuthSubmitting ? '#475569' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#ffffff',
+                      fontSize: '13.5px',
+                      fontWeight: 700,
+                      cursor: isAuthSubmitting ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)'
+                    }}
+                  >
+                    {isAuthSubmitting ? '확인 중...' : '👨‍🎓 수업 시작하기'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              // 2. 이미 로그인된 상태에서 비밀번호 변경 및 계정 전환 폼
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '14px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>현재 로그인된 학생</span>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: '#38bdf8', marginTop: '4px' }}>
+                    👨‍🎓 {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 {studentInfo.name}
+                  </div>
+                </div>
+
+                <form onSubmit={handleStudentChangePasswordOnly} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <h3 style={{ fontSize: '13px', fontWeight: 700, margin: 0, color: '#cbd5e1' }}>
+                    🔑 내 비밀번호 변경하기
+                  </h3>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginBottom: '4px' }}>현재 비밀번호</label>
+                    <input
+                      type="password"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="현재 비밀번호 입력"
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        color: '#ffffff',
+                        fontSize: '13px',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginBottom: '4px' }}>새 비밀번호 (4자리 이상)</label>
+                    <input
+                      type="password"
+                      value={authNewPassword}
+                      onChange={(e) => setAuthNewPassword(e.target.value)}
+                      placeholder="새 비밀번호 입력"
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        color: '#ffffff',
+                        fontSize: '13px',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginBottom: '4px' }}>새 비밀번호 확인</label>
+                    <input
+                      type="password"
+                      value={authConfirmPassword}
+                      onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                      placeholder="새 비밀번호 다시 입력"
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        color: '#ffffff',
+                        fontSize: '13px',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      required
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isAuthSubmitting}
+                    style={{
+                      padding: '11px',
+                      borderRadius: '10px',
+                      border: 'none',
+                      background: isAuthSubmitting ? '#475569' : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                      color: '#ffffff',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: isAuthSubmitting ? 'not-allowed' : 'pointer'
+                    }}
+                  >
+                    {isAuthSubmitting ? '변경 저장 중...' : '🔑 새 비밀번호 저장'}
+                  </button>
+                </form>
+
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm('현재 학생 로그아웃 후 다른 학생으로 로그인하시겠습니까?')) {
+                        localStorage.removeItem('lbw_student_info');
+                        setStudentInfo(null);
+                        setAuthStudentId('');
+                        setAuthStudentName('');
+                        setAuthPassword('');
+                        setAuthNewPassword('');
+                        setAuthConfirmPassword('');
+                        showToast('로그아웃되었습니다. 새 학생 계정으로 로그인하세요.');
+                      }
+                    }}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid #475569',
+                      color: '#94a3b8',
+                      padding: '7px 12px',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    🔄 다른 학생으로 로그인
+                  </button>
+
+                  <button
+                    type="button"
+                    className="g-btn g-btn-text"
+                    onClick={() => setIsChangingStudent(false)}
+                    style={{ color: '#cbd5e1' }}
+                  >
+                    닫기
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
