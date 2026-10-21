@@ -120,13 +120,12 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
 
   // 초기 화면 맞춤 설정 (툴바 위치나 방향 변경 시 자동 재계산)
   useEffect(() => {
-    // 툴바 렌더링 후 레이아웃 완료 시점 대기
     const timer = setTimeout(() => {
       const bestFit = calculateFitScale();
       setFitScale(bestFit);
       setZoomScale(bestFit);
       setPanOffset({ x: 0, y: 0 });
-    }, 50);
+    }, 60);
     return () => clearTimeout(timer);
   }, [calculateFitScale, orientation, toolbarPosition]);
 
@@ -146,7 +145,7 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
   };
 
   const handleZoomOut = () => {
-    setZoomScale(prev => Math.max(fitScale * 0.5, prev / 1.2));
+    setZoomScale(prev => Math.max(fitScale * 0.4, prev / 1.2));
   };
 
   const handleResetZoomFit = () => {
@@ -154,7 +153,7 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
     setPanOffset({ x: 0, y: 0 });
   };
 
-  // ESC 키로 나가기
+  // 키보드 단축키
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -163,11 +162,17 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
         setCurrentPageIdx(prev => Math.max(0, prev - 1));
       } else if (e.key === 'ArrowRight' && currentPageIdx < studentPages.length - 1) {
         setCurrentPageIdx(prev => Math.min(studentPages.length - 1, prev + 1));
+      } else if (e.key === '+' || e.key === '=') {
+        handleZoomIn();
+      } else if (e.key === '-' || e.key === '_') {
+        handleZoomOut();
+      } else if (e.key === '0') {
+        handleResetZoomFit();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, currentPageIdx, studentPages.length]);
+  }, [onClose, currentPageIdx, studentPages.length, fitScale]);
 
   // 마우스/터치 드래그 이동(Pan) 핸들러
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -208,11 +213,11 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
   const isVerticalToolbar = toolbarPosition === 'left' || toolbarPosition === 'right';
 
   // --------------------------------------------------------------------------
-  // [공통 툴바 렌더러] - 가로 모드 (상/하) 및 세로 모드 (좌/우) 완벽 지원
+  // [공통 툴바 렌더러]
   // --------------------------------------------------------------------------
   const renderToolbar = () => {
     return (
-      <aside
+      <header
         style={{
           background: '#161b22',
           borderBottom: toolbarPosition === 'top' ? '1px solid #30363d' : 'none',
@@ -224,14 +229,11 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
           alignItems: 'center',
           justifyContent: isVerticalToolbar ? 'flex-start' : 'space-between',
           padding: isVerticalToolbar ? '12px 8px' : '0 16px',
-          height: isVerticalToolbar ? '100%' : '60px',
-          width: isVerticalToolbar ? '146px' : '100%',
+          height: isVerticalToolbar ? '100%' : '62px',
+          width: isVerticalToolbar ? '154px' : '100%',
           flexShrink: 0,
-          zIndex: 10,
-          gap: isVerticalToolbar ? '10px' : '12px',
-          overflowY: isVerticalToolbar ? 'auto' : 'hidden',
-          overflowX: isVerticalToolbar ? 'hidden' : 'auto',
-          scrollbarWidth: 'none',
+          zIndex: 100,
+          gap: isVerticalToolbar ? '10px' : '14px',
           boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
         }}
       >
@@ -259,12 +261,12 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
                 border: '1px solid rgba(59, 130, 246, 0.3)'
               }}
             >
-              {isPortrait ? '📐세로' : '📐가로'}
+              {isPortrait ? '📐 세로' : '📐 가로'}
             </span>
           </div>
           <h2
             style={{
-              fontSize: isVerticalToolbar ? '13px' : '14.5px',
+              fontSize: isVerticalToolbar ? '13px' : '15px',
               fontWeight: 700,
               margin: 0,
               color: '#ffffff',
@@ -275,245 +277,280 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
           </h2>
         </div>
 
-        {/* 중앙: 컨트롤 바 (전체화면 + 툴바위치 + 쪽이동 + 확대축소) - 좁은 화면에서도 가로 스크롤되어 우측 나가기 버튼 보장 */}
+        {/* 중앙: 쪽 이동 및 확대/축소 핵심 컨트롤 (flexShrink 0으로 절대 숨겨지지 않음) */}
         <div
           style={{
             display: 'flex',
             flexDirection: isVerticalToolbar ? 'column' : 'row',
             alignItems: 'center',
-            gap: '8px',
-            flex: isVerticalToolbar ? 'none' : 1,
-            justifyContent: isVerticalToolbar ? 'flex-start' : 'center',
-            minWidth: 0,
-            overflowX: isVerticalToolbar ? 'visible' : 'auto',
-            scrollbarWidth: 'none',
-            padding: isVerticalToolbar ? 0 : '0 6px',
+            gap: isVerticalToolbar ? '8px' : '12px',
+            flexShrink: 0,
+            justifyContent: 'center',
             width: isVerticalToolbar ? '100%' : 'auto'
           }}
         >
-          {/* 전체화면 토글 버튼 */}
-          <button
-            type="button"
-            className="g-btn g-btn-secondary"
-            onClick={toggleBrowserFullscreen}
+          {/* 1. 페이지 이동 컨트롤 (항상 표시: 1쪽이어도 1/1쪽 확인 가능) */}
+          <div
             style={{
-              fontSize: '12px',
-              fontWeight: 700,
-              padding: '5px 10px',
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
-              color: isBrowserFullscreen ? '#a5b4fc' : '#c9d1d9',
-              background: isBrowserFullscreen ? 'rgba(99, 102, 241, 0.2)' : '#21262d',
-              border: isBrowserFullscreen ? '1px solid #6366f1' : '1px solid #30363d',
+              background: '#21262d',
+              padding: '4px 8px',
+              borderRadius: '8px',
+              border: '1px solid #30363d',
               flexShrink: 0,
               width: isVerticalToolbar ? '100%' : 'auto',
               justifyContent: 'center'
             }}
-            title="브라우저 전체화면 토글 (F11)"
-          >
-            <span>{isBrowserFullscreen ? '🗗' : '⛶'}</span>
-            <span>{isBrowserFullscreen ? '창모드' : '전체화면'}</span>
-          </button>
-
-          {/* 툴바 위치 4방향 스위처 */}
-          <div
-            style={
-              isVerticalToolbar
-                ? {
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(2, 1fr)',
-                    background: '#21262d',
-                    padding: '2px',
-                    borderRadius: '8px',
-                    border: '1px solid #30363d',
-                    gap: '2px',
-                    width: '100%'
-                  }
-                : {
-                    display: 'flex',
-                    alignItems: 'center',
-                    background: '#21262d',
-                    padding: '2px',
-                    borderRadius: '8px',
-                    border: '1px solid #30363d',
-                    gap: '2px',
-                    flexShrink: 0
-                  }
-            }
-            title="전자칠판 툴바 위치 이동 (선생님/학생 키 높이 및 서 있는 위치 맞춤)"
           >
             <button
               type="button"
-              onClick={() => handleSetToolbarPosition('top')}
+              disabled={currentPageIdx <= 0}
+              onClick={() => setCurrentPageIdx(prev => Math.max(0, prev - 1))}
               style={{
-                background: toolbarPosition === 'top' ? '#388bfd' : 'transparent',
-                color: toolbarPosition === 'top' ? '#ffffff' : '#8b949e',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '11px',
+                fontSize: '12.5px',
+                padding: '5px 10px',
                 fontWeight: 700,
-                padding: '4px 6px',
-                cursor: 'pointer'
+                background: currentPageIdx <= 0 ? '#161b22' : 'rgba(56, 139, 253, 0.15)',
+                color: currentPageIdx <= 0 ? '#484f58' : '#58a6ff',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                cursor: currentPageIdx <= 0 ? 'not-allowed' : 'pointer'
               }}
-              title="툴바 상단 고정"
+              title="이전 페이지 (단축키: ←)"
             >
-              ⬆️상
+              ◀ 이전 쪽
             </button>
+            <span
+              style={{
+                fontSize: '13px',
+                fontWeight: 700,
+                color: '#e2e8f0',
+                textAlign: 'center',
+                minWidth: '58px',
+                padding: '0 4px'
+              }}
+            >
+              {currentPageIdx + 1} / {studentPages.length} 쪽
+            </span>
             <button
               type="button"
-              onClick={() => handleSetToolbarPosition('bottom')}
+              disabled={currentPageIdx >= studentPages.length - 1}
+              onClick={() => setCurrentPageIdx(prev => Math.min(studentPages.length - 1, prev + 1))}
               style={{
-                background: toolbarPosition === 'bottom' ? '#388bfd' : 'transparent',
-                color: toolbarPosition === 'bottom' ? '#ffffff' : '#8b949e',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '11px',
+                fontSize: '12.5px',
+                padding: '5px 10px',
                 fontWeight: 700,
-                padding: '4px 6px',
-                cursor: 'pointer'
-              }}
-              title="툴바 하단 고정"
-            >
-              ⬇️하
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSetToolbarPosition('left')}
-              style={{
-                background: toolbarPosition === 'left' ? '#388bfd' : 'transparent',
-                color: toolbarPosition === 'left' ? '#ffffff' : '#8b949e',
-                border: 'none',
+                background: currentPageIdx >= studentPages.length - 1 ? '#161b22' : 'rgba(56, 139, 253, 0.15)',
+                color: currentPageIdx >= studentPages.length - 1 ? '#484f58' : '#58a6ff',
+                border: '1px solid #30363d',
                 borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: 700,
-                padding: '4px 6px',
-                cursor: 'pointer'
+                cursor: currentPageIdx >= studentPages.length - 1 ? 'not-allowed' : 'pointer'
               }}
-              title="툴바 좌측 고정"
+              title="다음 페이지 (단축키: →)"
             >
-              ⬅️좌
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSetToolbarPosition('right')}
-              style={{
-                background: toolbarPosition === 'right' ? '#388bfd' : 'transparent',
-                color: toolbarPosition === 'right' ? '#ffffff' : '#8b949e',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '11px',
-                fontWeight: 700,
-                padding: '4px 6px',
-                cursor: 'pointer'
-              }}
-              title="툴바 우측 고정"
-            >
-              ➡️우
+              다음 쪽 ▶
             </button>
           </div>
 
-        {/* 3. 쪽 이동 컨트롤 (다중 페이지인 경우) */}
-        {studentPages.length > 1 && (
+          {/* 2. 확대 / 축소 / 맞춤 컨트롤 (항상 표시) */}
           <div
             style={{
               display: 'flex',
-              flexDirection: isVerticalToolbar ? 'column' : 'row',
               alignItems: 'center',
               gap: '4px',
               background: '#21262d',
-              padding: '4px 6px',
+              padding: '4px 8px',
               borderRadius: '8px',
               border: '1px solid #30363d',
               flexShrink: 0,
-              width: isVerticalToolbar ? '100%' : 'auto'
+              width: isVerticalToolbar ? '100%' : 'auto',
+              justifyContent: 'center'
             }}
           >
-            <div style={{ display: 'flex', width: isVerticalToolbar ? '100%' : 'auto', gap: '4px' }}>
-              <button
-                type="button"
-                className="g-btn g-btn-secondary"
-                style={{ fontSize: '11px', padding: '3px 8px', fontWeight: 700, flex: 1 }}
-                disabled={currentPageIdx === 0}
-                onClick={() => setCurrentPageIdx(prev => Math.max(0, prev - 1))}
-              >
-                ◀ 이전
-              </button>
-              <button
-                type="button"
-                className="g-btn g-btn-secondary"
-                style={{ fontSize: '11px', padding: '3px 8px', fontWeight: 700, flex: 1 }}
-                disabled={currentPageIdx >= studentPages.length - 1}
-                onClick={() => setCurrentPageIdx(prev => Math.min(studentPages.length - 1, prev + 1))}
-              >
-                다음 ▶
-              </button>
-            </div>
-            <span style={{ fontSize: '12px', fontWeight: 700, color: '#e2e8f0', textAlign: 'center', minWidth: '50px' }}>
-              {currentPageIdx + 1} / {studentPages.length} 쪽
-            </span>
-          </div>
-        )}
-
-        {/* 4. 확대 / 축소 / 이동 컨트롤 */}
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: isVerticalToolbar ? 'column' : 'row',
-            alignItems: 'center',
-            gap: '4px',
-            background: '#21262d',
-            padding: '4px 6px',
-            borderRadius: '8px',
-            border: '1px solid #30363d',
-            flexShrink: 0,
-            width: isVerticalToolbar ? '100%' : 'auto'
-          }}
-        >
-          <div style={{ display: 'flex', width: isVerticalToolbar ? '100%' : 'auto', gap: '4px' }}>
             <button
               type="button"
-              className="g-btn g-btn-secondary"
-              style={{ fontSize: '12px', padding: '4px 7px', fontWeight: 700, flex: 1 }}
+              style={{
+                fontSize: '13px',
+                padding: '5px 9px',
+                fontWeight: 700,
+                background: '#161b22',
+                color: '#f0f6fc',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
               onClick={handleZoomOut}
-              title="화면 축소"
+              title="화면 축소 (단축키: -)"
             >
               🔍➖
             </button>
             <button
               type="button"
-              className="g-btn g-btn-secondary"
-              style={{ fontSize: '12px', padding: '4px 7px', fontWeight: 700, flex: 1 }}
-              onClick={handleZoomIn}
-              title="화면 확대"
-            >
-              🔍➕
-            </button>
-          </div>
-          <div style={{ display: 'flex', width: isVerticalToolbar ? '100%' : 'auto', gap: '4px' }}>
-            <button
-              type="button"
-              className="g-btn g-btn-secondary"
-              style={{ fontSize: '11px', padding: '4px 6px', fontWeight: 700, flex: 1 }}
+              style={{
+                fontSize: '12px',
+                padding: '5px 8px',
+                fontWeight: 700,
+                background: '#161b22',
+                color: '#38bdf8',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                minWidth: '56px',
+                textAlign: 'center'
+              }}
               onClick={handleResetZoomFit}
-              title="화면 맞춤 100% 초기화"
+              title="화면 맞춤 100% 초기화 (단축키: 0)"
             >
               {zoomPercent}%
             </button>
             <button
               type="button"
-              className="g-btn g-btn-secondary"
-              style={{ fontSize: '11px', padding: '4px 6px', color: '#93c5fd', flex: 1 }}
+              style={{
+                fontSize: '13px',
+                padding: '5px 9px',
+                fontWeight: 700,
+                background: '#161b22',
+                color: '#f0f6fc',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+              onClick={handleZoomIn}
+              title="화면 확대 (단축키: +)"
+            >
+              🔍➕
+            </button>
+            <button
+              type="button"
+              style={{
+                fontSize: '12px',
+                padding: '5px 8px',
+                fontWeight: 700,
+                background: '#161b22',
+                color: '#93c5fd',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
               onClick={() => setPanOffset({ x: 0, y: 0 })}
               title="화면 중앙 정렬"
             >
-              🎯중앙
+              🎯 중앙
             </button>
           </div>
-        </div>
-      </div>
 
-        {/* 5. 우측(하단): 칭찬 피드백 및 대형 [ ✕ 나가기 ] 버튼 */}
+          {/* 3. 전체화면 & 툴바 위치 버튼 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={toggleBrowserFullscreen}
+              style={{
+                fontSize: '12px',
+                fontWeight: 700,
+                padding: '5px 9px',
+                color: isBrowserFullscreen ? '#a5b4fc' : '#c9d1d9',
+                background: isBrowserFullscreen ? 'rgba(99, 102, 241, 0.2)' : '#21262d',
+                border: isBrowserFullscreen ? '1px solid #6366f1' : '1px solid #30363d',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              title="브라우저 전체화면 토글 (F11)"
+            >
+              <span>{isBrowserFullscreen ? '🗗' : '⛶'}</span>
+              <span>{isBrowserFullscreen ? '창모드' : '전체화면'}</span>
+            </button>
+
+            {/* 툴바 상/하/좌/우 위치 변경 */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                background: '#21262d',
+                padding: '2px',
+                borderRadius: '6px',
+                border: '1px solid #30363d',
+                gap: '2px'
+              }}
+              title="전자칠판 툴바 위치 (상/하/좌/우)"
+            >
+              <button
+                type="button"
+                onClick={() => handleSetToolbarPosition('top')}
+                style={{
+                  background: toolbarPosition === 'top' ? '#388bfd' : 'transparent',
+                  color: toolbarPosition === 'top' ? '#ffffff' : '#8b949e',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  padding: '3px 5px',
+                  cursor: 'pointer'
+                }}
+                title="툴바 상단 고정"
+              >
+                ⬆️상
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetToolbarPosition('bottom')}
+                style={{
+                  background: toolbarPosition === 'bottom' ? '#388bfd' : 'transparent',
+                  color: toolbarPosition === 'bottom' ? '#ffffff' : '#8b949e',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  padding: '3px 5px',
+                  cursor: 'pointer'
+                }}
+                title="툴바 하단 고정"
+              >
+                ⬇️하
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetToolbarPosition('left')}
+                style={{
+                  background: toolbarPosition === 'left' ? '#388bfd' : 'transparent',
+                  color: toolbarPosition === 'left' ? '#ffffff' : '#8b949e',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  padding: '3px 5px',
+                  cursor: 'pointer'
+                }}
+                title="툴바 좌측 고정"
+              >
+                ⬅️좌
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetToolbarPosition('right')}
+                style={{
+                  background: toolbarPosition === 'right' ? '#388bfd' : 'transparent',
+                  color: toolbarPosition === 'right' ? '#ffffff' : '#8b949e',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '10.5px',
+                  fontWeight: 700,
+                  padding: '3px 5px',
+                  cursor: 'pointer'
+                }}
+                title="툴바 우측 고정"
+              >
+                ➡️우
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 우측: 칭찬 피드백 및 대형 [ ✕ 나가기 ] 버튼 */}
         <div
           style={{
             display: 'flex',
@@ -528,15 +565,17 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
           {onSendFeedback && (
             <button
               type="button"
-              className="g-btn g-btn-primary"
               style={{
-                fontSize: '12px',
+                fontSize: '12.5px',
                 fontWeight: 700,
-                padding: '6px 10px',
+                padding: '6px 12px',
                 background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                color: '#ffffff',
                 border: '1px solid #f59e0b',
+                borderRadius: '8px',
                 boxShadow: '0 2px 8px rgba(245, 158, 11, 0.3)',
                 whiteSpace: 'nowrap',
+                cursor: 'pointer',
                 width: isVerticalToolbar ? '100%' : 'auto'
               }}
               onClick={() => onSendFeedback(noteRecord.student_name)}
@@ -545,7 +584,7 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
             </button>
           )}
 
-          {/* 💥 핵심: 전자칠판 대형 나가기 버튼 */}
+          {/* 전자칠판 대형 나가기 버튼 */}
           <button
             type="button"
             onClick={onClose}
@@ -554,9 +593,9 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
               alignItems: 'center',
               justifyContent: 'center',
               gap: '6px',
-              fontSize: '14px',
+              fontSize: '14.5px',
               fontWeight: 800,
-              padding: isVerticalToolbar ? '10px 8px' : '7px 16px',
+              padding: isVerticalToolbar ? '10px 8px' : '7px 18px',
               background: 'rgba(239, 68, 68, 0.25)',
               border: '1.5px solid #ef4444',
               color: '#fca5a5',
@@ -573,7 +612,7 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
             <span>나가기</span>
           </button>
         </div>
-      </aside>
+      </header>
     );
   };
 
@@ -654,6 +693,142 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
         >
           <StudentNoteSheet page={currentPage} orientation={orientation} />
         </div>
+
+        {/* 🌟 핵심: 전자칠판 전용 캔버스 플로팅 퀵 툴바 (손 닿는 곳에 항상 고정) */}
+        <aside
+          style={{
+            position: 'absolute',
+            bottom: toolbarPosition === 'bottom' ? '20px' : '24px',
+            right: toolbarPosition === 'right' ? '20px' : '24px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            background: 'rgba(22, 27, 34, 0.94)',
+            backdropFilter: 'blur(12px)',
+            border: '1.5px solid rgba(59, 130, 246, 0.4)',
+            borderRadius: '30px',
+            padding: '6px 14px',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.75)',
+            zIndex: 60
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* 쪽 이동 버튼 그룹 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              type="button"
+              disabled={currentPageIdx <= 0}
+              onClick={() => setCurrentPageIdx(p => Math.max(0, p - 1))}
+              style={{
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontWeight: 700,
+                background: currentPageIdx <= 0 ? 'transparent' : 'rgba(56, 139, 253, 0.2)',
+                color: currentPageIdx <= 0 ? '#484f58' : '#58a6ff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: currentPageIdx <= 0 ? 'not-allowed' : 'pointer'
+              }}
+              title="이전 쪽 (←)"
+            >
+              ◀
+            </button>
+            <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#38bdf8', minWidth: '45px', textAlign: 'center' }}>
+              {currentPageIdx + 1}/{studentPages.length}
+            </span>
+            <button
+              type="button"
+              disabled={currentPageIdx >= studentPages.length - 1}
+              onClick={() => setCurrentPageIdx(p => Math.min(studentPages.length - 1, p + 1))}
+              style={{
+                fontSize: '13px',
+                padding: '4px 8px',
+                fontWeight: 700,
+                background: currentPageIdx >= studentPages.length - 1 ? 'transparent' : 'rgba(56, 139, 253, 0.2)',
+                color: currentPageIdx >= studentPages.length - 1 ? '#484f58' : '#58a6ff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: currentPageIdx >= studentPages.length - 1 ? 'not-allowed' : 'pointer'
+              }}
+              title="다음 쪽 (→)"
+            >
+              ▶
+            </button>
+          </div>
+
+          <div style={{ width: '1px', height: '18px', background: 'rgba(255, 255, 255, 0.15)' }} />
+
+          {/* 줌 확대/축소 버튼 그룹 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              style={{
+                fontSize: '12px',
+                padding: '4px 7px',
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+              title="화면 축소"
+            >
+              🔍➖
+            </button>
+            <button
+              type="button"
+              onClick={handleResetZoomFit}
+              style={{
+                fontSize: '11.5px',
+                fontWeight: 700,
+                padding: '4px 6px',
+                background: 'rgba(56, 139, 253, 0.2)',
+                color: '#60a5fa',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                minWidth: '48px',
+                textAlign: 'center'
+              }}
+              title="화면 맞춤 100%"
+            >
+              {zoomPercent}%
+            </button>
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              style={{
+                fontSize: '12px',
+                padding: '4px 7px',
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+              title="화면 확대"
+            >
+              🔍➕
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanOffset({ x: 0, y: 0 })}
+              style={{
+                fontSize: '12px',
+                padding: '4px 6px',
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: '#93c5fd',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+              title="중앙 정렬"
+            >
+              🎯
+            </button>
+          </div>
+        </aside>
 
         {/* 하단 툴팁 가이드 */}
         <div
