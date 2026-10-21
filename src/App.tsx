@@ -276,6 +276,44 @@ export default function App() {
     setErrorMessage(null);
     setSelectedItemId(null);
 
+    // 1. 구글 공식 Drive API v3 직접 호출 최우선 실행 (구형 전자칠판 5분 지연 및 Vercel 방화벽 완전 회피)
+    if (googleApiKey) {
+      try {
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}&_t=${Date.now()}`;
+        const gRes = await fetch(directUrl, { cache: 'no-store' });
+        if (gRes.ok) {
+          const gData = await gRes.json();
+          const directItems: DriveItem[] = (gData.files || []).map((file: any) => {
+            const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
+            const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
+            const sizeStr = sizeBytes > 0 
+              ? sizeBytes > 1024 * 1024 
+                ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB` 
+                : `${(sizeBytes / 1024).toFixed(0)} KB` 
+              : '-';
+
+            return {
+              id: file.id,
+              name: file.name,
+              type: isFolder ? 'folder' : 'document',
+              folderId: isFolder ? file.id : undefined,
+              size: isFolder ? '-' : sizeStr,
+              updatedAt: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('ko-KR') : '-',
+              viewUrl: isFolder 
+                ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
+                : `https://drive.google.com/file/d/${file.id}/view?usp=sharing`,
+              downloadUrl: `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
+            };
+          });
+          setItems(directItems);
+          setIsLoading(false);
+          return;
+        }
+      } catch (directErr) {
+        console.warn('Direct Google Drive API failed, fallback to proxy:', directErr);
+      }
+    }
+
     try {
       const queryParams = new URLSearchParams({
         action: 'list',
@@ -295,43 +333,7 @@ export default function App() {
       }
       throw new Error('데이터 응답 형식 오류');
     } catch (err: any) {
-      console.warn('API 목록 조회 실패, Direct fetch 시도:', err);
-      if (googleApiKey) {
-        try {
-          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}&_t=${Date.now()}`;
-          const gRes = await fetch(directUrl, { cache: 'no-store' });
-          if (gRes.ok) {
-            const gData = await gRes.json();
-            const directItems: DriveItem[] = (gData.files || []).map((file: any) => {
-              const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
-              const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
-              const sizeStr = sizeBytes > 0 
-                ? sizeBytes > 1024 * 1024 
-                  ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB` 
-                  : `${(sizeBytes / 1024).toFixed(0)} KB` 
-                : '-';
-
-              return {
-                id: file.id,
-                name: file.name,
-                type: isFolder ? 'folder' : 'document',
-                folderId: isFolder ? file.id : undefined,
-                size: isFolder ? '-' : sizeStr,
-                updatedAt: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('ko-KR') : '-',
-                viewUrl: isFolder 
-                  ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
-                  : `https://drive.google.com/file/d/${file.id}/view?usp=sharing`,
-                downloadUrl: `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
-              };
-            });
-            setItems(directItems);
-            setIsLoading(false);
-            return;
-          }
-        } catch (clientErr) {
-          console.error('Direct Google API failed:', clientErr);
-        }
-      }
+      console.warn('API 목록 조회 실패:', err);
       setErrorMessage('구글 드라이브 목록을 불러오지 못했습니다.');
     } finally {
       setIsLoading(false);
