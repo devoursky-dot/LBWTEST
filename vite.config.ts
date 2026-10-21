@@ -212,6 +212,18 @@ export default defineConfig({
   base: './',
   build: {
     target: ['es2015', 'chrome60', 'safari11', 'edge18'],
-    cssTarget: 'chrome60'
+    cssTarget: 'chrome60',
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/jspdf')) return 'vendor-jspdf';
+          if (id.includes('node_modules/pdfjs-dist')) return 'vendor-pdfjs';
+          if (id.includes('node_modules/fabric')) return 'vendor-fabric';
+          if (id.includes('node_modules/@supabase')) return 'vendor-supabase';
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'vendor-react';
+        }
+      }
+    }
   }
 });
