@@ -116,14 +116,14 @@ export async function exportStudentNotebookToPdf(
       }
     }
 
-    // 전체 배경이 없는 경우: 인쇄/보관에 최적화된 깨끗한 화이트 페이퍼 및 미세 그리드 렌더링
+    // 전체 배경이 없는 경우: 칠판 기본 다크 테마 배경 (#131314) 및 미세 그리드 렌더링
     if (!hasCustomBackground) {
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#131314';
       ctx.fillRect(0, 0, A4_WIDTH, A4_HEIGHT);
 
-      // 모눈종이 격자
+      // 모눈종이 격자 (다크 모드용 미세 선)
       ctx.save();
-      ctx.strokeStyle = '#f1f5f9';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
       ctx.lineWidth = 1;
       const gridSize = 32;
       for (let x = gridSize; x < A4_WIDTH; x += gridSize) {
@@ -153,24 +153,8 @@ export async function exportStudentNotebookToPdf(
       }
     }
 
-    // 4. 필기 스트로크 렌더링
-    // 다크 모드 캔버스에서 작성된 흰색 펜은 흰색 배경에서 검은색으로 자동 전환하여 선명하게 인쇄
-    const strokesToRender: Stroke[] = (page.strokes || []).map((s) => {
-      let strokeColor = s.color;
-      if (!hasCustomBackground) {
-        if (s.color === '#ffffff' || s.color === '#f8fafc' || s.color === '#e2e8f0') {
-          strokeColor = '#0f172a'; // 선명한 다크 네이비/블랙으로 전환
-        } else if (s.color === '#fde047' && s.tool === 'pen') {
-          strokeColor = '#b45309'; // 펜으로 쓴 연노랑은 황토색으로 가독성 보정
-        }
-      }
-      return {
-        ...s,
-        color: strokeColor
-      };
-    });
-
-    for (const stroke of strokesToRender) {
+    // 4. 필기 스트로크 렌더링 (다크 모드 원본 색상 100% 보존)
+    for (const stroke of (page.strokes || [])) {
       drawSingleStroke(ctx, stroke);
     }
 

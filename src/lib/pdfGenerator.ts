@@ -19,10 +19,15 @@ function loadImageSafely(src: string): Promise<HTMLImageElement | null> {
  * 표지(Cover Page)를 Canvas 2D로 렌더링하여 CJK 한글 폰트가 100% 깨지지 않고
  * 선명하게 출력되도록 DataURL로 반환합니다.
  */
+/**
+ * 표지(Cover Page)를 Canvas 2D로 렌더링하여 CJK 한글 폰트가 100% 깨지지 않고
+ * 선명하게 출력되도록 DataURL로 반환합니다.
+ */
 function renderCoverPageDataUrl(
   title: string,
   totalStudents: number,
   dateFormatted: string,
+  sortedNotes: ClassNoteRecord[] = [],
   width = 1600,
   height = 1130
 ): string {
@@ -34,93 +39,110 @@ function renderCoverPageDataUrl(
 
   // 1. 다크 네이비 그라데이션 배경
   const grad = ctx.createLinearGradient(0, 0, width, height);
-  grad.addColorStop(0, '#0f172a');
-  grad.addColorStop(0.5, '#1e293b');
-  grad.addColorStop(1, '#090d16');
+  grad.addColorStop(0, '#0a0e17');
+  grad.addColorStop(0.5, '#131926');
+  grad.addColorStop(1, '#070a10');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
   // 2. 골드/블루 프리미엄 장식 테두리
   ctx.strokeStyle = '#3b82f6';
   ctx.lineWidth = 6;
-  ctx.strokeRect(40, 40, width - 80, height - 80);
+  ctx.strokeRect(36, 36, width - 72, height - 72);
 
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(54, 54, width - 108, height - 108);
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(48, 48, width - 96, height - 96);
 
   // 3. 중앙 원형 심볼
   ctx.fillStyle = '#2563eb';
   ctx.beginPath();
-  ctx.arc(width / 2, 230, 64, 0, Math.PI * 2);
+  ctx.arc(width / 2, 190, 56, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = '54px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.font = '48px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('🏫', width / 2, 230);
+  ctx.fillText('🏫', width / 2, 190);
 
   // 4. 메인 타이틀 (수업 학생 필기 모음집)
-  ctx.font = 'bold 56px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.font = 'bold 50px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('수업 학생 필기 모음집 (학번순 정렬)', width / 2, 370);
+  ctx.fillText('수업 학생 필기 모음집', width / 2, 310);
 
   // 5. 세부 수업 제목
-  ctx.font = 'bold 42px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-  ctx.fillStyle = '#93c5fd';
-  ctx.fillText(title, width / 2, 470);
+  ctx.font = 'bold 38px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#60a5fa';
+  ctx.fillText(title, width / 2, 390);
 
   // 6. 장식 구분선
   ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(width / 2 - 260, 540);
-  ctx.lineTo(width / 2 + 260, 540);
+  ctx.moveTo(width / 2 - 280, 440);
+  ctx.lineTo(width / 2 + 280, 440);
   ctx.stroke();
 
   // 7. 메타 정보 박스
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-  ctx.beginPath();
-  const bx = width / 2 - 320;
-  const by = 600;
-  const bw = 640;
-  const bh = 180;
-  const br = 16;
-  ctx.moveTo(bx + br, by);
-  ctx.lineTo(bx + bw - br, by);
-  ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + br);
-  ctx.lineTo(bx + bw, by + bh - br);
-  ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - br, by + bh);
-  ctx.lineTo(bx + br, by + bh);
-  ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - br);
-  ctx.lineTo(bx, by + br);
-  ctx.quadraticCurveTo(bx, by, bx + br, by);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.04)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
   ctx.lineWidth = 1.5;
-  ctx.stroke();
+  const bx = width / 2 - 360;
+  const by = 480;
+  const bw = 720;
+  const bh = 140;
+  ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillRect(bx, by, bw, bh);
 
-  ctx.font = 'bold 28px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.font = 'bold 26px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#e2e8f0';
-  ctx.fillText(`👥 제출 학생 수: 총 ${totalStudents}명`, width / 2, 655);
+  ctx.fillText(`👥 제출 학생 수: 총 ${totalStudents}명 (엄격 학번순 정렬)`, width / 2, 530);
 
-  ctx.font = '500 24px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(`📅 생성 일시: ${dateFormatted}`, width / 2, 725);
-
-  // 8. 하단 라벨
   ctx.font = '500 22px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  ctx.fillStyle = '#94a3b8';
+  ctx.fillText(`📅 생성 일시: ${dateFormatted}`, width / 2, 580);
+
+  // 8. 제출 학생 명단 목록 (2줄 컴팩트 프리뷰)
+  if (sortedNotes.length > 0) {
+    const studentNames = sortedNotes
+      .map(n => `${n.student_num}번 ${n.student_name}`)
+      .join(', ');
+
+    ctx.font = '500 19px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+    ctx.fillStyle = '#94a3b8';
+
+    // 텍스트 자르기 처리
+    let line1 = studentNames;
+    let line2 = '';
+    if (studentNames.length > 60) {
+      const splitIdx = studentNames.lastIndexOf(',', 60);
+      if (splitIdx !== -1) {
+        line1 = studentNames.substring(0, splitIdx);
+        line2 = studentNames.substring(splitIdx + 1).trim();
+        if (line2.length > 65) {
+          line2 = line2.substring(0, 65) + '... 외';
+        }
+      }
+    }
+
+    ctx.fillText(line1, width / 2, 690);
+    if (line2) {
+      ctx.fillText(line2, width / 2, 730);
+    }
+  }
+
+  // 9. 하단 라벨
+  ctx.font = '500 20px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
   ctx.fillStyle = '#64748b';
-  ctx.fillText('전자칠판 스마트 드라이브 포털 (Smart Classroom System)', width / 2, 980);
+  ctx.fillText('전자칠판 스마트 드라이브 포털 (Smart Classroom System)', width / 2, 1020);
 
   return canvas.toDataURL('image/png', 0.95);
 }
 
 /**
  * 학생 개별 필기(특정 페이지)를 오프스크린 Canvas에 고해상도로 렌더링하여 DataURL로 반환합니다.
- * (배경 PDF/이미지 및 임베디드 스티커 이미지 완벽 합성 지원)
+ * (다크모드 #131314 100% 유지, 배경 PDF/이미지 및 임베디드 스티커 이미지 무왜곡 1:1 합성 지원)
  */
 async function renderStudentCanvasPageDataUrl(
   note: ClassNoteRecord,
@@ -144,35 +166,33 @@ async function renderStudentCanvasPageDataUrl(
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
 
-  const offsetY = 90; // 학생 정보 헤더 배너 높이
-
-  // 1. 배경 처리 (전체 배경 이미지가 있으면 배경 이미지 렌더링, 없으면 흰 종이 + 모눈 격자)
+  // 1. 배경 처리 (전체 배경 이미지가 있으면 1:1 전체 배치, 없으면 다크 칠판 배경 #131314 유지)
   let hasCustomBg = false;
   if (pageData.fullPageBackground) {
     const bgImg = await loadImageSafely(pageData.fullPageBackground);
     if (bgImg) {
-      // 헤더 영역 아래에 배경 배치
-      ctx.drawImage(bgImg, 0, offsetY, width, height - offsetY);
+      // 상단 배너 없이 1:1 캔버스 전체에 무왜곡 배치
+      ctx.drawImage(bgImg, 0, 0, width, height);
       hasCustomBg = true;
     }
   }
 
   if (!hasCustomBg) {
-    // 깨끗한 흰색 종이 배경
-    ctx.fillStyle = '#ffffff';
+    // 칠판 기본 다크 테마 배경 (#131314)
+    ctx.fillStyle = '#131314';
     ctx.fillRect(0, 0, width, height);
 
-    // 학습지 모눈종이 격자
-    ctx.strokeStyle = '#f1f5f9';
-    ctx.lineWidth = 1.5;
+    // 미세한 모눈 격자 (다크 모드용 은은한 선)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 1;
     const gridSize = 40;
     for (let x = gridSize; x < width; x += gridSize) {
       ctx.beginPath();
-      ctx.moveTo(x, offsetY);
+      ctx.moveTo(x, 0);
       ctx.lineTo(x, height);
       ctx.stroke();
     }
-    for (let y = offsetY + gridSize; y < height; y += gridSize) {
+    for (let y = gridSize; y < height; y += gridSize) {
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(width, y);
@@ -180,7 +200,7 @@ async function renderStudentCanvasPageDataUrl(
     }
   }
 
-  // 2. 임베디드 스티커/사진 이미지들 렌더링
+  // 2. 임베디드 스티커/사진 이미지들 렌더링 (오프셋 없이 1:1 배치)
   const images = pageData.images || [];
   for (const imgItem of images) {
     if (imgItem.dataUrl) {
@@ -190,7 +210,7 @@ async function renderStudentCanvasPageDataUrl(
         ctx.drawImage(
           stickerImg,
           imgItem.x || 0,
-          (imgItem.y || 0) + offsetY,
+          imgItem.y || 0,
           imgItem.width || 200,
           imgItem.height || 200
         );
@@ -199,32 +219,7 @@ async function renderStudentCanvasPageDataUrl(
     }
   }
 
-  // 3. 학생 정보 헤더 배너 (한글 100% 렌더링)
-  ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(0, 0, width, offsetY);
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, width, offsetY);
-
-  ctx.fillStyle = '#1e293b';
-  ctx.font = 'bold 30px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  const pageLabel = totalPages > 1 ? ` (${pageNumber}/${totalPages}p)` : '';
-  ctx.fillText(
-    `[학생 필기] ${note.student_grade}학년 ${note.student_class}반 ${note.student_num}번 ${note.student_name}${pageLabel}`,
-    36,
-    offsetY / 2
-  );
-
-  const dateStr = note.updated_at || note.created_at || new Date().toISOString();
-  const dateFormatted = new Date(dateStr).toLocaleString('ko-KR');
-  ctx.fillStyle = '#64748b';
-  ctx.font = '20px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
-  ctx.textAlign = 'right';
-  ctx.fillText(`제출 시간: ${dateFormatted}`, width - 36, offsetY / 2);
-
-  // 4. 필기 스트로크 렌더링 (Catmull-Rom 곡선)
+  // 3. 필기 스트로크 렌더링 (원래 다크모드 색상 100% 보존: 흰색/형광색 왜곡 없음)
   const strokes = pageData.strokes || [];
   for (const stroke of strokes) {
     if (!stroke.points || stroke.points.length === 0) continue;
@@ -233,21 +228,16 @@ async function renderStudentCanvasPageDataUrl(
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // 다크 모드 펜 색상 가독성 보정
-    let strokeColor = stroke.color || '#1e293b';
-    if (strokeColor === '#ffffff' || strokeColor === '#f8fafc') {
-      strokeColor = '#0f172a';
-    } else if (strokeColor === '#facc15') {
-      strokeColor = '#d97706';
-    }
+    // 원래 펜 색상 그대로 유지 (흰색 분필, 노란 형광펜 등 원본 충실도 100%)
+    const strokeColor = stroke.color || '#ffffff';
 
     if (stroke.tool === 'highlighter') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = 0.45;
       ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = (stroke.size || 3) * 4;
+      ctx.lineWidth = (stroke.size || 4) * 3.5;
     } else if (stroke.tool === 'eraser') {
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = (stroke.size || 3) * 5;
+      ctx.lineWidth = (stroke.size || 5) * 5;
     } else {
       ctx.globalAlpha = 1.0;
       ctx.strokeStyle = strokeColor;
@@ -256,44 +246,71 @@ async function renderStudentCanvasPageDataUrl(
 
     if (stroke.points.length === 1) {
       ctx.beginPath();
-      ctx.arc(stroke.points[0].x, stroke.points[0].y + offsetY, ctx.lineWidth / 2, 0, Math.PI * 2);
+      ctx.arc(stroke.points[0].x, stroke.points[0].y, ctx.lineWidth / 2, 0, Math.PI * 2);
       ctx.fillStyle = strokeColor;
       ctx.fill();
     } else if (stroke.points.length === 2) {
       ctx.beginPath();
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y + offsetY);
-      ctx.lineTo(stroke.points[1].x, stroke.points[1].y + offsetY);
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
       ctx.stroke();
     } else {
       ctx.beginPath();
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y + offsetY);
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
 
       for (let i = 1; i < stroke.points.length - 1; i++) {
         const midX = (stroke.points[i].x + stroke.points[i + 1].x) / 2;
-        const midY = (stroke.points[i].y + stroke.points[i + 1].y) / 2 + offsetY;
-        ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y + offsetY, midX, midY);
+        const midY = (stroke.points[i].y + stroke.points[i + 1].y) / 2;
+        ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y, midX, midY);
       }
       const last = stroke.points[stroke.points.length - 1];
-      ctx.lineTo(last.x, last.y + offsetY);
+      ctx.lineTo(last.x, last.y);
       ctx.stroke();
     }
     ctx.restore();
   }
 
-  // 5. 텍스트 아이템 그리기
+  // 4. 텍스트 아이템 그리기
   const textItems = pageData.textItems || [];
   for (const item of textItems) {
     ctx.save();
-    let textColor = item.color || '#0f172a';
-    if (textColor === '#ffffff' || textColor === '#f8fafc') {
-      textColor = '#0f172a';
-    }
+    const textColor = item.color || '#ffffff';
     ctx.fillStyle = textColor;
     ctx.font = `600 ${(item.fontSize || 16) * 1.5}px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`;
     ctx.textAlign = 'left';
-    ctx.fillText(item.text, item.x, item.y + offsetY + 24);
+    ctx.fillText(item.text, item.x, item.y + 24);
     ctx.restore();
   }
+
+  // 5. 우측 하단 학생 식별 미니 뱃지 (학습지 영역을 침범하지 않고 1:1 풀화면 유지)
+  ctx.save();
+  const pageLabel = totalPages > 1 ? ` (${pageNumber}/${totalPages}p)` : '';
+  const tagText = `${note.student_grade}학년 ${note.student_class}반 ${note.student_num}번 ${note.student_name}${pageLabel}`;
+  ctx.font = 'bold 20px "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+  const textWidth = ctx.measureText(tagText).width;
+  const tagPadding = 14;
+  const tagH = 36;
+  const tagW = textWidth + tagPadding * 2;
+  const tagX = width - tagW - 24;
+  const tagY = height - tagH - 20;
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  if ((ctx as any).roundRect) {
+    (ctx as any).roundRect(tagX, tagY, tagW, tagH, 10);
+  } else {
+    ctx.rect(tagX, tagY, tagW, tagH);
+  }
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#f1f5f9';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(tagText, tagX + tagPadding, tagY + tagH / 2);
+  ctx.restore();
 
   return canvas.toDataURL('image/png', 0.95);
 }
@@ -357,9 +374,6 @@ export async function generateClassSubmissionPdf(options: GeneratePdfOptions): P
   const isLandscape = orientation === 'landscape';
   const pageWidth = isLandscape ? 297 : 210;
   const pageHeight = isLandscape ? 210 : 297;
-  const margin = 8;
-  const contentWidth = pageWidth - (margin * 2);
-  const contentHeight = pageHeight - (margin * 2);
 
   // A4 PDF 문서 생성
   const doc = new jsPDF({
@@ -369,13 +383,20 @@ export async function generateClassSubmissionPdf(options: GeneratePdfOptions): P
     compress: true
   });
 
-  // 1. 표지 (한글 깨짐 없는 Canvas 고화질 이미지 렌더링)
-  const coverImgData = renderCoverPageDataUrl(baseTitle, sortedNotes.length, now.toLocaleString('ko-KR'));
+  // 1. 표지 (한글 깨짐 없는 Canvas 1페이지 고화질 리포트 표지 렌더링)
+  const coverImgData = renderCoverPageDataUrl(
+    baseTitle,
+    sortedNotes.length,
+    now.toLocaleString('ko-KR'),
+    sortedNotes,
+    1600,
+    1130
+  );
   if (coverImgData) {
     doc.addImage(coverImgData, 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');
   }
 
-  // 2. 학생별 페이지 생성 (학번순 순회 & 비동기 고화질 합성)
+  // 2. 학생별 페이지 생성 (학번순 순회 & 비동기 고화질 합성, 여백 없이 1:1 풀화면 다크 캔버스 저장)
   for (let i = 0; i < sortedNotes.length; i++) {
     const note = sortedNotes[i];
     if (onProgress) {
@@ -402,6 +423,9 @@ export async function generateClassSubmissionPdf(options: GeneratePdfOptions): P
     }
 
     const studentOrientation = strokesData.orientation || orientation;
+    const isStudentLandscape = studentOrientation === 'landscape';
+    const sPageWidth = isStudentLandscape ? 297 : 210;
+    const sPageHeight = isStudentLandscape ? 210 : 297;
 
     for (let pIdx = 0; pIdx < pagesList.length; pIdx++) {
       const pageData = pagesList[pIdx];
@@ -417,7 +441,7 @@ export async function generateClassSubmissionPdf(options: GeneratePdfOptions): P
       );
 
       if (pageImg) {
-        doc.addImage(pageImg, 'PNG', margin, margin, contentWidth, contentHeight, undefined, 'FAST');
+        doc.addImage(pageImg, 'PNG', 0, 0, sPageWidth, sPageHeight, undefined, 'FAST');
       }
     }
   }

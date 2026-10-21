@@ -33,7 +33,7 @@ export async function loadPdfDocument(file: File): Promise<any> {
  */
 export async function renderPdfThumbnails(
   pdfDoc: any,
-  thumbWidth = 240
+  thumbWidth = 200
 ): Promise<Array<{ pageNumber: number; dataUrl: string; width: number; height: number }>> {
   const results: Array<{ pageNumber: number; dataUrl: string; width: number; height: number }> = [];
 
@@ -49,10 +49,12 @@ export async function renderPdfThumbnails(
     const ctx = canvas.getContext('2d');
 
     if (ctx) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport }).promise;
       results.push({
         pageNumber: pageNum,
-        dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+        dataUrl: canvas.toDataURL('image/jpeg', 0.75),
         width: Math.round(unscaledViewport.width),
         height: Math.round(unscaledViewport.height)
       });
@@ -60,6 +62,50 @@ export async function renderPdfThumbnails(
   }
 
   return results;
+}
+
+/**
+ * PDF 문서의 썸네일을 점진적(Progressive/Streaming)으로 초고속 추출합니다.
+ * 각 페이지가 렌더링될 때마다 onPageReady 콜백을 즉시 호출하여
+ * 사용자가 첫 페이지부터 0.1초 만에 확인하고 바로 삽입할 수 있도록 합니다.
+ */
+export async function renderPdfThumbnailsProgressive(
+  pdfDoc: any,
+  onPageReady: (thumb: { pageNumber: number; dataUrl: string; width: number; height: number }) => void,
+  thumbWidth = 200,
+  isCancelled?: () => boolean
+): Promise<void> {
+  for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+    if (isCancelled && isCancelled()) break;
+    try {
+      const page = await pdfDoc.getPage(pageNum);
+      const unscaledViewport = page.getViewport({ scale: 1.0 });
+      const scale = thumbWidth / unscaledViewport.width;
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(viewport.width);
+      canvas.height = Math.round(viewport.height);
+      const ctx = canvas.getContext('2d');
+
+      if (ctx) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        if (isCancelled && isCancelled()) break;
+
+        onPageReady({
+          pageNumber: pageNum,
+          dataUrl: canvas.toDataURL('image/jpeg', 0.75),
+          width: Math.round(unscaledViewport.width),
+          height: Math.round(unscaledViewport.height)
+        });
+      }
+    } catch (err) {
+      console.warn(`PDF ${pageNum}페이지 썸네일 생성 경고:`, err);
+    }
+  }
 }
 
 /**

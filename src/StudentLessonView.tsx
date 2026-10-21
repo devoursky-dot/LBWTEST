@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
-  renderPdfThumbnails,
+  renderPdfThumbnailsProgressive,
   renderPdfPageToDataUrl,
   loadImageFile,
   type CropRect
@@ -195,6 +195,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [pdfFileName, setPdfFileName] = useState('');
   const [pdfDocProxy, setPdfDocProxy] = useState<any>(null);
   const [pdfThumbnails, setPdfThumbnails] = useState<Array<{ pageNumber: number; dataUrl: string; width: number; height: number }>>([]);
+  const [pdfTotalPages, setPdfTotalPages] = useState<number>(0);
   const [isPdfLoading, setIsPdfLoading] = useState(false);
 
   const [cropModalOpen, setCropModalOpen] = useState(false);
@@ -397,11 +398,21 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setPdfFileName(file.name);
       setIsPdfLoading(true);
       setPdfPickerOpen(true);
+      setPdfThumbnails([]);
       try {
         const pdfDoc = await loadPdfDocument(file);
         setPdfDocProxy(pdfDoc);
-        const thumbs = await renderPdfThumbnails(pdfDoc, 260);
-        setPdfThumbnails(thumbs);
+        const totalP = pdfDoc.numPages || 1;
+        setPdfTotalPages(totalP);
+        setIsPdfLoading(false);
+
+        // REA 아키텍처 기반 점진적(Progressive/Streaming) 썸네일 고속 생성
+        renderPdfThumbnailsProgressive(pdfDoc, (newThumb) => {
+          setPdfThumbnails(prev => {
+            if (prev.some(t => t.pageNumber === newThumb.pageNumber)) return prev;
+            return [...prev, newThumb].sort((a, b) => a.pageNumber - b.pageNumber);
+          });
+        }, 180);
       } catch (err: any) {
         console.error('PDF 로드 실패:', err);
         showToast(`❌ PDF 로드 실패: ${err.message || '파일을 열 수 없습니다.'}`);
@@ -1246,32 +1257,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (onExit) onExit();
   };
 
-  // 학생 이탈(화면 전환, 홈버튼 등) 감지 리스너
+  // 전체화면 상태 동기화 리스너 (이탈 감지 기능 제거하여 억울한 빨간색 경고 원천 차단)
   useEffect(() => {
     if (!isConnectedToBoard || !studentInfo) return;
-
-    const handleVisibilityChange = () => {
-      const isAway = document.visibilityState === 'hidden';
-      classroomRealtime.sendSignal({
-        type: 'STUDENT_PRESENCE',
-        lessonId,
-        student: studentInfo,
-        status: isAway ? 'away' : 'connected'
-      });
-      if (!isAway && !document.fullscreenElement) {
-        showToast('⚠️ 수업에 다시 복귀했습니다.');
-      }
-    };
 
     const handleFullscreenChange = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, [isConnectedToBoard, studentInfo, lessonId]);
@@ -3515,6 +3511,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         isOpen={pdfPickerOpen}
         fileName={pdfFileName}
         thumbnails={pdfThumbnails}
+        totalPages={pdfTotalPages}
         isLoading={isPdfLoading}
         onSelectPage={handleSelectPdfPage}
         onClose={() => setPdfPickerOpen(false)}

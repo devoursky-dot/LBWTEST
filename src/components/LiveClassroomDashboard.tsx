@@ -136,10 +136,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     const unsubscribe = classroomRealtime.subscribe((signal: RealtimeSignalPayload) => {
       if (signal.lessonId !== currentLessonId) return;
 
-      // [1] 학생 접속 / 이탈 상태 알림
+      // [1] 학생 접속 상태 알림
       if (signal.type === 'STUDENT_PRESENCE' && signal.student) {
         const key = `${signal.student.grade}_${signal.student.classNum}_${signal.student.studentNum}`;
-        const newStatus = signal.status || 'connected';
+        const newStatus = signal.status === 'left' ? 'left' : 'connected';
 
         setStudentPresences((prev) => {
           const next = new Map(prev);
@@ -153,8 +153,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
         if (newStatus === 'connected') {
           showToast(`🟢 ${signal.student.grade}-${signal.student.classNum} ${signal.student.name} 학생이 출석했습니다.`);
-        } else if (newStatus === 'away') {
-          showToast(`🚨 ${signal.student.grade}-${signal.student.classNum} ${signal.student.name} 학생이 다른 앱으로 이탈했습니다!`);
         }
       }
 
@@ -242,18 +240,16 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         existing.status = presence.status;
         existing.name = presence.name;
       } else {
-        // [중요 가드]: 제출 기록이 없는 학생은 오직 현재 'connected' 상태이거나 최근 1분 이내의 활동일 때만 명단에 추가
-        // 과거 세션에서 남은 유령 이탈자 신호는 새 세션 학생 명단에 뜨지 않도록 원천 차단
         const lastActiveTime = presence.lastActive ? new Date(presence.lastActive).getTime() : 0;
-        const isRecent = Date.now() - lastActiveTime < 60000;
-        if (presence.status === 'connected' || (presence.status === 'away' && isRecent)) {
+        const isRecent = Date.now() - lastActiveTime < 120000;
+        if (presence.status === 'connected' && isRecent) {
           studentMap.set(key, {
             key,
             grade: presence.grade,
             classNum: presence.classNum,
             studentNum: presence.studentNum,
             name: presence.name,
-            status: presence.status
+            status: 'connected'
           });
         }
       }
@@ -288,7 +284,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
   // 실시간 출석 카운트
   const activeCount = sortedStudentRoster.filter(s => s.status === 'connected').length;
-  const awayCount = sortedStudentRoster.filter(s => s.status === 'away').length;
 
   // 5. 학생 타일 클릭 시 온디맨드 필기 상세 열람
   const handleSelectStudent = async (studentItem: typeof sortedStudentRoster[0]) => {
@@ -538,11 +533,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             }}
           >
             <span style={{ color: '#3fb950', fontWeight: 700 }}>● 참여 중: {activeCount}명</span>
-            {awayCount > 0 && (
-              <span style={{ color: '#f85149', fontWeight: 700, marginLeft: '6px' }}>
-                🚨 이탈: {awayCount}명
-              </span>
-            )}
             <span style={{ color: '#8b949e', marginLeft: '6px' }}>
               / 총 {sortedStudentRoster.length}명
             </span>
@@ -935,7 +925,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 >
                   {sortedStudentRoster.map((studentItem) => {
                     const isOnline = studentItem.status === 'connected';
-                    const isAway = studentItem.status === 'away';
                     const hasNote = Boolean(studentItem.submission);
 
                     let badgeBg = '#484f58';
@@ -948,11 +937,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                       badgeLabel = '🟢 참여 중';
                       borderColor = '#388bfd';
                       cardBg = 'rgba(56, 139, 253, 0.12)';
-                    } else if (isAway) {
-                      badgeBg = '#da3633';
-                      badgeLabel = '🚨 이탈 감지';
-                      borderColor = '#f85149';
-                      cardBg = 'rgba(248, 81, 73, 0.14)';
                     } else if (hasNote) {
                       badgeBg = '#1f6feb';
                       badgeLabel = '제출 완료';
@@ -990,14 +974,14 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                             width: '8px',
                             height: '8px',
                             borderRadius: '50%',
-                            background: isOnline ? '#3fb950' : (isAway ? '#f85149' : '#8b949e')
+                            background: isOnline ? '#3fb950' : '#8b949e'
                           }}
                         />
 
                         {/* 아이콘 + 학번 */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <span style={{ fontSize: viewMode === 'auto' ? '18px' : '26px' }}>
-                            {isAway ? '🚨' : '👨‍🎓'}
+                            👨‍🎓
                           </span>
                           <span style={{ fontSize: viewMode === 'auto' ? '12px' : '13.5px', fontWeight: 700, color: '#93c5fd' }}>
                             {studentItem.grade}-{studentItem.classNum} {studentItem.studentNum}번
