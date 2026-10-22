@@ -82,12 +82,21 @@ export function checkIsFullscreen(): boolean {
  */
 export function useFullscreenManager(options?: {
   enabled?: boolean;
+  suspended?: boolean; // PDF 피커, 이미지 크롭 등 모달 작업 중 팝업 방해 금지
   onFullscreenChange?: (isFullscreen: boolean) => void;
 }) {
   const isEnabled = options?.enabled ?? true;
+  const isSuspended = options?.suspended ?? false;
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => checkIsFullscreen());
   const [showReentryPrompt, setShowReentryPrompt] = useState<boolean>(false);
   const wasEverFullscreenRef = useRef<boolean>(false);
+
+  // 모달이 열려있는 동안은 전체화면 복구 팝업을 즉시 숨김
+  useEffect(() => {
+    if (isSuspended) {
+      setShowReentryPrompt(false);
+    }
+  }, [isSuspended]);
 
   // 전체화면 상태 동기화 및 이탈 자동 감지 리스너
   useEffect(() => {
@@ -104,8 +113,8 @@ export function useFullscreenManager(options?: {
         wasEverFullscreenRef.current = true;
         setShowReentryPrompt(false);
       } else {
-        // 이전에 한 번이라도 전체화면이었는데 풀렸다면 복구 대기 상태로 전환
-        if (wasEverFullscreenRef.current && isEnabled) {
+        // 이전에 한 번이라도 전체화면이었는데 풀렸다면 복구 대기 상태로 전환 (단, 모달 작업 중이 아닐 때만)
+        if (wasEverFullscreenRef.current && isEnabled && !isSuspended) {
           setShowReentryPrompt(true);
         }
       }
@@ -114,9 +123,9 @@ export function useFullscreenManager(options?: {
     document.addEventListener('fullscreenchange', handleFsChange);
     document.addEventListener('webkitfullscreenchange', handleFsChange);
 
-    // [기회주의적 무소음 자동 재진입]: 사용자가 화면 어디든 다음 터치를 하는 순간 캡처
+    // [기회주의적 무소음 자동 재진입]: 모달이 닫힌 상태에서 사용자가 화면 어디든 다음 터치를 하는 순간 캡처
     const handleGlobalPointer = () => {
-      if (!checkIsFullscreen() && wasEverFullscreenRef.current && isEnabled) {
+      if (!checkIsFullscreen() && wasEverFullscreenRef.current && isEnabled && !isSuspended) {
         requestFullscreenSafe().then((success) => {
           if (success) {
             setShowReentryPrompt(false);
@@ -132,7 +141,7 @@ export function useFullscreenManager(options?: {
       document.removeEventListener('webkitfullscreenchange', handleFsChange);
       window.removeEventListener('pointerdown', handleGlobalPointer, { capture: true } as any);
     };
-  }, [isEnabled, options]);
+  }, [isEnabled, isSuspended, options]);
 
   const enterFullscreen = useCallback(async () => {
     const success = await requestFullscreenSafe();

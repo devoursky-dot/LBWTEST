@@ -235,27 +235,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // --- 2. 삼성노트 REA 뷰포트 & A4 용지 규격 상태 ---
   // 기본 표준: A4 세로 (Portrait)
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
-
-  // 📺 모듈화된 전체화면 관리 엔진 (이벤트 기반 자동 이탈 감지 및 무소음 복구 루틴)
-  const {
-    isFullscreen,
-    showReentryPrompt,
-    enterFullscreen: requestFullscreenSafe,
-    exitFullscreen: exitFullscreenSafe,
-    dismissPrompt: dismissReentryPrompt
-  } = useFullscreenManager({ enabled: true });
-
-  // 💬 전체화면을 파괴하는 window.confirm을 100% 대체하는 인앱 다이얼로그 시스템
-  const { confirm, confirmModalElement } = useAppConfirm();
-
-  // 전체화면 토글
-  const toggleFullscreen = useCallback(() => {
-    if (isFullscreen) {
-      exitFullscreenSafe();
-    } else {
-      requestFullscreenSafe();
-    }
-  }, [isFullscreen, exitFullscreenSafe, requestFullscreenSafe]);
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -366,6 +345,33 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   }, [initialPdfId, initialPdfName, lessonId, lessonPdfInfo]);
   const [isLessonPdfPromptOpen, setIsLessonPdfPromptOpen] = useState<boolean>(false);
   const [isDownloadingLessonPdf, setIsDownloadingLessonPdf] = useState<boolean>(false);
+
+  // 모달 및 피커가 활성화된 상태 (전체화면 프롬프트 억제 플래그)
+  const isPickerModalActive = Boolean(pdfPickerOpen || cropModalOpen || isLessonPdfPromptOpen);
+
+  // 📺 모듈화된 전체화면 관리 엔진 (이벤트 기반 자동 이탈 감지 및 무소음 복구 루틴)
+  const {
+    isFullscreen,
+    showReentryPrompt,
+    enterFullscreen: requestFullscreenSafe,
+    exitFullscreen: exitFullscreenSafe,
+    dismissPrompt: dismissReentryPrompt
+  } = useFullscreenManager({
+    enabled: true,
+    suspended: isPickerModalActive
+  });
+
+  // 💬 전체화면을 파괴하는 window.confirm을 100% 대체하는 인앱 다이얼로그 시스템
+  const { confirm, confirmModalElement } = useAppConfirm();
+
+  // 전체화면 토글
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      exitFullscreenSafe();
+    } else {
+      requestFullscreenSafe();
+    }
+  }, [isFullscreen, exitFullscreenSafe, requestFullscreenSafe]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -769,6 +775,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 
     if (isPdf) {
+      dismissReentryPrompt();
       currentPdfFileRef.current = file;
       setPdfFileName(file.name);
       setIsPdfLoading(true);
@@ -798,6 +805,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     } else {
       // 일반 이미지 파일
       try {
+        dismissReentryPrompt();
         const { dataUrl } = await loadImageFile(file);
         setEditingImageItem(null);
         setCropTargetImageSrc(dataUrl);
@@ -879,6 +887,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setRedoStack([]);
       setActiveTextId(null);
       setPdfPickerOpen(false);
+      requestFullscreenSafe();
 
       showToast(`🎉 PDF ${pageNumbers.length}개 쪽이 공책 맨 앞쪽에 성공적으로 생성되었습니다!`);
     } catch (err: any) {
@@ -971,6 +980,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       if (mode === 'full_page') {
         setFullPageBackground(dataUrl);
+        requestFullscreenSafe();
         showToast(`📄 PDF ${pageNumber}페이지가 현재 쪽 전체 배경으로 설정되었습니다.`);
       } else {
         // 크롭 모달 열기
@@ -1020,6 +1030,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       showToast('🖼️ 이미지가 공책에 추가되었습니다. 위치와 크기를 조절할 수 있습니다.');
     }
     setCropModalOpen(false);
+    requestFullscreenSafe();
   };
 
   // 기존 이미지 재자르기
@@ -4835,7 +4846,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       {/* 5-2. 모듈화된 전체화면 자동 복구 오버레이 (FullscreenReentryModal) */}
       <FullscreenReentryModal
-        isOpen={showReentryPrompt}
+        isOpen={showReentryPrompt && !isPickerModalActive}
         onReenter={requestFullscreenSafe}
         onDismiss={dismissReentryPrompt}
       />
@@ -4844,7 +4855,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       {confirmModalElement}
 
       {/* 전체화면 복귀 상단 플로팅 칩 (보조 상시 안전망) */}
-      {!isFullscreen && isConnectedToBoard && !showReentryPrompt && !cropModalOpen && !pdfPickerOpen && (
+      {!isFullscreen && isConnectedToBoard && !showReentryPrompt && !isPickerModalActive && (
         <button
           type="button"
           onClick={requestFullscreenSafe}
