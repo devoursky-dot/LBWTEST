@@ -105,12 +105,20 @@ const GAS_CODE_TEMPLATE = `function doPost(e) {
 export default function App() {
   // --- 통합 포털 세션 (전자칠판, 선생님, 학생, 관리자) ---
   const [currentSession, setCurrentSessionState] = useState<UserSession | null>(() => {
+    if (typeof window !== 'undefined' && (window.location.search.includes('reset=true') || window.location.search.includes('portal=true'))) {
+      localStorage.removeItem('lbw_current_session');
+      localStorage.removeItem('lbw_whiteboard_permanent_auth');
+      return null;
+    }
     return getCurrentSession();
   });
   const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState<boolean>(false);
 
   // --- 권한 및 모드 상태 ---
   const [authMode, setAuthMode] = useState<AuthMode>(() => {
+    if (typeof window !== 'undefined' && (window.location.search.includes('reset=true') || window.location.search.includes('portal=true'))) {
+      return 'guest';
+    }
     const initialSession = getCurrentSession();
     if (initialSession?.role === 'admin') return 'admin';
     if (initialSession?.role === 'teacher') return 'teacher';
@@ -1482,48 +1490,92 @@ export default function App() {
               </div>
             ) : viewMode === 'list' ? (
               /* [1. 구글 드라이브 목록 뷰 (Table List)] */
-              <table className="gdrive-table">
-                <thead>
-                  <tr>
-                    <th>이름</th>
-                    <th style={{ width: '180px' }}>최종 수정 날짜</th>
-                    <th style={{ width: '130px' }}>파일 크기</th>
-                    <th style={{ width: '150px', textAlign: 'right' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.map(item => {
-                    const isSelected = selectedItemId === item.id;
-                    const isQr = isQrLessonItem(item);
-                    return (
-                      <tr 
-                        key={item.id}
-                        className={`gdrive-row ${item.type} ${isQr ? 'qr-lesson-row' : ''} ${isSelected ? 'selected' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedItemId(item.id);
-                        }}
-                        onDoubleClick={() => {
-                          if (isQr) {
-                            handleOpenQrLesson(item);
-                          } else if (item.type === 'folder') {
-                            handleOpenFolder(item.folderId || item.id, item.name);
-                          } else {
-                            handleDownload(item);
-                          }
-                        }}
-                      >
-                        <td>
-                          <div className="gdrive-name-cell">
-                            <span className="gdrive-item-icon">{getItemIcon(item)}</span>
-                            <span className="gdrive-item-name" title={item.name}>
-                              {isQr ? item.name.replace('[QR수업]', '').trim() : item.name}
-                            </span>
-                            {isQr && (
-                              <span className="gdrive-qr-badge">📱 QR 대화형 수업</span>
-                            )}
-                          </div>
-                        </td>
+              <>
+                {folderHistory.length === 1 && (
+                  <div style={{
+                    background: 'rgba(59, 130, 246, 0.08)',
+                    border: '1px solid rgba(59, 130, 246, 0.2)',
+                    borderRadius: '10px',
+                    padding: '10px 16px',
+                    margin: '8px 16px 14px 16px',
+                    fontSize: '13px',
+                    color: '#93c5fd',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px'
+                  }}>
+                    <span style={{ fontSize: '18px' }}>💡</span>
+                    <span>
+                      <strong>전자칠판 수업 실행 안내:</strong> 개설된 수업을 실행하시려면 담당 선생님 폴더(예: <strong>이병우</strong>, <strong>김정희</strong>)를 터치하여 안으로 들어가시면 <strong>[▶️ 수업 실행]</strong> 버튼이 나타납니다.
+                    </span>
+                  </div>
+                )}
+                <table className="gdrive-table">
+                  <thead>
+                    <tr>
+                      <th>이름</th>
+                      <th style={{ width: '180px' }}>최종 수정 날짜</th>
+                      <th style={{ width: '130px' }}>파일 크기</th>
+                      <th style={{ width: '150px', textAlign: 'right' }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.map(item => {
+                      const isSelected = selectedItemId === item.id;
+                      const isQr = isQrLessonItem(item);
+                      return (
+                        <tr 
+                          key={item.id}
+                          className={`gdrive-row ${item.type} ${isQr ? 'qr-lesson-row' : ''} ${isSelected ? 'selected' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedItemId(item.id);
+                          }}
+                          onDoubleClick={() => {
+                            if (isQr) {
+                              handleOpenQrLesson(item);
+                            } else if (item.type === 'folder') {
+                              handleOpenFolder(item.folderId || item.id, item.name);
+                            } else {
+                              handleDownload(item);
+                            }
+                          }}
+                        >
+                          <td>
+                            <div className="gdrive-name-cell">
+                              <span className="gdrive-item-icon">{getItemIcon(item)}</span>
+                              <span className="gdrive-item-name" title={item.name}>
+                                {isQr ? item.name.replace('[QR수업]', '').trim() : item.name}
+                              </span>
+                              {isQr && (
+                                <button
+                                  type="button"
+                                  className="gdrive-qr-badge"
+                                  style={{
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    padding: '4px 10px',
+                                    borderRadius: '6px',
+                                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                                    color: '#ffffff',
+                                    fontWeight: 700,
+                                    fontSize: '12px',
+                                    boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenQrLesson(item);
+                                  }}
+                                  title="터치하여 전자칠판 라이브 수업 즉시 실행"
+                                >
+                                  ▶️ 수업 실행
+                                </button>
+                              )}
+                            </div>
+                          </td>
                         <td style={{ color: 'var(--g-text-secondary)', fontSize: '13px' }}>
                           {item.updatedAt}
                         </td>
@@ -1588,6 +1640,7 @@ export default function App() {
                   })}
                 </tbody>
               </table>
+              </>
             ) : (
               /* [2. 구글 드라이브 타일 그리드 뷰 (Grid)] */
               <div>

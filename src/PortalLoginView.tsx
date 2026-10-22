@@ -25,6 +25,66 @@ interface PortalLoginViewProps {
 export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalLoginViewProps) {
   const [activeTab, setActiveTab] = useState<UserRole>('whiteboard');
 
+  // 🎨 실시간 디자인 테마 ('vercel' 딥 다크 모노크롬 vs 'linear' 슬레이트 글래스)
+  const [designTheme, setDesignThemeState] = useState<'vercel' | 'linear'>(() => {
+    try {
+      return (localStorage.getItem('lbw_portal_theme') as any) || 'vercel';
+    } catch {
+      return 'vercel';
+    }
+  });
+  const setDesignTheme = (t: 'vercel' | 'linear') => {
+    setDesignThemeState(t);
+    try {
+      localStorage.setItem('lbw_portal_theme', t);
+    } catch {}
+  };
+  const isVercel = designTheme === 'vercel';
+
+  const themeStyles = isVercel ? {
+    bg: '#000000',
+    cardBg: '#0a0a0a',
+    cardBorder: '1px solid #222222',
+    cardShadow: '0 24px 60px rgba(0, 0, 0, 0.95), 0 0 0 1px #1a1a1a',
+    tabContainerBg: '#111111',
+    tabContainerBorder: '1px solid #222222',
+    tabActiveBg: '#ffffff',
+    tabActiveColor: '#000000',
+    tabActiveShadow: '0 2px 8px rgba(255, 255, 255, 0.2)',
+    tabInactiveColor: '#777777',
+    inputBg: '#111111',
+    inputBorder: '1px solid #262626',
+    buttonBg: '#ffffff',
+    buttonColor: '#000000',
+    buttonShadow: '0 4px 14px rgba(255, 255, 255, 0.2)',
+    noticeBg: 'rgba(255, 255, 255, 0.04)',
+    noticeBorder: '1px solid #222222',
+    noticeColor: '#d4d4d4',
+    badgeBg: '#ffffff',
+    badgeColor: '#000000'
+  } : {
+    bg: 'radial-gradient(ellipse at 50% 25%, #172554 0%, #0f172a 50%, #030712 100%)',
+    cardBg: 'rgba(30, 41, 59, 0.72)',
+    cardBorder: '1px solid rgba(56, 189, 248, 0.28)',
+    cardShadow: '0 24px 64px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 40px rgba(37, 99, 235, 0.2)',
+    tabContainerBg: 'rgba(15, 23, 42, 0.75)',
+    tabContainerBorder: '1px solid rgba(255, 255, 255, 0.12)',
+    tabActiveBg: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+    tabActiveColor: '#ffffff',
+    tabActiveShadow: '0 4px 14px rgba(59, 130, 246, 0.45)',
+    tabInactiveColor: '#94a3b8',
+    inputBg: 'rgba(15, 23, 42, 0.7)',
+    inputBorder: '1px solid rgba(59, 130, 246, 0.3)',
+    buttonBg: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+    buttonColor: '#ffffff',
+    buttonShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 8px 24px rgba(59, 130, 246, 0.45)',
+    noticeBg: 'rgba(59, 130, 246, 0.12)',
+    noticeBorder: '1px solid rgba(59, 130, 246, 0.3)',
+    noticeColor: '#93c5fd',
+    badgeBg: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+    badgeColor: '#ffffff'
+  };
+
   // 전자칠판 폼 상태
   const [wbPassword, setWbPassword] = useState('');
   const [wbRemember, setWbRemember] = useState(true);
@@ -68,20 +128,17 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
     }
   }, [studentId]);
 
-  // 1. 전자칠판 로그인 핸들러
+  // 1. 전자칠판 로그인 핸들러 (미입력 시 초기 비밀번호 tch1234로 원클릭 즉시 접속)
   const handleWhiteboardLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-    if (!wbPassword.trim()) {
-      setErrorMsg('⚠️ 전자칠판 비밀번호를 입력해 주세요.');
-      return;
-    }
+    const targetPw = wbPassword.trim() || 'tch1234';
 
     setIsLoading(true);
     try {
-      const isCorrect = await verifyWhiteboardPassword(wbPassword.trim());
+      const isCorrect = await verifyWhiteboardPassword(targetPw);
       if (!isCorrect) {
-        setErrorMsg('❌ 전자칠판 비밀번호가 일치하지 않습니다.');
+        setErrorMsg('❌ 전자칠판 비밀번호가 일치하지 않습니다. (초기 비밀번호: tch1234)');
         return;
       }
 
@@ -267,25 +324,93 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
     <div style={{
       minHeight: '100vh',
       display: 'flex',
+      flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'radial-gradient(circle at 50% 20%, #1f293d 0%, #0f1319 70%, #090b0e 100%)',
+      background: themeStyles.bg,
       padding: '20px',
       fontFamily: "'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-      color: '#ffffff'
+      color: '#ffffff',
+      transition: 'background 0.3s ease',
+      position: 'relative'
     }}>
+      {/* 🌟 실시간 디자인 스킬 체험 스위처 (실제 코드 동작 확인용) */}
+      <div style={{
+        position: 'fixed',
+        top: '20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        background: 'rgba(20, 20, 20, 0.85)',
+        backdropFilter: 'blur(16px)',
+        padding: '5px 8px',
+        borderRadius: '30px',
+        border: '1px solid rgba(255, 255, 255, 0.15)',
+        boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6)',
+        zIndex: 999
+      }}>
+        <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600, paddingLeft: '8px', paddingRight: '4px' }}>
+          🎨 실시간 디자인 체험:
+        </span>
+        <button
+          id="btn-theme-vercel"
+          type="button"
+          onClick={() => setDesignTheme('vercel')}
+          style={{
+            padding: '5px 12px',
+            borderRadius: '20px',
+            fontSize: '11.5px',
+            fontWeight: 700,
+            background: isVercel ? '#ffffff' : 'transparent',
+            color: isVercel ? '#000000' : '#888888',
+            border: isVercel ? '1px solid #ffffff' : '1px solid transparent',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          <span>🖤</span>
+          <span>1. 버셀 가이스트 (딥 다크)</span>
+        </button>
+        <button
+          id="btn-theme-linear"
+          type="button"
+          onClick={() => setDesignTheme('linear')}
+          style={{
+            padding: '5px 12px',
+            borderRadius: '20px',
+            fontSize: '11.5px',
+            fontWeight: 700,
+            background: !isVercel ? '#3b82f6' : 'transparent',
+            color: !isVercel ? '#ffffff' : '#888888',
+            border: !isVercel ? '1px solid rgba(255,255,255,0.2)' : '1px solid transparent',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          <span>💎</span>
+          <span>2. 리니어 (슬레이트 글래스)</span>
+        </button>
+      </div>
+
       <div style={{
         width: '100%',
         maxWidth: '480px',
-        background: 'rgba(28, 32, 42, 0.75)',
+        background: themeStyles.cardBg,
         backdropFilter: 'blur(20px)',
         WebkitBackdropFilter: 'blur(20px)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
+        border: themeStyles.cardBorder,
         borderRadius: '24px',
         padding: '36px 32px',
-        boxShadow: '0 24px 64px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+        boxShadow: themeStyles.cardShadow,
         position: 'relative',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        transition: 'all 0.3s ease'
       }}>
         {/* 상단 장식 빛 */}
         <div style={{
@@ -295,7 +420,9 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
           transform: 'translateX(-50%)',
           width: '260px',
           height: '120px',
-          background: 'radial-gradient(ellipse at center, rgba(59, 130, 246, 0.35), transparent 70%)',
+          background: isVercel 
+            ? 'radial-gradient(ellipse at center, rgba(255, 255, 255, 0.1), transparent 70%)'
+            : 'radial-gradient(ellipse at center, rgba(59, 130, 246, 0.35), transparent 70%)',
           pointerEvents: 'none'
         }} />
 
@@ -308,17 +435,19 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
             width: '56px',
             height: '56px',
             borderRadius: '16px',
-            background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-            boxShadow: '0 8px 24px rgba(59, 130, 246, 0.4)',
+            background: themeStyles.badgeBg,
+            color: themeStyles.badgeColor,
+            boxShadow: isVercel ? '0 4px 16px rgba(255, 255, 255, 0.15)' : '0 8px 24px rgba(59, 130, 246, 0.4)',
             fontSize: '28px',
-            marginBottom: '14px'
+            marginBottom: '14px',
+            transition: 'all 0.3s ease'
           }}>
             🏫
           </div>
-          <h1 style={{ fontSize: '22px', fontWeight: 700, margin: '0 0 6px 0', letterSpacing: '-0.02em' }}>
+          <h1 style={{ fontSize: '22px', fontWeight: 700, margin: '0 0 6px 0', letterSpacing: '-0.02em', color: '#ffffff' }}>
             스마트 전자칠판 포털
           </h1>
-          <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
+          <p style={{ fontSize: '13px', color: isVercel ? '#888888' : '#94a3b8', margin: 0 }}>
             원하시는 사용자 역할을 선택하여 로그인하세요
           </p>
         </div>
@@ -327,11 +456,12 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
         <div style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(4, 1fr)',
-          background: 'rgba(15, 23, 42, 0.6)',
+          background: themeStyles.tabContainerBg,
           padding: '4px',
           borderRadius: '14px',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          marginBottom: '24px'
+          border: themeStyles.tabContainerBorder,
+          marginBottom: '24px',
+          transition: 'all 0.3s ease'
         }}>
           {[
             { role: 'whiteboard', label: '전자칠판', icon: '🖥️' },
@@ -356,13 +486,13 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                   padding: '8px 4px',
                   borderRadius: '10px',
                   border: 'none',
-                  background: isActive ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : 'transparent',
-                  color: isActive ? '#ffffff' : '#94a3b8',
+                  background: isActive ? themeStyles.tabActiveBg : 'transparent',
+                  color: isActive ? themeStyles.tabActiveColor : themeStyles.tabInactiveColor,
                   fontSize: '11.5px',
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  boxShadow: isActive ? '0 4px 12px rgba(37, 99, 235, 0.35)' : 'none'
+                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                  boxShadow: isActive ? themeStyles.tabActiveShadow : 'none'
                 }}
               >
                 <span style={{ fontSize: '16px', marginBottom: '2px' }}>{tab.icon}</span>
@@ -412,14 +542,19 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '6px', fontWeight: 600 }}>
-                전자칠판 접속 비밀번호
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '12px', color: '#cbd5e1', fontWeight: 600 }}>
+                  전자칠판 접속 비밀번호
+                </label>
+                <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 500 }}>
+                  초기값: tch1234 (미입력 시 1클릭 즉시 접속)
+                </span>
+              </div>
               <input
                 type="password"
                 value={wbPassword}
                 onChange={(e) => setWbPassword(e.target.value)}
-                placeholder="전자칠판 비밀번호 입력"
+                placeholder="비밀번호 입력 (비워두고 시작하기를 누르면 자동 접속)"
                 style={{
                   width: '100%',
                   padding: '12px 14px',
@@ -453,12 +588,13 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 padding: '13px',
                 borderRadius: '12px',
                 border: 'none',
-                background: isLoading ? '#475569' : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                color: '#ffffff',
+                background: isLoading ? '#475569' : themeStyles.buttonBg,
+                color: themeStyles.buttonColor,
                 fontSize: '14px',
                 fontWeight: 700,
                 cursor: isLoading ? 'not-allowed' : 'pointer',
-                boxShadow: '0 8px 20px rgba(59, 130, 246, 0.4)'
+                boxShadow: themeStyles.buttonShadow,
+                transition: 'all 0.15s ease'
               }}
             >
               {isLoading ? '인증 확인 중...' : '🖥️ 전자칠판 시작하기'}
@@ -540,14 +676,19 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
             </div>
 
             <div>
-              <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '6px', fontWeight: 600 }}>
-                비밀번호
-              </label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '12px', color: '#cbd5e1', fontWeight: 600 }}>
+                  비밀번호
+                </label>
+                <span style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 500 }}>
+                  초기값: 1234
+                </span>
+              </div>
               <input
                 type="password"
                 value={teacherPw}
                 onChange={(e) => setTeacherPw(e.target.value)}
-                placeholder="비밀번호 입력"
+                placeholder="비밀번호 입력 (초기: 1234)"
                 style={{
                   width: '100%',
                   padding: '12px 14px',
@@ -630,12 +771,13 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 padding: '13px',
                 borderRadius: '12px',
                 border: 'none',
-                background: isLoading ? '#475569' : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                color: '#ffffff',
+                background: isLoading ? '#475569' : themeStyles.buttonBg,
+                color: themeStyles.buttonColor,
                 fontSize: '14px',
                 fontWeight: 700,
                 cursor: isLoading ? 'not-allowed' : 'pointer',
-                boxShadow: '0 8px 20px rgba(59, 130, 246, 0.4)'
+                boxShadow: themeStyles.buttonShadow,
+                transition: 'all 0.15s ease'
               }}
             >
               {isLoading ? '로그인 처리 중...' : '👨‍🏫 선생님 로그인'}
@@ -798,12 +940,13 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 padding: '13px',
                 borderRadius: '12px',
                 border: 'none',
-                background: isLoading ? '#475569' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                color: '#ffffff',
+                background: isLoading ? '#475569' : (isVercel ? '#ffffff' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)'),
+                color: isVercel ? '#000000' : '#ffffff',
                 fontSize: '14px',
                 fontWeight: 700,
                 cursor: isLoading ? 'not-allowed' : 'pointer',
-                boxShadow: '0 8px 20px rgba(16, 185, 129, 0.4)'
+                boxShadow: isVercel ? '0 4px 14px rgba(255, 255, 255, 0.25)' : '0 8px 20px rgba(16, 185, 129, 0.4)',
+                transition: 'all 0.15s ease'
               }}
             >
               {isLoading ? '학생 인증 중...' : '👨‍🎓 학생 수업 참여하기'}
@@ -873,12 +1016,13 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 padding: '13px',
                 borderRadius: '12px',
                 border: 'none',
-                background: isLoading ? '#475569' : 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
-                color: '#1e293b',
+                background: isLoading ? '#475569' : (isVercel ? '#ffffff' : 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)'),
+                color: isVercel ? '#000000' : '#1e293b',
                 fontSize: '14px',
                 fontWeight: 700,
                 cursor: isLoading ? 'not-allowed' : 'pointer',
-                boxShadow: '0 8px 20px rgba(234, 179, 8, 0.4)'
+                boxShadow: isVercel ? '0 4px 14px rgba(255, 255, 255, 0.25)' : '0 8px 20px rgba(234, 179, 8, 0.4)',
+                transition: 'all 0.15s ease'
               }}
             >
               {isLoading ? '관리자 권한 확인 중...' : '🛡️ 관리자 대시보드 열기'}
