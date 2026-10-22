@@ -66,12 +66,7 @@ class ClassroomRealtimeManager {
     this.currentRole = role;
     if (onSignal) this.listeners.add(onSignal);
 
-    // 1. [선생님/전자칠판 전용] Vercel 릴레이 클라우드 폴링 (학생 필기 취합)
-    if (role === 'teacher') {
-      this.startVercelRelayPolling(lessonId);
-    }
-
-    // 2. [선생님/전자칠판 전용] Supabase Realtime 채널 생성 (무료 한도 200명 중 단 1명만 점유!)
+    // 1. [선생님/전자칠판 전용] Supabase Realtime 채널 생성 (무료 한도 200명 중 단 1명만 점유!)
     if (role === 'teacher' && supabase && isSupabaseConfigured) {
       try {
         const channelName = `classroom_lesson_${lessonId}`;
@@ -86,10 +81,24 @@ class ClassroomRealtimeManager {
           })
           .subscribe((status) => {
             console.log(`[Realtime] Teacher channel '${channelName}' status:`, status);
+            // Realtime 연결 상태에 따라 Vercel 폴링 주기 동적 최적화
+            if (status === 'SUBSCRIBED') {
+              this.isRealtimeConnected = true;
+              this.adjustPollingInterval(60000); // 실시간 연결 정상 -> Vercel 폴링 60초로 완화 (Vercel 한도 99% 절약)
+            } else {
+              this.isRealtimeConnected = false;
+              this.adjustPollingInterval(10000); // 실시간 장애 시 10초 주기 Fallback 백업망 가동
+            }
           });
       } catch (err) {
         console.warn('[Realtime] Teacher channel error:', err);
+        this.isRealtimeConnected = false;
       }
+    }
+
+    // 2. [선생님/전자칠판 전용] 지능형 Vercel 릴레이 클라우드 폴링 (적응형 백오프)
+    if (role === 'teacher') {
+      this.startVercelRelayPolling(lessonId);
     }
 
     // 3. 브라우저 탭 간 BroadcastChannel 리스너 (동일 기기 테스트 0.001초 동기화)
@@ -103,72 +112,90 @@ class ClassroomRealtimeManager {
     }
   }
 
-  /**
-   * Vercel API 릴레이 동기화 폴러 (2.5초 주기)
-   */
-  private startVercelRelayPolling(lessonId: string): void {
-    if (typeof window === 'undefined') return;
+  private isRealtimeConnected: boolean = false;
+  private currentPollingIntervalMs: number = 30000;
 
-    const poll = async () => {
-      if (this.currentLessonId !== lessonId) return;
-      try {
-        const apiBase = getApiBaseUrl();
-        const res = await fetch(`${apiBase}/api/notes?lessonId=${encodeURIComponent(lessonId)}&_t=${Date.now()}`, {
-          cache: 'no-store'
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success) {
-            // [A] 신규/수정된 학생 필기 알림
-            if (Array.isArray(data.notes)) {
-              for (const note of data.notes) {
-                const key = `${note.student_grade}_${note.student_class}_${note.student_num}`;
-                const hash = `${note.updated_at || ''}_${note.id || ''}`;
-                if (this.knownNotesHash.get(key) !== hash) {
-                  this.knownNotesHash.set(key, hash);
-                  this.notifyListeners({
-                    type: 'STUDENT_SUBMIT',
-                    lessonId,
-                    student: {
-                      grade: note.student_grade,
-                      classNum: note.student_class,
-                      studentNum: note.student_num,
-                      name: note.student_name
-                    },
-                    noteRecord: note,
-                    timestamp: note.updated_at || new Date().toISOString()
-                  });
-                }
-              }
-            }
+  private adjustPollingInterval(newIntervalMs: number): void {
+    if (this.currentPollingIntervalMs === newIntervalMs) return;
+    this.currentPollingIntervalMs = newIntervalMs;
+    if (this.pollIntervalId && this.currentLessonId) {
+      clearInterval(this.pollIntervalId);
+      this.pollIntervalId = setInterval(this.pollOnce, this.currentPollingIntervalMs);
+    }
+  }
 
-            // [B] 학생 출석 현황 알림
-            if (Array.isArray(data.presences)) {
-              for (const p of data.presences) {
+  private pollOnce = async () => {
+    if (!this.currentLessonId || typeof window === 'undefined') return;
+    // 브라우저 탭이 백그라운드이거나 최소화되어 있으면 불필요한 폴링 중지
+    if (document.visibilityState === 'hidden') return;
+
+    try {
+      const apiBase = getApiBaseUrl();
+      const res = await fetch(`${apiBase}/api/notes?lessonId=${encodeURIComponent(this.currentLessonId)}&_t=${Date.now()}`, {
+        cache: 'no-store'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          // [A] 신규/수정된 학생 필기 알림
+          if (Array.isArray(data.notes)) {
+            for (const note of data.notes) {
+              const key = `${note.student_grade}_${note.student_class}_${note.student_num}`;
+              const hash = `${note.updated_at || ''}_${note.id || ''}`;
+              if (this.knownNotesHash.get(key) !== hash) {
+                this.knownNotesHash.set(key, hash);
                 this.notifyListeners({
-                  type: 'STUDENT_PRESENCE',
-                  lessonId,
+                  type: 'STUDENT_SUBMIT',
+                  lessonId: this.currentLessonId,
                   student: {
-                    grade: p.grade,
-                    classNum: p.classNum,
-                    studentNum: p.studentNum,
-                    name: p.name
+                    grade: note.student_grade,
+                    classNum: note.student_class,
+                    studentNum: note.student_num,
+                    name: note.student_name
                   },
-                  status: p.status,
-                  timestamp: p.lastActive || new Date().toISOString()
+                  noteRecord: note,
+                  timestamp: note.updated_at || new Date().toISOString()
                 });
               }
             }
           }
-        }
-      } catch (pollErr) {
-        // 네트워크 일시 오류 시 무시
-      }
-    };
 
-    // 즉시 1회 실행 후 2.5초마다 주기적 폴링
-    poll();
-    this.pollIntervalId = setInterval(poll, 2500);
+          // [B] 학생 출석 현황 알림
+          if (Array.isArray(data.presences)) {
+            for (const p of data.presences) {
+              this.notifyListeners({
+                type: 'STUDENT_PRESENCE',
+                lessonId: this.currentLessonId,
+                student: {
+                  grade: p.grade,
+                  classNum: p.classNum,
+                  studentNum: p.studentNum,
+                  name: p.name
+                },
+                status: p.status,
+                timestamp: p.lastActive || new Date().toISOString()
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // 네트워크 일시 오류 시 무시
+    }
+  };
+
+  /**
+   * Vercel API 적응형 릴레이 동기화 폴러 (Supabase 정상 시 60초, 장애 시 10초 Fallback)
+   */
+  private startVercelRelayPolling(_lessonId?: string): void {
+    if (typeof window === 'undefined') return;
+
+    // 즉시 1회 초기 동기화 실행
+    this.pollOnce();
+    
+    // 기본 주기: Supabase Realtime 연결 상태에 따라 60초 vs 10초 가동
+    this.currentPollingIntervalMs = this.isRealtimeConnected ? 60000 : 15000;
+    this.pollIntervalId = setInterval(this.pollOnce, this.currentPollingIntervalMs);
   }
 
   public subscribe(listener: SignalListener): () => void {

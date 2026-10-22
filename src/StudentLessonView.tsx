@@ -396,6 +396,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 학생 제출 고유 ID (1인 1행 유지하여 중복 생성 및 타임아웃 방지)
   const submissionIdRef = useRef<string | null>(null);
+  // 제출 연타 방지 및 쿨다운 관리 (4초 이내 중복 제출 원천 차단)
+  const lastSubmitTimeRef = useRef<number>(0);
 
   // --- 전자칠판 실시간 연결 및 화면 꺼짐 방지(WakeLock) 상태 ---
   const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
@@ -1748,12 +1750,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송 (학생은 웹소켓 연결을 소모하지 않는 student 모드로 등록)
     setIsConnectedToBoard(true);
     classroomRealtime.joinLesson(lessonId, undefined, 'student');
-    await classroomRealtime.sendSignal({
-      type: 'STUDENT_PRESENCE',
-      lessonId,
-      student: studentInfo,
-      status: 'connected'
-    });
+    // 600명 동시 로그인 시 트래픽 스파이크 방지 (0~1500ms 랜덤 지터)
+    const connectJitter = Math.floor(Math.random() * 1500);
+    setTimeout(async () => {
+      try {
+        await classroomRealtime.sendSignal({
+          type: 'STUDENT_PRESENCE',
+          lessonId,
+          student: studentInfo,
+          status: 'connected'
+        });
+      } catch {}
+    }, connectJitter);
 
     showToast(`📡 '${studentInfo.name}' 학생이 전자칠판에 연결되었습니다! (전체화면)`);
   };
@@ -1888,18 +1896,30 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         console.warn('Vercel relay submit warning:', relayErr);
       }
 
-      // 4-2. Supabase 클라우드 실시간 업서트 (최대 1.5초 비차단 타임아웃 가드)
-      if (supabase && isSupabaseConfigured) {
+      // 4-2. Supabase 클라우드 실시간 업서트 (최대 3.5초 비차단 타임아웃 가드 + 1회 백오프 재시도)
+      const client = supabase;
+      if (client && isSupabaseConfigured) {
         try {
-          const sbPromise = supabase
-            .from('class_notes')
-            .upsert([record])
-            .select('id')
-            .single();
-          const timeoutPromise = new Promise<any>((resolve) =>
-            setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 1500)
-          );
-          const { data: savedData } = await Promise.race([sbPromise, timeoutPromise]);
+          const executeUpsert = async () => {
+            const sbPromise = client
+              .from('class_notes')
+              .upsert([record])
+              .select('id')
+              .single();
+            const timeoutPromise = new Promise<any>((resolve) =>
+              setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 3500)
+            );
+            return await Promise.race([sbPromise, timeoutPromise]);
+          };
+
+          let { data: savedData, error: sbError } = await executeUpsert();
+
+          // 일시적 타임아웃/경합 시 1초 대기 후 1회 자동 재시도
+          if (sbError && !savedData) {
+            await new Promise((r) => setTimeout(r, 1000));
+            const retryRes = await executeUpsert();
+            savedData = retryRes.data;
+          }
 
           if (savedData?.id) {
             submissionIdRef.current = savedData.id;
@@ -1965,9 +1985,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       if (isTargeted || isAllSync) {
         try {
-          // 600명 학생 동시성 분산 (전체 동기화 시 0~2.5초 무작위 지연으로 Supabase 트래픽 폭주 100% 방어)
+          // 600명 학생 동시성 분산 (전체 동기화 시 0~4.5초 무작위 지연으로 Supabase 트래픽 폭주 100% 방어)
           if (isAllSync) {
-            const jitterMs = Math.floor(Math.random() * 2500);
+            const jitterMs = Math.floor(Math.random() * 4500);
             await new Promise((res) => setTimeout(res, jitterMs));
           }
 
@@ -1991,12 +2011,22 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
   }, [isConnectedToBoard, studentInfo, lessonId, syncCurrentNoteToCloud]);
 
-  // [등록 및 제출하기] 수동 버튼 클릭 핸들러
+  // [등록 및 제출하기] 수동 버튼 클릭 핸들러 (연타 방지 및 4초 쿨다운 가드)
   const handleSubmitLesson = async () => {
+    if (isSubmitting) return;
+
     if (!studentInfo) {
       setIsChangingStudent(true);
       return;
     }
+
+    // 4초 이내 중복 연타 방지
+    const now = Date.now();
+    if (now - lastSubmitTimeRef.current < 4000) {
+      showToast('⏳ 방금 필기가 전송되었습니다. 4초 후에 다시 제출할 수 있습니다.');
+      return;
+    }
+    lastSubmitTimeRef.current = now;
 
     setIsSubmitting(true);
     showToast(`🚀 '${studentInfo.name}' 학생의 필기를 등록하는 중...`);
