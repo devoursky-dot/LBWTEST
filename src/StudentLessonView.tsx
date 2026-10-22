@@ -87,6 +87,59 @@ const EraserIcon: React.FC<{ size?: number; color?: string }> = ({ size = 18, co
   </svg>
 );
 
+/** 툴바 숨기기 / 펼치기 토글 (동심원 ◎) */
+const IconCollapse: React.FC<{ size?: number; isCollapsed?: boolean }> = ({ size = 20, isCollapsed = false }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r={isCollapsed ? 3 : 5} fill="currentColor" fillOpacity={isCollapsed ? 0.8 : 0.35} />
+  </svg>
+);
+
+/** 숨김 메뉴 (≡) */
+const IconMenu: React.FC<{ size?: number }> = ({ size = 20 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="4" y1="6" x2="20" y2="6" />
+    <line x1="4" y1="12" x2="20" y2="12" />
+    <line x1="4" y1="18" x2="20" y2="18" />
+  </svg>
+);
+
+/** 펜 벡터 아이콘 */
+const IconPen: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    <path d="m15 5 4 4" />
+  </svg>
+);
+
+/** 형광펜 벡터 아이콘 */
+const IconHighlighter: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m9 11-6 6v3h3l6-6" />
+    <path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4" />
+  </svg>
+);
+
+/** PDF / 이미지 삽입 벡터 아이콘 */
+const IconImageDoc: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+  </svg>
+);
+
+/** 폭 맞춤 벡터 아이콘 */
+const IconFitWidth: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 12h16" />
+    <path d="M7 9l-3 3 3 3" />
+    <path d="M17 9l3 3-3 3" />
+    <line x1="2" y1="4" x2="2" y2="20" strokeWidth="2" />
+    <line x1="22" y1="4" x2="22" y2="20" strokeWidth="2" />
+  </svg>
+);
+
 // 브라우저 새로고침(F5, 모바일 사파리 당겨서 리로드, 백그라운드 탭 리로드 등) 여부 정밀 감지 헬퍼
 const isPageReload = (): boolean => {
   try {
@@ -162,44 +215,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // --- 2-2. 툴바 2줄 모드 및 화면 너비 감지 (아이패드 세로 모드 대응) ---
-  const [windowWidth, setWindowWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1200));
-  const [toolbarLayoutPref, setToolbarLayoutPref] = useState<'auto' | 'single' | 'double'>(() => {
-    try {
-      const saved = localStorage.getItem('lbw_toolbar_layout_pref');
-      return (saved as 'auto' | 'single' | 'double') || 'auto';
-    } catch {
-      return 'auto';
-    }
-  });
+  const popupTop = '58px';
+  const [toolbarLayoutPref, setToolbarLayoutPref] = useState<'auto' | 'single' | 'double'>('auto');
 
-  useEffect(() => {
-    const handleResize = () => {
-      setWindowWidth(window.innerWidth);
-    };
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
-    };
-  }, []);
-
-  const isNarrowScreen = windowWidth < 960;
-  const isTwoTier =
-    toolbarLayoutPref === 'double' ||
-    (toolbarLayoutPref === 'auto' && (isNarrowScreen || orientation === 'portrait'));
-
-  const handleToggleToolbarLayout = () => {
-    const next = isTwoTier ? 'single' : 'double';
-    setToolbarLayoutPref(next);
-    try {
-      localStorage.setItem('lbw_toolbar_layout_pref', next);
-    } catch {}
-    showToast(next === 'double' ? '↕️ 툴바 2줄 모드 (세로 화면 모든 도구 한눈에 보기)' : '↔️ 툴바 1줄 컴팩트 모드');
-  };
-
-  const popupTop = isTwoTier ? '138px' : '98px';
+  // 툴바 숨기기/펼치기 토글 상태 (사용자 스케치 ○)
+  const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
 
   // --- 3. 멀티페이지 공책 상태 ---
   const [pages, setPages] = useState<LessonPage[]>([
@@ -233,7 +253,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return false;
     }
   }); // false: 터치 모드, true: 펜 모드 (팜리젝션 & 1손가락 이동)
-  const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | 'image' | null>(null);
+  const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | 'image' | 'menu' | null>(null);
 
   // --- 4-1. 페이지별 전체 배경 & 임베드 이미지(스티커) 상태 ---
   const [fullPageBackground, setFullPageBackground] = useState<string | null>(null);
@@ -328,6 +348,49 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setTimeout(() => {
       setToastMsg(prev => (prev === msg ? null : prev));
     }, 3000);
+  };
+
+  // 애플펜슬 화면 더블탭(톡톡) 및 키보드 단축키(E/P)를 통한 펜 <-> 지우개 원터치 토글
+  const handleTogglePenEraser = useCallback(() => {
+    setTool(prev => {
+      const next = prev === 'eraser' ? 'pen' : 'eraser';
+      if (next === 'eraser') {
+        showToast('🧹 지우개 모드로 전환되었습니다. (애플펜슬 더블탭)');
+      } else {
+        showToast('✏️ 펜 모드로 전환되었습니다. (애플펜슬 더블탭)');
+      }
+      return next;
+    });
+    setActivePopup(null);
+  }, []);
+
+  // 키보드 단축키 지원 (E: 지우개, P: 펜, H: 형광펜)
+  useEffect(() => {
+    const handleKeyNav = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
+      if (e.key === 'e' || e.key === 'E') {
+        setTool('eraser');
+        showToast('🧹 지우개 모드');
+      } else if (e.key === 'p' || e.key === 'P') {
+        setTool('pen');
+        showToast('✏️ 펜 모드');
+      } else if (e.key === 'h' || e.key === 'H') {
+        setTool('highlighter');
+        showToast('🖍️ 형광펜 모드');
+      }
+    };
+    window.addEventListener('keydown', handleKeyNav);
+    return () => window.removeEventListener('keydown', handleKeyNav);
+  }, []);
+
+  // 손가락 터치 vs 펜 전용 모드 토글
+  const handleTogglePenTouchMode = () => {
+    setPenOnlyMode(prev => {
+      const next = !prev;
+      try { localStorage.setItem('lbw_pen_mode', String(next)); } catch {}
+      showToast(next ? '✏️ 펜 전용 모드 (애플펜슬 필기, 손가락 화면 이동)' : '🖐️ 터치 모드 (손가락 및 펜 모두 필기 가능)');
+      return next;
+    });
   };
 
   // 학생 로그인 및 학번 인증 핸들러
@@ -1992,508 +2055,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // --- 툴바 서브 컴포넌트 렌더러 (1줄/2줄 반응형 레이아웃 공용) ---
-  const renderDrawingAndModeTools = () => (
-    <>
-      {/* [A] 필기 도구 모음 (삼성노트 REA 탭 확장 팝오버) */}
-      <div style={{ display: 'flex', gap: '3px', alignItems: 'center', flexShrink: 0 }}>
-        {/* 1. 펜 도구 & 팝오버 토글 */}
-        <button
-          id="btn-tool-pen"
-          type="button"
-          className={`student-tool-btn ${tool === 'pen' ? 'active' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (tool !== 'pen') {
-              setTool('pen');
-              setActivePopup('pen');
-            } else {
-              setActivePopup(prev => prev === 'pen' ? null : 'pen');
-            }
-          }}
-          style={{
-            position: 'relative',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            height: '38px',
-            padding: '2px 8px',
-            gap: '2px'
-          }}
-          title="일반 펜 (클릭 시 굵기 및 색상 팔레트 열기)"
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '13px' }}>
-            <span>🖊️</span>
-            <span style={{ fontSize: '9px', opacity: 0.8 }}>{activePopup === 'pen' ? '▲' : '▼'}</span>
-          </div>
-          {/* 현재 펜 색상 및 굵기 표시 인디케이터 바 */}
-          <div
-            style={{
-              width: '18px',
-              height: `${Math.min(5, Math.max(2, penSize))}px`,
-              borderRadius: '2px',
-              backgroundColor: penColor,
-              boxShadow: '0 0 3px rgba(0,0,0,0.5)',
-              border: penColor === '#000000' ? '1px solid #777' : undefined
-            }}
-          />
-        </button>
-
-        {/* 2. 형광펜 도구 & 팝오버 토글 */}
-        <button
-          id="btn-tool-highlighter"
-          type="button"
-          className={`student-tool-btn ${tool === 'highlighter' ? 'active' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (tool !== 'highlighter') {
-              setTool('highlighter');
-              setActivePopup('highlighter');
-            } else {
-              setActivePopup(prev => prev === 'highlighter' ? null : 'highlighter');
-            }
-          }}
-          style={{
-            position: 'relative',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            height: '38px',
-            padding: '2px 8px',
-            gap: '2px'
-          }}
-          title="형광펜 (반투명 강조, 클릭 시 굵기 및 형광색 설정)"
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '13px' }}>
-            <span>🖍️</span>
-            <span style={{ fontSize: '9px', opacity: 0.8 }}>{activePopup === 'highlighter' ? '▲' : '▼'}</span>
-          </div>
-          {/* 형광펜 색상 및 굵기 인디케이터 */}
-          <div
-            style={{
-              width: '18px',
-              height: '4px',
-              borderRadius: '2px',
-              backgroundColor: highlighterColor,
-              opacity: 0.8,
-              boxShadow: `0 0 4px ${highlighterColor}`
-            }}
-          />
-        </button>
-
-        {/* 3. 지우개 도구 & 팝오버 토글 */}
-        <button
-          id="btn-tool-eraser"
-          type="button"
-          className={`student-tool-btn ${tool === 'eraser' ? 'active' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (tool !== 'eraser') {
-              setTool('eraser');
-              setActivePopup('eraser');
-            } else {
-              setActivePopup(prev => prev === 'eraser' ? null : 'eraser');
-            }
-          }}
-          style={{
-            position: 'relative',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            height: '38px',
-            padding: '2px 8px',
-            gap: '2px'
-          }}
-          title={`지우개 (${eraserMode === 'stroke' ? '획 지우개' : '영역 지우개'}, 클릭 시 모드 및 크기 설정)`}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '13px' }}>
-            <EraserIcon size={16} color={tool === 'eraser' ? '#38bdf8' : '#e2e8f0'} />
-            <span style={{ fontSize: '9px', opacity: 0.8 }}>{activePopup === 'eraser' ? '▲' : '▼'}</span>
-          </div>
-          <div
-            style={{
-              width: '16px',
-              height: '3px',
-              borderRadius: '2px',
-              backgroundColor: eraserMode === 'stroke' ? '#38bdf8' : '#cbd5e1'
-            }}
-          />
-        </button>
-
-        {/* 4. 텍스트 타이핑 */}
-        <button
-          id="btn-tool-text"
-          type="button"
-          className={`student-tool-btn ${tool === 'text' ? 'active' : ''}`}
-          onClick={() => {
-            setTool('text');
-            setActivePopup(null);
-          }}
-          style={{ height: '38px', padding: '0 8px' }}
-          title="텍스트 타이핑 (원하는 위치 클릭하여 글씨 입력)"
-        >
-          ⌨️
-        </button>
-
-        {/* 5. 학습지 이미지 / PDF 삽입 및 관리 */}
-        <button
-          id="btn-tool-image-pdf"
-          type="button"
-          className={`student-tool-btn ${tool === 'image' ? 'active' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (tool !== 'image') {
-              setTool('image');
-              setActivePopup('image');
-            } else {
-              setActivePopup(prev => prev === 'image' ? null : 'image');
-            }
-          }}
-          style={{
-            position: 'relative',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            height: '38px',
-            padding: '2px 8px',
-            gap: '2px'
-          }}
-          title="학습지 이미지/PDF 삽입 및 크기 조절/자르기"
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', fontSize: '13px' }}>
-            <span>🖼️</span>
-            <span style={{ fontSize: '9px', opacity: 0.8 }}>{activePopup === 'image' ? '▲' : '▼'}</span>
-          </div>
-          <div
-            style={{
-              width: '16px',
-              height: '3px',
-              borderRadius: '2px',
-              backgroundColor: tool === 'image' ? '#38bdf8' : (fullPageBackground || embeddedImages.length > 0 ? '#10b981' : 'transparent')
-            }}
-          />
-        </button>
-
-        {/* 숨김 파일 인풋 (PDF 및 이미지) */}
-        <input
-          type="file"
-          ref={imagePdfInputRef}
-          accept="image/*,application/pdf"
-          style={{ display: 'none' }}
-          onChange={handleFileSelect}
-        />
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* [B] 퀵 컬러 스와치 (원터치 빠른 5대 분필 색상: 다크모드 칠판 최적화) */}
-      <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexShrink: 0 }}>
-        {[
-          { color: '#ffffff', label: '흰색' },
-          { color: '#fde047', label: '노랑' },
-          { color: '#38bdf8', label: '하늘' },
-          { color: '#f87171', label: '빨강' },
-          { color: '#4ade80', label: '초록' }
-        ].map(({ color, label }) => (
-          <button
-            key={color}
-            type="button"
-            className={`color-dot-btn ${penColor === color && tool === 'pen' ? 'selected' : ''}`}
-            style={{
-              backgroundColor: color,
-              width: '20px',
-              height: '20px',
-              border: color === '#ffffff' ? '1px solid #94a3b8' : '1px solid rgba(255,255,255,0.25)',
-              boxShadow: penColor === color ? `0 0 0 2px var(--g-bg-main), 0 0 0 3.5px ${color}` : 'none'
-            }}
-            onClick={() => {
-              setPenColor(color);
-              if (tool === 'eraser') setTool('pen');
-              setActivePopup(null);
-              showToast(`🖊️ ${label} 분필 선택`);
-            }}
-            title={`${label} 분필로 원터치 전환`}
-          />
-        ))}
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* [C] 실행 취소 & 다시 실행 */}
-      <div style={{ display: 'flex', gap: '2px', alignItems: 'center', flexShrink: 0 }}>
-        <button
-          type="button"
-          className="student-tool-btn"
-          onClick={handleUndo}
-          disabled={undoStack.length === 0}
-          style={{ opacity: undoStack.length === 0 ? 0.35 : 1.0, padding: '3px 7px', height: '34px' }}
-          title="실행 취소 (Ctrl+Z)"
-        >
-          ↩️
-        </button>
-        <button
-          type="button"
-          className="student-tool-btn"
-          onClick={handleRedo}
-          disabled={redoStack.length === 0}
-          style={{ opacity: redoStack.length === 0 ? 0.35 : 1.0, padding: '3px 7px', height: '34px' }}
-          title="다시 실행 (Ctrl+Y)"
-        >
-          ↪️
-        </button>
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* [C-2] 터치 모드 / 펜 모드 원터치 전환 버튼 */}
-      <button
-        id="btn-input-mode-toggle"
-        type="button"
-        className={`student-tool-btn ${penOnlyMode ? 'active-pen-mode' : ''}`}
-        onClick={() => {
-          const next = !penOnlyMode;
-          setPenOnlyMode(next);
-          try { localStorage.setItem('lbw_pen_mode', String(next)); } catch {}
-          showToast(next ? '✏️ 펜 모드 ON (펜 전용 필기, 손가락은 화면 이동)' : '🖐️ 터치 모드 ON (손가락과 펜 모두 필기)');
-        }}
-        style={{
-          padding: '3px 8px',
-          height: '34px',
-          fontSize: '11.5px',
-          background: penOnlyMode ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
-          border: penOnlyMode ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.12)',
-          color: penOnlyMode ? '#93c5fd' : '#cbd5e1',
-          gap: '3px',
-          flexShrink: 0
-        }}
-        title={
-          penOnlyMode
-            ? '현재: 펜 모드 (애플펜슬/스타일러스 전용 필기, 손가락은 화면 이동) - 클릭하여 터치 모드로 전환'
-            : '현재: 터치 모드 (손가락 및 펜 모두 필기 가능) - 클릭하여 펜 모드로 전환'
-        }
-      >
-        {penOnlyMode ? '✏️ 펜 모드' : '🖐️ 터치 모드'}
-      </button>
-
-      <div className="toolbar-divider" />
-
-      {/* [C-3] 툴바 1줄 / 2줄 보기 토글 버튼 (화면 폭 좁을 때 모든 도구 선택 보장) */}
-      <button
-        id="btn-toggle-toolbar-layout"
-        type="button"
-        className="student-tool-btn"
-        onClick={handleToggleToolbarLayout}
-        style={{
-          padding: '3px 8px',
-          height: '34px',
-          fontSize: '11.5px',
-          background: isTwoTier ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255, 255, 255, 0.06)',
-          border: isTwoTier ? '1px solid #a855f7' : '1px solid rgba(255, 255, 255, 0.12)',
-          color: isTwoTier ? '#d8b4fe' : '#cbd5e1',
-          gap: '3px',
-          flexShrink: 0
-        }}
-        title={
-          isTwoTier
-            ? '현재: 2줄 툴바 모드 (모든 도구 노출) - 클릭하여 1줄 모드로 전환'
-            : '현재: 1줄 툴바 모드 - 클릭하여 2줄 모드로 전환 (세로 모드 필수)'
-        }
-      >
-        {isTwoTier ? '↔️ 1줄 보기' : '↕️ 2줄 보기'}
-      </button>
-    </>
-  );
-
-  const renderPageAndZoomTools = (isTwoTierRow: boolean) => (
-    <>
-      {/* [D] 페이지 탐색 및 새 페이지 추가 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '3px', background: 'rgba(255,255,255,0.06)', borderRadius: '8px', padding: '2px 5px', flexShrink: 0 }}>
-        <button
-          id="btn-page-prev"
-          type="button"
-          className="student-tool-btn"
-          disabled={currentPageIndex <= 0}
-          onClick={() => handleGoToPage(currentPageIndex - 1)}
-          style={{ padding: '2px 5px', fontSize: '11px', height: '28px', opacity: currentPageIndex <= 0 ? 0.3 : 1 }}
-          title="이전 쪽"
-        >
-          ◀
-        </button>
-        <span style={{ fontSize: '12px', fontWeight: 700, color: '#38bdf8', minWidth: '42px', textAlign: 'center' }}>
-          {currentPageIndex + 1}/{pages.length}쪽
-        </span>
-        <button
-          id="btn-page-next"
-          type="button"
-          className="student-tool-btn"
-          disabled={currentPageIndex >= pages.length - 1}
-          onClick={() => handleGoToPage(currentPageIndex + 1)}
-          style={{ padding: '2px 5px', fontSize: '11px', height: '28px', opacity: currentPageIndex >= pages.length - 1 ? 0.3 : 1 }}
-          title="다음 쪽"
-        >
-          ▶
-        </button>
-        <button
-          id="btn-add-page"
-          type="button"
-          className="student-tool-btn"
-          onClick={handleAddPage}
-          style={{ padding: '2px 6px', fontSize: '11px', height: '28px', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', fontWeight: 600 }}
-          title="새 페이지 추가"
-        >
-          +쪽
-        </button>
-        <button
-          id="btn-quick-export-pdf"
-          type="button"
-          className="student-tool-btn"
-          disabled={isExportingPdf}
-          onClick={handleExportStudentPdf}
-          style={{
-            padding: '2px 7px',
-            fontSize: '11px',
-            height: '28px',
-            background: 'rgba(59, 130, 246, 0.2)',
-            color: '#93c5fd',
-            border: '1px solid rgba(59, 130, 246, 0.4)',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '3px'
-          }}
-          title="현재까지 필기한 내용을 PDF 파일로 기기에 저장"
-        >
-          <span>📄</span>
-          <span>{isExportingPdf ? '...' : 'PDF'}</span>
-        </button>
-        <button
-          id="btn-quick-export-file"
-          type="button"
-          className="student-tool-btn"
-          onClick={handleExportNotebookFile}
-          style={{
-            padding: '2px 7px',
-            fontSize: '11px',
-            height: '28px',
-            background: 'rgba(16, 185, 129, 0.2)',
-            color: '#6ee7b7',
-            border: '1px solid rgba(16, 185, 129, 0.4)',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '3px'
-          }}
-          title="언제든 다시 불러와 편집할 수 있는 .lbwnote 필기 파일로 기기에 저장"
-        >
-          <span>💾</span>
-          <span>저장</span>
-        </button>
-        <button
-          id="btn-quick-import-file"
-          type="button"
-          className="student-tool-btn"
-          onClick={() => notebookFileInputRef.current?.click()}
-          style={{
-            padding: '2px 7px',
-            fontSize: '11px',
-            height: '28px',
-            background: 'rgba(234, 179, 8, 0.18)',
-            color: '#fde047',
-            border: '1px solid rgba(234, 179, 8, 0.4)',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '3px'
-          }}
-          title="기기에 저장된 .lbwnote 필기 파일을 열어 편집 이어하기"
-        >
-          <span>📂</span>
-          <span>열기</span>
-        </button>
-      </div>
-
-      {isTwoTierRow && <div className="toolbar-divider" />}
-
-      {/* [E] 우측 줌 맞춤 및 설정 */}
-      <div style={{ marginLeft: isTwoTierRow ? '0' : 'auto', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-        {/* 1. 한 페이지 전체 보기 (최대 축소) */}
-        <button
-          id="btn-zoom-fit-page"
-          type="button"
-          className={`student-tool-btn ${isFitPage ? 'active' : ''}`}
-          onClick={handleFitPage}
-          style={{
-            padding: '3px 7px',
-            fontSize: '11px',
-            height: '32px',
-            background: isFitPage ? 'rgba(168, 85, 247, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-            border: isFitPage ? '1px solid #a855f7' : '1px solid rgba(255, 255, 255, 0.1)',
-            color: isFitPage ? '#d8b4fe' : '#cbd5e1'
-          }}
-          title="한 페이지 전체 보기 (최대 축소)"
-        >
-          📄 전체
-        </button>
-
-        {/* 2. 100% 폭 맞춤 */}
-        <button
-          id="btn-zoom-fit-width"
-          type="button"
-          className={`student-tool-btn ${isFitWidth ? 'active' : ''}`}
-          onClick={handleFitWidth}
-          style={{
-            padding: '3px 7px',
-            fontSize: '11px',
-            height: '32px',
-            fontWeight: 600,
-            background: isFitWidth ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-            border: isFitWidth ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.1)',
-            color: isFitWidth ? '#93c5fd' : '#cbd5e1'
-          }}
-          title="화면 폭에 100% 맞춤"
-        >
-          ↔️ 100% 폭
-        </button>
-
-        {/* 3. 배율 표시 & 원터치 토글 */}
-        <span
-          onClick={handleToggleZoomFit}
-          style={{
-            fontSize: '11px',
-            fontWeight: 700,
-            color: isFitWidth ? '#38bdf8' : isFitPage ? '#c084fc' : 'var(--g-text-secondary)',
-            cursor: 'pointer',
-            padding: '3px 6px',
-            borderRadius: '4px',
-            background: isFitWidth || isFitPage ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-            minWidth: '40px',
-            textAlign: 'center'
-          }}
-          title="클릭 시 [100% 폭 맞춤] ↔ [전체 보기] 전환"
-        >
-          🔍 {displayPercent}%
-        </span>
-
-        <button
-          id="btn-settings-toggle"
-          type="button"
-          className={`student-tool-btn ${activePopup === 'settings' ? 'active' : ''}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            setActivePopup(prev => prev === 'settings' ? null : 'settings');
-          }}
-          style={{
-            padding: '3px 8px',
-            fontSize: '12px',
-            height: '32px',
-            background: activePopup === 'settings' ? 'var(--g-primary-blue)' : 'rgba(255,255,255,0.08)',
-            color: activePopup === 'settings' ? '#ffffff' : 'var(--g-text-secondary)',
-            border: '1px solid var(--g-border)'
-          }}
-          title="용지 방향, 입력 모드, 페이지 관리 메뉴"
-        >
-          ⚙️ 설정 {activePopup === 'settings' ? '▲' : '▼'}
-        </button>
-      </div>
-    </>
-  );
-
   return (
     <div
       className="student-app-container"
@@ -2512,300 +2073,711 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         paddingBottom: 'max(6px, env(safe-area-inset-bottom, 0px))'
       }}
     >
-      {/* 1. 상단 학생 식별 및 액션 바 */}
-      <header
-        className="student-header"
-        style={{
-          minHeight: '48px',
-          padding: '6px 14px',
-          flexWrap: 'wrap',
-          boxSizing: 'border-box'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, maxWidth: isNarrowScreen ? '180px' : '340px' }}>
-          <span style={{ fontSize: '20px' }}>🏫</span>
-          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {lessonTitle}
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--g-text-secondary)' }}>
-              삼성노트 REA 디지털 스마트 노트
-            </span>
-          </div>
-        </div>
-
-        {/* 학생 정보 배지 및 조절 버튼 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {studentInfo ? (
-            <button
-              type="button"
-              id="btn-student-profile-badge"
-              onClick={() => setIsChangingStudent(true)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'rgba(59, 130, 246, 0.18)',
-                border: '1px solid #3b82f6',
-                padding: '5px 12px',
-                borderRadius: '9999px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                color: '#ffffff',
-                maxWidth: isNarrowScreen ? '170px' : '280px',
-                overflow: 'hidden',
-                boxShadow: '0 2px 8px rgba(59, 130, 246, 0.25)',
-                transition: 'all 0.15s ease'
-              }}
-              title="클릭하여 학생 이름 및 비밀번호 수정"
-            >
-              <span>👨‍🎓</span>
-              <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번 {studentInfo.name}
-              </span>
-              <span style={{ fontSize: '10px', fontWeight: 600, color: '#93c5fd', background: 'rgba(59, 130, 246, 0.35)', padding: '2px 6px', borderRadius: '4px', whiteSpace: 'nowrap' }}>
-                ✏️ 비번/이름 수정
-              </span>
-            </button>
-          ) : (
-            <button
-              className="g-btn g-btn-primary"
-              style={{ fontSize: '12px', padding: '4px 10px' }}
-              onClick={() => setIsChangingStudent(true)}
-            >
-              👨‍🎓 학생 로그인
-            </button>
-          )}
-
-          {/* 전체화면 토글 */}
+      {/* ====================================================================
+          스케치 1:1 반영 플로팅 툴바
+          [○ 툴바숨기기 토글] [≡ 숨김메뉴] | [/ 펜] [/ 형광펜] [▱ 지우개] [□ PDF/이미지] | [○ ○ ○ ○ ○ 색상] | [↔ 폭맞춤]
+          ==================================================================== */}
+      {isToolbarCollapsed ? (
+        <button
+          id="btn-expand-toolbar"
+          type="button"
+          onClick={() => setIsToolbarCollapsed(false)}
+          style={{
+            position: 'absolute',
+            top: 'max(12px, env(safe-area-inset-top, 12px))',
+            left: '14px',
+            zIndex: 1050,
+            width: '42px',
+            height: '42px',
+            borderRadius: '50%',
+            background: 'rgba(18, 20, 26, 0.92)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255, 255, 255, 0.18)',
+            boxShadow: '0 6px 22px rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#ffffff',
+            cursor: 'pointer',
+            transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
+          }}
+          title="툴바 펼치기 (도구함 열기)"
+        >
+          <IconCollapse size={20} isCollapsed={true} />
+        </button>
+      ) : (
+        <div
+          id="student-main-toolbar"
+          className="student-floating-toolbar student-toolbar"
+          style={{
+            position: 'absolute',
+            top: 'max(10px, env(safe-area-inset-top, 10px))',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1050,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '4px 8px',
+            borderRadius: '9999px',
+            background: 'rgba(18, 20, 26, 0.92)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.14)',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.2) inset',
+            maxWidth: 'calc(100vw - 20px)',
+            overflowX: 'auto',
+            overflowY: 'visible',
+            scrollbarWidth: 'none'
+          }}
+        >
+          {/* 1. [○ 툴바숨기기 토글] */}
           <button
-            id="btn-toggle-fullscreen"
+            id="btn-collapse-toolbar"
             type="button"
             className="student-tool-btn"
-            onClick={toggleFullscreen}
-            style={{ padding: '5px 9px', fontSize: '12px' }}
-            title={isFullscreen ? '전체화면 종료' : '전체화면으로 몰입 필기'}
-          >
-            {isFullscreen ? '🗗 창모드' : '⛶ 전체화면'}
-          </button>
-
-          {/* 실시간 자동 임시 저장 상태 배지 */}
-          {lastSavedTimeStr && (
-            <div
-              id="student-autosave-badge"
-              style={{
-                fontSize: '11px',
-                color: '#34d399',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                background: 'rgba(16, 185, 129, 0.14)',
-                padding: '4px 8px',
-                borderRadius: '6px',
-                border: '1px solid rgba(16, 185, 129, 0.3)',
-                whiteSpace: 'nowrap'
-              }}
-              title="필기 내용이 기기 로컬에 실시간 자동 임시 저장되고 있습니다. 새로고침해도 안전합니다."
-            >
-              <span>💾</span>
-              <span>자동저장됨 ({lastSavedTimeStr})</span>
-            </div>
-          )}
-
-          {/* 공책 처음부터 다시 쓰기 (학생 자율 리셋 버튼) */}
-          <button
-            id="btn-header-clean-reset"
-            type="button"
-            className="student-tool-btn"
+            onClick={() => {
+              setIsToolbarCollapsed(true);
+              setActivePopup(null);
+            }}
             style={{
-              fontSize: '11.5px',
-              fontWeight: 600,
-              padding: '4px 8px',
-              background: 'rgba(249, 115, 22, 0.12)',
-              color: '#fdba74',
-              border: '1px solid rgba(249, 115, 22, 0.35)',
-              borderRadius: '6px',
+              width: '34px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '50%',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px',
-              cursor: 'pointer'
+              justifyContent: 'center',
+              background: 'rgba(255, 255, 255, 0.06)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              color: '#94a3b8',
+              flexShrink: 0
             }}
-            onClick={handleResetNotebookClean}
-            title="현재 공책의 필기를 지우고 처음부터 깨끗한 백지/학습지로 다시 시작합니다."
+            title="툴바 숨기기 (필기 화면 최대화)"
           >
-            <span>🔄</span>
-            <span>새로 쓰기</span>
+            <IconCollapse size={16} isCollapsed={false} />
           </button>
 
-          {/* 개인 공책 모드일 때 칠판 수업 참여 버튼 */}
-          {lessonId.startsWith('student_note_') && (
-            <button
-              id="btn-header-join-lesson"
-              type="button"
-              className="student-tool-btn"
-              style={{
-                fontSize: '11.5px',
-                fontWeight: 700,
-                padding: '4px 9px',
-                background: 'rgba(168, 85, 247, 0.2)',
-                color: '#d8b4fe',
-                border: '1px solid rgba(168, 85, 247, 0.45)',
-                borderRadius: '6px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer'
-              }}
-              onClick={() => {
-                const target = window.prompt('선생님 전자칠판의 수업 ID 또는 수업 링크(URL)를 입력하세요:');
-                if (target && target.trim()) {
-                  const raw = target.trim();
-                  if (raw.includes('lessonId=')) {
-                    try {
-                      const urlObj = new URL(raw);
-                      window.location.href = urlObj.pathname + urlObj.search;
-                      return;
-                    } catch {}
-                  }
-                  window.location.search = `?lessonId=${encodeURIComponent(raw)}&title=${encodeURIComponent('수업 참여')}`;
-                }
-              }}
-              title="칠판의 수업 ID나 링크를 입력하여 실시간 수업에 참여합니다."
-            >
-              <span>📱</span>
-              <span>수업 참여</span>
-            </button>
-          )}
-
-          {/* 선생님 공유 수업 학습지 버튼 */}
-          {lessonPdfInfo && (
-            <button
-              id="btn-header-lesson-pdf"
-              type="button"
-              className="student-tool-btn"
-              style={{
-                fontSize: '12px',
-                fontWeight: 700,
-                padding: '6px 11px',
-                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(59, 130, 246, 0.25) 100%)',
-                color: '#a5b4fc',
-                border: '1px solid rgba(129, 140, 248, 0.5)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                borderRadius: '8px',
-                cursor: 'pointer'
-              }}
-              onClick={() => setIsLessonPdfPromptOpen(true)}
-              title="선생님이 올려준 수업 학습지 PDF를 다운로드하거나 공책 배경으로 생성합니다."
-            >
-              <span>📑</span>
-              <span>수업 학습지</span>
-            </button>
-          )}
-
-          {/* PDF 로컬 다운로드 저장 버튼 */}
+          {/* 2. [≡ 숨김메뉴 -> 나머지 모두 여기에 정리] */}
           <button
-            id="btn-header-export-pdf"
+            id="btn-toggle-menu"
             type="button"
-            className="student-tool-btn"
-            style={{
-              fontSize: '12px',
-              fontWeight: 600,
-              padding: '6px 11px',
-              background: 'rgba(59, 130, 246, 0.2)',
-              color: '#93c5fd',
-              border: '1px solid rgba(59, 130, 246, 0.45)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              borderRadius: '8px'
+            className={`student-tool-btn ${activePopup === 'menu' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setActivePopup(prev => prev === 'menu' ? null : 'menu');
             }}
-            disabled={isExportingPdf}
-            onClick={handleExportStudentPdf}
-            title="현재까지 작성한 필기 공책을 PDF 파일로 내 기기에 즉시 저장합니다."
-          >
-            <span>📥</span>
-            <span>{isExportingPdf ? 'PDF 생성 중...' : 'PDF 저장'}</span>
-          </button>
-
-          {/* 전자칠판 실시간 연결 (전체화면) 버튼 */}
-          <button
-            id="btn-connect-board"
-            type="button"
-            className="g-btn"
             style={{
-              fontSize: '12.5px',
-              fontWeight: 700,
-              padding: '6px 13px',
-              background: isConnectedToBoard
-                ? 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'
-                : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-              color: '#ffffff',
-              border: isConnectedToBoard ? '1px solid #4ade80' : '1px solid #60a5fa',
+              width: '34px',
+              height: '34px',
+              padding: 0,
               borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
-              boxShadow: isConnectedToBoard
-                ? '0 0 12px rgba(34, 197, 94, 0.45)'
-                : '0 4px 12px rgba(37, 99, 235, 0.35)',
-              cursor: 'pointer'
+              justifyContent: 'center',
+              background: activePopup === 'menu' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+              border: activePopup === 'menu' ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.1)',
+              color: activePopup === 'menu' ? '#60a5fa' : '#cbd5e1',
+              flexShrink: 0,
+              position: 'relative'
             }}
-            onClick={handleConnectToBoard}
-            title={
-              isConnectedToBoard
-                ? '전자칠판에 실시간 연결 중입니다. 탭하면 전체화면을 다시 유지합니다.'
-                : '전자칠판에 실시간 연결하고 전체화면 모드로 전환합니다.'
-            }
+            title="전체 메뉴 (학생 정보, 칠판 등록, PDF 저장, 용지 설정 등)"
           >
-            <span>{isConnectedToBoard ? '🟢' : '📡'}</span>
-            <span>{isConnectedToBoard ? '칠판 연결됨 (전체화면)' : '전자칠판 연결'}</span>
+            <IconMenu size={18} />
+            {isConnectedToBoard && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '4px',
+                  right: '4px',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  background: '#22c55e',
+                  boxShadow: '0 0 6px #22c55e'
+                }}
+              />
+            )}
           </button>
 
-          {/* 등록하기 제출 버튼 */}
+          <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
+
+          {/* 3. [/ 펜] */}
           <button
-            id="btn-submit-lesson"
+            id="btn-tool-pen"
             type="button"
-            className="g-btn g-btn-primary"
-            style={{
-              fontSize: '12.5px',
-              fontWeight: 700,
-              padding: '6px 14px',
-              background: hasSavedNote 
-                ? 'linear-gradient(135deg, #059669 0%, #047857 100%)' 
-                : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              border: hasSavedNote ? '1px solid #34d399' : 'none',
-              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)'
+            className={`student-tool-btn ${tool === 'pen' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (tool !== 'pen') {
+                setTool('pen');
+              } else {
+                setActivePopup(prev => prev === 'pen' ? null : 'pen');
+              }
             }}
-            disabled={isSubmitting}
-            onClick={handleSubmitLesson}
-            title={hasSavedNote ? "선생님 칠판에 등록 완료되었습니다. 수정 후 다시 누르면 갱신됩니다." : "필기를 선생님 전자칠판에 등록합니다."}
+            style={{
+              width: '36px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '8px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: tool === 'pen' ? 'rgba(59, 130, 246, 0.22)' : 'transparent',
+              border: tool === 'pen' ? '1px solid rgba(59, 130, 246, 0.6)' : '1px solid transparent',
+              color: tool === 'pen' ? '#38bdf8' : '#e2e8f0',
+              gap: '2px',
+              flexShrink: 0
+            }}
+            title="펜 (애플펜슬 화면 더블탭 또는 'P' 단축키로 지우개와 전환, 다시 클릭 시 굵기 설정)"
           >
-            {isSubmitting ? '전송 중...' : hasSavedNote ? '✅ 등록 완료' : '🚀 등록하기'}
+            <IconPen size={18} color={tool === 'pen' ? '#38bdf8' : '#e2e8f0'} />
+            <div
+              style={{
+                width: '14px',
+                height: `${Math.min(4, Math.max(2, penSize))}px`,
+                borderRadius: '2px',
+                backgroundColor: penColor,
+                boxShadow: '0 0 4px rgba(0,0,0,0.4)',
+                border: penColor === '#000000' ? '1px solid #777' : undefined
+              }}
+            />
           </button>
+
+          {/* 4. [/ 형광펜] */}
+          <button
+            id="btn-tool-highlighter"
+            type="button"
+            className={`student-tool-btn ${tool === 'highlighter' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (tool !== 'highlighter') {
+                setTool('highlighter');
+              } else {
+                setActivePopup(prev => prev === 'highlighter' ? null : 'highlighter');
+              }
+            }}
+            style={{
+              width: '36px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '8px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: tool === 'highlighter' ? 'rgba(250, 204, 21, 0.18)' : 'transparent',
+              border: tool === 'highlighter' ? '1px solid rgba(250, 204, 21, 0.5)' : '1px solid transparent',
+              color: tool === 'highlighter' ? '#fde047' : '#e2e8f0',
+              gap: '2px',
+              flexShrink: 0
+            }}
+            title="형광펜 ('H' 단축키로 전환, 다시 클릭 시 굵기 및 색상 설정)"
+          >
+            <IconHighlighter size={18} color={tool === 'highlighter' ? '#fde047' : '#e2e8f0'} />
+            <div
+              style={{
+                width: '14px',
+                height: '3px',
+                borderRadius: '2px',
+                backgroundColor: highlighterColor,
+                opacity: 0.85,
+                boxShadow: `0 0 4px ${highlighterColor}`
+              }}
+            />
+          </button>
+
+          {/* 5. [▱ 지우개] */}
+          <button
+            id="btn-tool-eraser"
+            type="button"
+            className={`student-tool-btn ${tool === 'eraser' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (tool !== 'eraser') {
+                setTool('eraser');
+              } else {
+                setActivePopup(prev => prev === 'eraser' ? null : 'eraser');
+              }
+            }}
+            style={{
+              width: '36px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '8px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: tool === 'eraser' ? 'rgba(56, 189, 248, 0.22)' : 'transparent',
+              border: tool === 'eraser' ? '1px solid rgba(56, 189, 248, 0.6)' : '1px solid transparent',
+              color: tool === 'eraser' ? '#38bdf8' : '#e2e8f0',
+              gap: '2px',
+              flexShrink: 0
+            }}
+            title={`지우개 (${eraserMode === 'stroke' ? '획 지우개' : '영역 지우개'}, 애플펜슬 화면 더블탭 또는 'E' 단축키로 펜과 전환, 다시 클릭 시 설정)`}
+          >
+            <EraserIcon size={17} color={tool === 'eraser' ? '#38bdf8' : '#e2e8f0'} />
+            <div
+              style={{
+                width: '14px',
+                height: '2px',
+                borderRadius: '2px',
+                backgroundColor: eraserMode === 'stroke' ? '#38bdf8' : '#cbd5e1'
+              }}
+            />
+          </button>
+
+          {/* 6. [□ PDF/이미지] */}
+          <button
+            id="btn-tool-image"
+            type="button"
+            className={`student-tool-btn ${activePopup === 'image' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setActivePopup(prev => prev === 'image' ? null : 'image');
+            }}
+            style={{
+              width: '36px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: activePopup === 'image' ? 'rgba(99, 102, 241, 0.25)' : 'transparent',
+              border: activePopup === 'image' ? '1px solid rgba(99, 102, 241, 0.6)' : '1px solid transparent',
+              color: activePopup === 'image' ? '#a5b4fc' : '#e2e8f0',
+              flexShrink: 0
+            }}
+            title="PDF 및 이미지 삽입 (학습지, 문제 사진 배경/스티커 추가)"
+          >
+            <IconImageDoc size={18} color={activePopup === 'image' ? '#a5b4fc' : '#e2e8f0'} />
+          </button>
+
+          <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
+
+          {/* 7. [○ ○ ○ ○ ○ 색상 원 5개] */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '0 2px', flexShrink: 0 }}>
+            {[
+              { color: '#ffffff', label: '흰색' },
+              { color: '#fde047', label: '노란색' },
+              { color: '#38bdf8', label: '하늘색' },
+              { color: '#f87171', label: '빨간색' },
+              { color: '#4ade80', label: '초록색' }
+            ].map(({ color, label }) => {
+              const isSelected = tool !== 'eraser' && penColor.toLowerCase() === color.toLowerCase();
+              return (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => {
+                    setPenColor(color);
+                    if (tool === 'eraser') setTool('pen');
+                  }}
+                  style={{
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    backgroundColor: color,
+                    border: '2px solid rgba(18, 20, 26, 0.9)',
+                    outline: isSelected ? '2px solid #38bdf8' : 'none',
+                    outlineOffset: '1px',
+                    boxShadow: isSelected ? `0 0 8px ${color}` : 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    transform: isSelected ? 'scale(1.15)' : 'scale(1)',
+                    transition: 'transform 0.15s ease, outline 0.15s ease',
+                    flexShrink: 0
+                  }}
+                  title={`${label} 펜`}
+                />
+              );
+            })}
+          </div>
+
+          <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
+
+          {/* 8. [↔ 폭맞춤] */}
+          <button
+            id="btn-fit-width"
+            type="button"
+            className={`student-tool-btn ${isFitWidth ? 'active' : ''}`}
+            onClick={handleToggleZoomFit}
+            style={{
+              width: '36px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: isFitWidth ? 'rgba(59, 130, 246, 0.25)' : 'transparent',
+              border: isFitWidth ? '1px solid rgba(59, 130, 246, 0.6)' : '1px solid transparent',
+              color: isFitWidth ? '#60a5fa' : '#cbd5e1',
+              flexShrink: 0
+            }}
+            title="화면 폭에 100% 맞춤 (아이패드/화면 폭 전체 채우기)"
+          >
+            <IconFitWidth size={18} />
+          </button>
+        </div>
+      )}
+
+      {/* ====================================================================
+          [숨김 메뉴 팝오버] ≡ 스케치: "나머지 모두 여기에 정리"
+          수업명, 학생 정보/비번, 칠판 등록, 칠판 연결, 새로 쓰기, PDF 저장 등
+          ==================================================================== */}
+      {activePopup === 'menu' && (
+        <div
+          id="popup-student-menu"
+          className="samsung-tool-popup"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            top: popupTop,
+            left: '12px',
+            zIndex: 1100,
+            width: '340px',
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: 'calc(100dvh - 80px)',
+            overflowY: 'auto',
+            background: 'rgba(20, 24, 33, 0.97)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            border: '1px solid rgba(255, 255, 255, 0.16)',
+            borderRadius: '16px',
+            boxShadow: '0 16px 40px rgba(0, 0, 0, 0.7)',
+            padding: '14px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            color: '#ffffff'
+          }}
+        >
+          {/* 헤더: 수업명 및 닫기 */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '16px' }}>🏫</span>
+                <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {lessonTitle}
+                </span>
+              </div>
+              <span style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>삼성노트 REA 디지털 스마트 필기</span>
+                {lastSavedTimeStr && <span style={{ color: '#34d399', fontWeight: 600 }}>• 자동저장됨 ({lastSavedTimeStr})</span>}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActivePopup(null)}
+              style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: '16px', cursor: 'pointer', padding: '2px 4px' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* 학생 프로필 배지 */}
+          {studentInfo ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '10px', padding: '8px 12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
+                <span>👨‍🎓</span>
+                <span style={{ color: '#93c5fd' }}>
+                  {studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번
+                </span>
+                <span style={{ color: '#ffffff' }}>{studentInfo.name}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChangingStudent(true);
+                  setActivePopup(null);
+                }}
+                style={{
+                  background: 'rgba(59, 130, 246, 0.25)',
+                  border: 'none',
+                  color: '#60a5fa',
+                  borderRadius: '6px',
+                  padding: '3px 8px',
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                수정
+              </button>
+            </div>
+          ) : null}
+
+          {/* 핵심 수업 액션 (등록하기 & 전자칠판 실시간 연결) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <button
+              id="menu-btn-submit-lesson"
+              type="button"
+              className="g-btn g-btn-primary"
+              style={{
+                width: '100%',
+                padding: '10px 14px',
+                fontSize: '13px',
+                fontWeight: 700,
+                background: hasSavedNote
+                  ? 'linear-gradient(135deg, #059669 0%, #047857 100%)'
+                  : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                borderRadius: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                border: hasSavedNote ? '1px solid #34d399' : 'none',
+                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
+                cursor: 'pointer'
+              }}
+              disabled={isSubmitting}
+              onClick={() => {
+                handleSubmitLesson();
+                setActivePopup(null);
+              }}
+            >
+              {isSubmitting ? '칠판으로 전송 중...' : hasSavedNote ? '✅ 칠판 등록 완료 (다시 등록)' : '🚀 선생님 전자칠판에 등록하기'}
+            </button>
+
+            <button
+              id="menu-btn-connect-board"
+              type="button"
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                background: isConnectedToBoard
+                  ? 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'
+                  : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                color: '#ffffff',
+                border: isConnectedToBoard ? '1px solid #4ade80' : '1px solid #60a5fa',
+                borderRadius: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+              onClick={() => {
+                handleConnectToBoard();
+                setActivePopup(null);
+              }}
+            >
+              <span>{isConnectedToBoard ? '🟢' : '📡'}</span>
+              <span>{isConnectedToBoard ? '전자칠판 연결됨 (전체화면 유지)' : '전자칠판 실시간 연결'}</span>
+            </button>
+          </div>
+
+          <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
+
+          {/* 페이지 이동 및 추가 컨트롤 */}
+          <div>
+            <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px', fontWeight: 600 }}>
+              📄 페이지 관리 (총 {pages.length}쪽)
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.04)', padding: '6px 10px', borderRadius: '8px' }}>
+              <button
+                type="button"
+                className="student-tool-btn"
+                disabled={currentPageIndex <= 0}
+                onClick={() => handleGoToPage(currentPageIndex - 1)}
+                style={{ padding: '4px 10px', fontSize: '12px' }}
+              >
+                ◀ 이전 쪽
+              </button>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}>
+                {currentPageIndex + 1} / {pages.length} 쪽
+              </span>
+              <button
+                type="button"
+                className="student-tool-btn"
+                disabled={currentPageIndex >= pages.length - 1}
+                onClick={() => handleGoToPage(currentPageIndex + 1)}
+                style={{ padding: '4px 10px', fontSize: '12px' }}
+              >
+                다음 쪽 ▶
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={handleAddPage}
+                style={{ padding: '4px 10px', fontSize: '12px', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', fontWeight: 600 }}
+              >
+                + 쪽 추가
+              </button>
+            </div>
+          </div>
+
+          <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
+
+          {/* 공책 파일 & 저장 관리 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+              💾 공책 및 파일 관리
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  handleExportStudentPdf();
+                  setActivePopup(null);
+                }}
+                disabled={isExportingPdf}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd' }}
+              >
+                📥 PDF 다운로드
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  handleResetNotebookClean();
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px', background: 'rgba(249, 115, 22, 0.12)', color: '#fdba74' }}
+              >
+                🔄 새로 쓰기
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  handleExportNotebookFile();
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px' }}
+              >
+                💾 파일로 저장
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  notebookFileInputRef.current?.click();
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px' }}
+              >
+                📂 파일 불러오기
+              </button>
+            </div>
+            {lessonPdfInfo && (
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  setIsLessonPdfPromptOpen(true);
+                  setActivePopup(null);
+                }}
+                style={{
+                  justifyContent: 'center',
+                  fontSize: '12px',
+                  padding: '8px',
+                  background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(59, 130, 246, 0.25) 100%)',
+                  color: '#a5b4fc',
+                  fontWeight: 600
+                }}
+              >
+                📑 선생님 수업 학습지 열기
+              </button>
+            )}
+          </div>
+
+          <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
+
+          {/* 환경 및 보기 설정 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+              ⚙️ 환경 설정
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={toggleFullscreen}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px' }}
+              >
+                {isFullscreen ? '⛶ 전체화면 종료' : '⛶ 전체화면'}
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={handleTogglePenTouchMode}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', color: penOnlyMode ? '#93c5fd' : '#cbd5e1' }}
+              >
+                {penOnlyMode ? '✏️ 펜 전용 모드' : '🖐️ 터치 모드'}
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                disabled={undoStack.length === 0}
+                onClick={handleUndo}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', opacity: undoStack.length === 0 ? 0.35 : 1 }}
+              >
+                ↩️ 실행 취소
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                disabled={redoStack.length === 0}
+                onClick={handleRedo}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', opacity: redoStack.length === 0 ? 0.35 : 1 }}
+              >
+                ↪️ 다시 실행
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  setActivePopup('settings');
+                }}
+                style={{ justifyContent: 'center', fontSize: '11.5px', padding: '7px 6px', gridColumn: 'span 2' }}
+              >
+                ⚙️ 상세 설정
+              </button>
+            </div>
+          </div>
+
+          <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
 
           {/* 수업 나가기 버튼 */}
           <button
-            id="btn-exit-lesson"
+            id="menu-btn-exit-lesson"
             type="button"
-            className="g-btn g-btn-text"
-            style={{ fontSize: '12px', padding: '4px 8px', color: '#94a3b8' }}
-            onClick={handleExitLesson}
-            title="수업을 종료하고 나갑니다."
+            className="student-tool-btn danger"
+            onClick={() => {
+              setActivePopup(null);
+              handleExitLesson();
+            }}
+            style={{
+              width: '100%',
+              justifyContent: 'center',
+              padding: '8px',
+              fontSize: '12px',
+              background: 'rgba(239, 68, 68, 0.1)',
+              color: '#fca5a5',
+              border: '1px solid rgba(239, 68, 68, 0.25)'
+            }}
           >
-            수업 나가기
+            🚪 수업 나가기
           </button>
         </div>
-      </header>
+      )}
 
-      {/* 1-1. 이전 필기 복구 안내 배너 (신규 QR 접속 시 최근 필기 드래프트가 남아있을 때 표시) */}
+      {/* 로컬스토리지 백업 복원 배너 (클린 플로팅 디자인) */}
       {recoveryPromptDraft && (
         <div
           id="banner-recovery-prompt"
           style={{
             position: 'absolute',
-            top: isTwoTier ? '108px' : '56px',
+            top: '64px',
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 1100,
@@ -2867,37 +2839,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               새로 시작
             </button>
           </div>
-        </div>
-      )}
-
-      {/* 2. 툴바 (2줄 반응형 및 1줄 모드 토글 지원) */}
-      {isTwoTier ? (
-        <div
-          className="student-toolbar two-tier"
-          style={{ position: 'relative', overflowY: 'visible' }}
-        >
-          <div className="student-toolbar-row">
-            {renderDrawingAndModeTools()}
-          </div>
-          <div className="student-toolbar-row">
-            {renderPageAndZoomTools(true)}
-          </div>
-        </div>
-      ) : (
-        <div
-          className="student-toolbar"
-          style={{
-            flexWrap: 'nowrap',
-            gap: '5px',
-            padding: '4px 10px',
-            position: 'relative',
-            overflowX: 'auto',
-            overflowY: 'visible'
-          }}
-        >
-          {renderDrawingAndModeTools()}
-          <div className="toolbar-divider" />
-          {renderPageAndZoomTools(false)}
         </div>
       )}
 
@@ -3955,6 +3896,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 try { localStorage.setItem('lbw_pen_mode', 'true'); } catch {}
               }
             }}
+            onTogglePenEraser={handleTogglePenEraser}
             fullPageBackground={fullPageBackground}
             A4_WIDTH={A4_WIDTH}
             A4_HEIGHT={A4_HEIGHT}

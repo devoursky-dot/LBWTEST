@@ -27,6 +27,7 @@ export interface DrawingCanvasProps {
   onFingerPanMove?: (dx: number, dy: number) => void;
   onFingerPanEnd?: () => void;
   onCanvasPointerDown?: () => void;
+  onTogglePenEraser?: () => void;
   paperTheme?: 'white' | 'dark' | 'ivory';
 }
 
@@ -58,6 +59,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   onFingerPanMove,
   onFingerPanEnd,
   onCanvasPointerDown,
+  onTogglePenEraser,
   paperTheme = 'white'
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -69,6 +71,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const currentStrokeRef = useRef<Stroke | null>(null);
   const isInternalStrokeAddRef = useRef(false);
   const didEraseInGestureRef = useRef(false);
+
+  // 애플펜슬 화면 톡톡(더블탭) 감지 레퍼런스
+  const lastPenTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
 
   // 손가락 위치 이동(Pan) 레퍼런스
   const fingerPanStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -90,6 +95,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onFingerPanMove,
     onFingerPanEnd,
     onCanvasPointerDown,
+    onTogglePenEraser,
     strokes
   });
 
@@ -109,6 +115,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onFingerPanMove,
     onFingerPanEnd,
     onCanvasPointerDown,
+    onTogglePenEraser,
     strokes
   };
 
@@ -170,8 +177,23 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         e.preventDefault();
       }
 
-      // [1. 애플펜슬 / 스타일러스 최우선권]:
+      // [1. 애플펜슬 / 스타일러스 최우선권 & 화면 더블탭 전환]:
       if (e.pointerType === 'pen') {
+        // 애플펜슬 화면 더블탭(320ms 이내 두 번 톡톡) -> 펜/지우개 전환
+        const now = Date.now();
+        if (lastPenTapRef.current) {
+          const elapsed = now - lastPenTapRef.current.time;
+          const dist = Math.hypot(e.clientX - lastPenTapRef.current.x, e.clientY - lastPenTapRef.current.y);
+          if (elapsed < 340 && dist < 36) {
+            if (p.onTogglePenEraser) {
+              p.onTogglePenEraser();
+            }
+            lastPenTapRef.current = null;
+            return;
+          }
+        }
+        lastPenTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+
         // 스타일러스가 감지되면 자동으로 펜 전용 모드 활성화 (손바닥 터치 오작동 원천 차단)
         if (!p.penOnlyMode && p.onAutoPenModeDetected) {
           p.onAutoPenModeDetected();
@@ -269,6 +291,14 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
       if (e.cancelable) {
         e.preventDefault();
+      }
+
+      // 펜이 실제로 글씨를 쓰며 18px 이상 움직이면 더블탭 판정 리셋
+      if (lastPenTapRef.current && e.pointerType === 'pen') {
+        const dist = Math.hypot(e.clientX - lastPenTapRef.current.x, e.clientY - lastPenTapRef.current.y);
+        if (dist > 18) {
+          lastPenTapRef.current = null;
+        }
       }
 
       // 펜 모드에서 손가락 드래그로 화면 이동 중일 때
