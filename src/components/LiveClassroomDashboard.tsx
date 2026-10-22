@@ -390,6 +390,75 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   };
 
+  // [잘못 접속된 학생 삭제 및 연결 해제]
+  const handleDisconnectStudent = async (studentItem: typeof sortedStudentRoster[0]) => {
+    const studentLabel = `${studentItem.grade}-${studentItem.classNum} ${studentItem.studentNum}번 ${studentItem.name}`;
+    const confirmed = window.confirm(`'${studentLabel}' 학생의 연결을 해제하고 칠판 목록에서 삭제하시겠습니까?\n\n(해당 학생 태블릿의 필기는 안전하게 보존되며, 칠판 연결만 종료됩니다.)`);
+    if (!confirmed) return;
+
+    try {
+      const studentKey = studentItem.key;
+
+      // 1. 만약 현재 이 학생의 필기를 전체화면으로 열람 중이었다면 닫기
+      if (selectedStudentKeyRef.current === studentKey) {
+        setSelectedStudentNote(null);
+        selectedStudentKeyRef.current = null;
+      }
+
+      // 2. 실시간 출석 목록(Presence)에서 즉시 제거
+      setStudentPresences((prev) => {
+        const next = new Map(prev);
+        next.delete(studentKey);
+        return next;
+      });
+
+      // 3. 메모리 내 제출 목록(Submissions)에서 즉시 제거
+      setStudentSubmissions((prev) =>
+        prev.filter(
+          (sub) =>
+            !(
+              sub.student_grade === studentItem.grade &&
+              sub.student_class === studentItem.classNum &&
+              sub.student_num === studentItem.studentNum
+            )
+        )
+      );
+
+      // 4. 클라우드 DB(Supabase)에 제출된 기록이 있다면 삭제
+      if (supabase && isSupabaseConfigured) {
+        try {
+          await supabase
+            .from('class_notes')
+            .delete()
+            .eq('lesson_id', currentLessonId)
+            .eq('student_grade', studentItem.grade)
+            .eq('student_class', studentItem.classNum)
+            .eq('student_num', studentItem.studentNum);
+        } catch (dbErr) {
+          console.warn('DB 제출 기록 삭제 오류:', dbErr);
+        }
+      }
+
+      // 5. 해당 학생 태블릿으로 원격 연결 해제(KICK_STUDENT) 신호 전파
+      await classroomRealtime.sendSignal({
+        type: 'KICK_STUDENT',
+        lessonId: currentLessonId,
+        targetStudentKey: studentKey,
+        student: {
+          grade: studentItem.grade,
+          classNum: studentItem.classNum,
+          studentNum: studentItem.studentNum,
+          name: studentItem.name
+        }
+      });
+
+      showToast(`🗑️ '${studentLabel}' 학생의 연결을 해제하고 칠판에서 삭제했습니다.`);
+    } catch (e) {
+      console.error('학생 연결 해제 오류:', e);
+      showToast('❌ 학생 연결 해제 중 오류가 발생했습니다.');
+    }
+  };
+
   // 6. 전체 학생 필기 모음집 학번순 PDF 생성 및 구글 드라이브 업로드
   const handleCompileAndSavePdf = async () => {
     if (sortedStudentRoster.length === 0) {
@@ -994,18 +1063,54 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                         }}
                         title="클릭하여 학생 필기 원본을 전체화면으로 확인"
                       >
-                        {/* 우측 상단 상태 닷 */}
+                        {/* 좌측 상단 온라인 상태 닷 */}
                         <span
                           style={{
                             position: 'absolute',
                             top: '6px',
-                            right: '6px',
+                            left: '6px',
                             width: '8px',
                             height: '8px',
                             borderRadius: '50%',
-                            background: isOnline ? '#3fb950' : '#8b949e'
+                            background: isOnline ? '#3fb950' : '#8b949e',
+                            boxShadow: isOnline ? '0 0 6px #3fb950' : 'none'
                           }}
+                          title={isOnline ? '현재 실시간 참여 중' : '미접속'}
                         />
+
+                        {/* 우측 상단 잘못 접속된 학생 삭제/해제 버튼 */}
+                        <button
+                          type="button"
+                          className="btn-disconnect-student"
+                          style={{
+                            position: 'absolute',
+                            top: '4px',
+                            right: '4px',
+                            width: viewMode === 'auto' ? '18px' : '22px',
+                            height: viewMode === 'auto' ? '18px' : '22px',
+                            borderRadius: '50%',
+                            background: 'rgba(239, 68, 68, 0.15)',
+                            color: '#f87171',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: viewMode === 'auto' ? '10px' : '12px',
+                            fontWeight: 700,
+                            lineHeight: 1,
+                            cursor: 'pointer',
+                            padding: 0,
+                            zIndex: 10,
+                            transition: 'all 0.15s ease'
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDisconnectStudent(studentItem);
+                          }}
+                          title="학생 접속 해제 및 칠판에서 삭제"
+                        >
+                          ✕
+                        </button>
 
                         {/* 아이콘 + 학번 */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

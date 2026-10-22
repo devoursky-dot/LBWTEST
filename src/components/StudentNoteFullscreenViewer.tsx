@@ -95,13 +95,46 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
 
   // 4. 확대/축소(Zoom) 및 화면 이동(Pan) 상태
   const containerRef = useRef<HTMLDivElement>(null);
+  const sheetContainerRef = useRef<HTMLDivElement>(null);
+
   const [zoomScale, setZoomScale] = useState<number>(1);
   const [fitScale, setFitScale] = useState<number>(1);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
 
-  // 드래그 제스처 추적 레퍼런스
-  const panStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // 고성능 60fps GPU 가속을 위한 실시간 ref 및 RAF 추적
+  const panOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const zoomScaleRef = useRef<number>(1);
+  const rafIdRef = useRef<number | null>(null);
+
+  // 멀티터치 & 핀치 줌 추적 레퍼런스
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchStartRef = useRef<{
+    dist: number;
+    midpoint: { x: number; y: number };
+    scale: number;
+    pan: { x: number; y: number };
+  } | null>(null);
+  const singlePanStartRef = useRef<{
+    x: number;
+    y: number;
+    pan: { x: number; y: number };
+  } | null>(null);
+
+  // React 상태와 Ref 및 실제 DOM style.transform 동기화
+  const syncTransformToDom = useCallback((scale: number, pan: { x: number; y: number }) => {
+    if (sheetContainerRef.current) {
+      sheetContainerRef.current.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${scale})`;
+    }
+  }, []);
+
+  const scheduleTransformUpdate = useCallback(() => {
+    if (rafIdRef.current !== null) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      syncTransformToDom(zoomScaleRef.current, panOffsetRef.current);
+    });
+  }, [syncTransformToDom]);
 
   // 컨테이너 크기 기반 최적 화면 맞춤 배율 계산
   const calculateFitScale = useCallback(() => {
@@ -125,9 +158,12 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
       setFitScale(bestFit);
       setZoomScale(bestFit);
       setPanOffset({ x: 0, y: 0 });
+      zoomScaleRef.current = bestFit;
+      panOffsetRef.current = { x: 0, y: 0 };
+      syncTransformToDom(bestFit, { x: 0, y: 0 });
     }, 60);
     return () => clearTimeout(timer);
-  }, [calculateFitScale, orientation, toolbarPosition]);
+  }, [calculateFitScale, orientation, toolbarPosition, syncTransformToDom]);
 
   // 창 크기 변경 시 자동 재계산
   useEffect(() => {
@@ -141,16 +177,25 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
 
   // 확대 / 축소 버튼 핸들러
   const handleZoomIn = () => {
-    setZoomScale(prev => Math.min(3.5, prev * 1.2));
+    const next = Math.min(3.5, zoomScaleRef.current * 1.2);
+    setZoomScale(next);
+    zoomScaleRef.current = next;
+    syncTransformToDom(next, panOffsetRef.current);
   };
 
   const handleZoomOut = () => {
-    setZoomScale(prev => Math.max(fitScale * 0.4, prev / 1.2));
+    const next = Math.max(fitScale * 0.4, zoomScaleRef.current / 1.2);
+    setZoomScale(next);
+    zoomScaleRef.current = next;
+    syncTransformToDom(next, panOffsetRef.current);
   };
 
   const handleResetZoomFit = () => {
     setZoomScale(fitScale);
     setPanOffset({ x: 0, y: 0 });
+    zoomScaleRef.current = fitScale;
+    panOffsetRef.current = { x: 0, y: 0 };
+    syncTransformToDom(fitScale, { x: 0, y: 0 });
   };
 
   // 키보드 단축키
@@ -174,39 +219,147 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose, currentPageIdx, studentPages.length, fitScale]);
 
-  // 마우스/터치 드래그 이동(Pan) 핸들러
+  // 멀티터치 & 마우스 제스처 (1점 터치 이동, 2점 터치 중심 확대/축소 및 이동)
   const handlePointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).closest('button')) return;
+
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+
+    const pointerCount = activePointersRef.current.size;
     setIsPanning(true);
-    panStartRef.current = {
-      x: e.clientX - panOffset.x,
-      y: e.clientY - panOffset.y
-    };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isPanning) return;
-    setPanOffset({
-      x: e.clientX - panStartRef.current.x,
-      y: e.clientY - panStartRef.current.y
-    });
-  };
+    if (pointerCount === 1) {
+      // 1점 터치 / 마우스: 드래그 이동(Pan) 준비
+      singlePanStartRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        pan: { ...panOffsetRef.current }
+      };
+      pinchStartRef.current = null;
+    } else if (pointerCount === 2) {
+      // 2점 터치: 두 손가락 중심 핀치 줌 준비
+      const pts = Array.from(activePointersRef.current.values());
+      const p1 = pts[0];
+      const p2 = pts[1];
+      const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const midpoint = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (isPanning) {
-      setIsPanning(false);
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {}
+      pinchStartRef.current = {
+        dist: Math.max(10, dist),
+        midpoint,
+        scale: zoomScaleRef.current,
+        pan: { ...panOffsetRef.current }
+      };
+      singlePanStartRef.current = null;
+    } else {
+      // 3점 이상 (손바닥/Palm Rejection): 오터치 방지를 위해 제스처 홀드
+      pinchStartRef.current = null;
+      singlePanStartRef.current = null;
     }
   };
 
-  // 마우스 휠 줌 핸들러
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!activePointersRef.current.has(e.pointerId)) return;
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    const pointerCount = activePointersRef.current.size;
+
+    if (pointerCount === 1 && singlePanStartRef.current) {
+      // 1점 터치: 부드러운 화면 이동(Pan)
+      const dx = e.clientX - singlePanStartRef.current.x;
+      const dy = e.clientY - singlePanStartRef.current.y;
+      panOffsetRef.current = {
+        x: singlePanStartRef.current.pan.x + dx,
+        y: singlePanStartRef.current.pan.y + dy
+      };
+      scheduleTransformUpdate();
+    } else if (pointerCount === 2 && pinchStartRef.current && containerRef.current) {
+      // 2점 터치: 두 손가락 중심 기준 핀치 줌(Focal-point Zoom) 및 동시 이동(Pan)
+      const pts = Array.from(activePointersRef.current.values());
+      const p1 = pts[0];
+      const p2 = pts[1];
+      const currentDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      const currentMid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+
+      const { dist: startDist, midpoint: startMid, scale: startScale, pan: startPan } = pinchStartRef.current;
+      const rawScale = startScale * (currentDist / startDist);
+      const clampedScale = Math.max(fitScale * 0.4, Math.min(3.5, rawScale));
+      const scaleRatio = clampedScale / startScale;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const contCenterX = rect.width / 2;
+      const contCenterY = rect.height / 2;
+
+      const startMidRelX = startMid.x - rect.left;
+      const startMidRelY = startMid.y - rect.top;
+      const curMidRelX = currentMid.x - rect.left;
+      const curMidRelY = currentMid.y - rect.top;
+
+      // 두 손가락 중심점 고정 수학 공식
+      const newPanX = (curMidRelX - contCenterX) - scaleRatio * (startMidRelX - contCenterX - startPan.x);
+      const newPanY = (curMidRelY - contCenterY) - scaleRatio * (startMidRelY - contCenterY - startPan.y);
+
+      zoomScaleRef.current = clampedScale;
+      panOffsetRef.current = { x: newPanX, y: newPanY };
+      scheduleTransformUpdate();
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    activePointersRef.current.delete(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+
+    const remainingCount = activePointersRef.current.size;
+    if (remainingCount === 1) {
+      // 2개에서 1개로 줄었을 때: 남은 손가락으로 자연스럽게 1점 팬으로 전환
+      const remaining = Array.from(activePointersRef.current.values())[0];
+      singlePanStartRef.current = {
+        x: remaining.x,
+        y: remaining.y,
+        pan: { ...panOffsetRef.current }
+      };
+      pinchStartRef.current = null;
+    } else if (remainingCount === 0) {
+      // 모든 손가락 뗌: React 상태에 최종 동기화 (불필요한 리렌더링 최소화)
+      setIsPanning(false);
+      singlePanStartRef.current = null;
+      pinchStartRef.current = null;
+      setPanOffset(panOffsetRef.current);
+      setZoomScale(zoomScaleRef.current);
+    }
+  };
+
+  // 마우스 휠 줌 핸들러 (커서 위치 중심 확대/축소)
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    const delta = e.deltaY < 0 ? 1.1 : 0.9;
-    setZoomScale(prev => Math.max(fitScale * 0.4, Math.min(3.5, prev * delta)));
+    if (!containerRef.current) return;
+
+    const delta = e.deltaY < 0 ? 1.15 : 0.87;
+    const curScale = zoomScaleRef.current;
+    const nextScale = Math.max(fitScale * 0.4, Math.min(3.5, curScale * delta));
+    const ratio = nextScale / curScale;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const contCenterX = rect.width / 2;
+    const contCenterY = rect.height / 2;
+
+    const cursorRelX = e.clientX - rect.left;
+    const cursorRelY = e.clientY - rect.top;
+
+    const newPanX = (cursorRelX - contCenterX) - ratio * (cursorRelX - contCenterX - panOffsetRef.current.x);
+    const newPanY = (cursorRelY - contCenterY) - ratio * (cursorRelY - contCenterY - panOffsetRef.current.y);
+
+    zoomScaleRef.current = nextScale;
+    panOffsetRef.current = { x: newPanX, y: newPanY };
+    syncTransformToDom(nextScale, { x: newPanX, y: newPanY });
+
+    setZoomScale(nextScale);
+    setPanOffset({ x: newPanX, y: newPanY });
   };
 
   const zoomPercent = Math.round((zoomScale / fitScale) * 100);
@@ -679,6 +832,7 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
 
         {/* 실제 A4 용지 캔버스 (Pan & Zoom 실시간 적용) */}
         <div
+          ref={sheetContainerRef}
           style={{
             width: `${docWidth}px`,
             height: `${docHeight}px`,
@@ -688,7 +842,8 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
             boxShadow: '0 20px 60px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.1)',
             borderRadius: '6px',
             overflow: 'hidden',
-            flexShrink: 0
+            flexShrink: 0,
+            willChange: 'transform'
           }}
         >
           <StudentNoteSheet page={currentPage} orientation={orientation} />
@@ -852,9 +1007,11 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
             whiteSpace: 'nowrap'
           }}
         >
-          <span>💡 드래그로 화면 이동</span>
+          <span>💡 1손가락: 화면 이동</span>
           <span>•</span>
-          <span>휠/버튼으로 확대/축소</span>
+          <span>✌️ 2손가락 핀치: 중심 확대/축소</span>
+          <span>•</span>
+          <span>휠/버튼: 확대축소</span>
           <span>•</span>
           <span>단축키: [←/→] 쪽이동, [ESC] 나가기</span>
         </div>

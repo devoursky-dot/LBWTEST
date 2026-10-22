@@ -1834,6 +1834,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       }
 
       const myKey = `${studentInfo.grade}_${studentInfo.classNum}_${studentInfo.studentNum}`;
+
+      // 선생님이 칠판에서 잘못 접속된 학생을 삭제/해제한 경우
+      if (signal.type === 'KICK_STUDENT' && signal.targetStudentKey === myKey) {
+        setIsConnectedToBoard(false);
+        submissionIdRef.current = null;
+        classroomRealtime.leaveLesson();
+        showToast('📢 선생님에 의해 전자칠판 연결이 해제되었습니다. 작성 중이던 필기는 기기에 안전하게 보존됩니다.');
+        return;
+      }
       const isTargeted = signal.type === 'REQUEST_STUDENT_NOTE' && signal.targetStudentKey === myKey;
       const isAllSync = signal.type === 'REQUEST_ALL_SYNC';
 
