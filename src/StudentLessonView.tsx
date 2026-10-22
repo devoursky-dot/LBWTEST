@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useHorizontalToolbarScroll } from './lib/scrollModule';
+import {
+  useFullscreenManager,
+  useAppConfirm,
+  FullscreenReentryModal
+} from './lib/fullscreenModule';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
@@ -230,51 +235,27 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // --- 2. 삼성노트 REA 뷰포트 & A4 용지 규격 상태 ---
   // 기본 표준: A4 세로 (Portrait)
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  // 파일 선택기(OS 파일 다이얼로그) 열림 등으로 브라우저에 의해 전체화면이 일시 해제되었을 때, 다음 사용자 터치 시 자동 복구할 플래그
-  const shouldRestoreFullscreenRef = useRef<boolean>(false);
-  // 전체화면 강제 진입 안전 헬퍼 (사용자 제스처 컨텍스트에서 호출)
-  const requestFullscreenSafe = useCallback(() => {
-    try {
-      const doc = document as any;
-      const docEl = document.documentElement as any;
-      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
-        if (typeof docEl.requestFullscreen === 'function') {
-          docEl.requestFullscreen().catch(() => {});
-        } else if (typeof docEl.webkitRequestFullscreen === 'function') {
-          docEl.webkitRequestFullscreen();
-        }
-        setIsFullscreen(true);
-      }
-    } catch (e) {
-      console.warn('전체화면 요청 예외:', e);
-    }
-  }, []);
 
-  // 전체화면 토글 (iOS Safari 등 미지원 환경 안전 방어)
+  // 📺 모듈화된 전체화면 관리 엔진 (이벤트 기반 자동 이탈 감지 및 무소음 복구 루틴)
+  const {
+    isFullscreen,
+    showReentryPrompt,
+    enterFullscreen: requestFullscreenSafe,
+    exitFullscreen: exitFullscreenSafe,
+    dismissPrompt: dismissReentryPrompt
+  } = useFullscreenManager({ enabled: true });
+
+  // 💬 전체화면을 파괴하는 window.confirm을 100% 대체하는 인앱 다이얼로그 시스템
+  const { confirm, confirmModalElement } = useAppConfirm();
+
+  // 전체화면 토글
   const toggleFullscreen = useCallback(() => {
-    try {
-      const doc = document as any;
-      const docEl = document.documentElement as any;
-      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
-        if (typeof docEl.requestFullscreen === 'function') {
-          docEl.requestFullscreen().catch(() => {});
-        } else if (typeof docEl.webkitRequestFullscreen === 'function') {
-          docEl.webkitRequestFullscreen();
-        }
-        setIsFullscreen(true);
-      } else {
-        if (typeof doc.exitFullscreen === 'function') {
-          doc.exitFullscreen().catch(() => {});
-        } else if (typeof doc.webkitExitFullscreen === 'function') {
-          doc.webkitExitFullscreen();
-        }
-        setIsFullscreen(false);
-      }
-    } catch (e) {
-      console.warn('전체화면 전환 예외:', e);
+    if (isFullscreen) {
+      exitFullscreenSafe();
+    } else {
+      requestFullscreenSafe();
     }
-  }, []);
+  }, [isFullscreen, exitFullscreenSafe, requestFullscreenSafe]);
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -405,9 +386,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
 
-  // OS 파일 선택창 열림 추적 및 복귀 시 전체화면 터치 유도 확인창 상태
-  const isFilePickerOpenRef = useRef<boolean>(false);
-  const [isResumeFullscreenModalOpen, setIsResumeFullscreenModalOpen] = useState<boolean>(false);
 
   // DOM 참조
   const containerRef = useRef<HTMLDivElement>(null);
@@ -642,8 +620,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   // [공책 처음부터 새로 쓰기 (자율 백지 리셋)]
-  const handleResetNotebookClean = useCallback(() => {
-    if (window.confirm('현재 작성 중인 필기를 모두 지우고 깨끗한 학습지 상태로 새로 시작하시겠습니까?\n(선생님의 학습지 배경은 그대로 유지되며, 내가 쓴 필기만 초기화됩니다.)')) {
+  const handleResetNotebookClean = useCallback(async () => {
+    const ok = await confirm({
+      title: '학습지 새로 시작',
+      message: '현재 작성 중인 필기를 모두 지우고 깨끗한 학습지 상태로 새로 시작하시겠습니까?\n(선생님의 학습지 배경은 그대로 유지되며, 내가 쓴 필기만 초기화됩니다.)',
+      confirmText: '새로 시작',
+      isDanger: true
+    });
+    if (ok) {
       // 획, 텍스트, 이미지 및 undo/redo 스택 초기화
       setStrokes([]);
       setTextItems([]);
@@ -1142,52 +1126,70 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   }, [redoStack, strokes]);
 
   // [지우기 1] 현재 페이지만 지우기
-  const handleClearCurrentPage = () => {
-    if (window.confirm(`현재 ${currentPageIndex + 1}쪽의 필기 내용을 모두 지우시겠습니까?`)) {
-      if (strokes.length > 0) {
-        setUndoStack(prev => [...prev.slice(-30), strokes]);
-        setRedoStack([]);
-      }
-      setStrokes([]);
-      setTextItems([]);
-      setActivePopup(null);
-      showToast(`🗑️ ${currentPageIndex + 1}쪽 내용이 초기화되었습니다.`);
+  const handleClearCurrentPage = async () => {
+    setActivePopup(null);
+    const ok = await confirm({
+      title: '현재 쪽 필기 지우기',
+      message: `현재 ${currentPageIndex + 1}쪽의 필기 내용을 모두 지우시겠습니까?`,
+      confirmText: '내용 지우기',
+      isDanger: true
+    });
+    if (!ok) return;
+
+    if (strokes.length > 0) {
+      setUndoStack(prev => [...prev.slice(-30), strokes]);
+      setRedoStack([]);
     }
+    setStrokes([]);
+    setTextItems([]);
+    showToast(`🗑️ ${currentPageIndex + 1}쪽 내용이 초기화되었습니다.`);
   };
 
   // [지우기 2] 전체 페이지 다 지우기
-  const handleClearAllPages = () => {
-    if (window.confirm('전체 페이지의 모든 필기 내용을 완전히 초기화하시겠습니까?\n(공책의 모든 쪽이 비워집니다)')) {
-      const resetPages: LessonPage[] = [{ id: `page_${Date.now()}`, strokes: [], textItems: [] }];
-      setPages(resetPages);
-      setCurrentPageIndex(0);
-      setStrokes([]);
-      setTextItems([]);
-      setUndoStack([]);
-      setRedoStack([]);
-      setActivePopup(null);
-      showToast('🗑️ 모든 페이지의 필기가 초기화되었습니다.');
-    }
+  const handleClearAllPages = async () => {
+    setActivePopup(null);
+    const ok = await confirm({
+      title: '전체 페이지 초기화',
+      message: '전체 페이지의 모든 필기 내용을 완전히 초기화하시겠습니까?\n(공책의 모든 쪽이 비워집니다)',
+      confirmText: '모두 지우기',
+      isDanger: true
+    });
+    if (!ok) return;
+
+    const resetPages: LessonPage[] = [{ id: `page_${Date.now()}`, strokes: [], textItems: [] }];
+    setPages(resetPages);
+    setCurrentPageIndex(0);
+    setStrokes([]);
+    setTextItems([]);
+    setUndoStack([]);
+    setRedoStack([]);
+    showToast('🗑️ 모든 페이지의 필기가 초기화되었습니다.');
   };
 
   // [지우기 3] 현재 쪽 완전히 삭제 (2쪽 이상일 때)
-  const handleDeleteCurrentPage = () => {
+  const handleDeleteCurrentPage = async () => {
     if (pages.length <= 1) {
       showToast('⚠️ 최소 1개 페이지는 유지되어야 합니다.');
       return;
     }
-    if (window.confirm(`현재 ${currentPageIndex + 1}쪽을 공책에서 완전히 삭제하시겠습니까?`)) {
-      const updated = pages.filter((_, idx) => idx !== currentPageIndex);
-      const nextIdx = Math.max(0, currentPageIndex - 1);
-      setPages(updated);
-      setCurrentPageIndex(nextIdx);
-      setStrokes(updated[nextIdx]?.strokes || []);
-      setTextItems(updated[nextIdx]?.textItems || []);
-      setUndoStack([]);
-      setRedoStack([]);
-      setActivePopup(null);
-      showToast(`🗑️ ${currentPageIndex + 1}쪽이 삭제되었습니다.`);
-    }
+    setActivePopup(null);
+    const ok = await confirm({
+      title: '페이지 완전 삭제',
+      message: `현재 ${currentPageIndex + 1}쪽을 공책에서 완전히 삭제하시겠습니까?`,
+      confirmText: '삭제하기',
+      isDanger: true
+    });
+    if (!ok) return;
+
+    const updated = pages.filter((_, idx) => idx !== currentPageIndex);
+    const nextIdx = Math.max(0, currentPageIndex - 1);
+    setPages(updated);
+    setCurrentPageIndex(nextIdx);
+    setStrokes(updated[nextIdx]?.strokes || []);
+    setTextItems(updated[nextIdx]?.textItems || []);
+    setUndoStack([]);
+    setRedoStack([]);
+    showToast(`🗑️ ${currentPageIndex + 1}쪽이 삭제되었습니다.`);
   };
 
   // ==========================================================================
@@ -1775,7 +1777,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 수업 나가기 처리 (WakeLock 해제, 전체화면 종료, 이탈 신호)
   const handleExitLesson = async () => {
     if (isConnectedToBoard) {
-      const ok = window.confirm('수업을 종료하고 전자칠판 연결을 해제하시겠습니까?');
+      const ok = await confirm({
+        title: '수업 종료',
+        message: '수업을 종료하고 전자칠판 연결을 해제하시겠습니까?',
+        confirmText: '수업 종료',
+        cancelText: '계속 수업하기',
+        isDanger: true
+      });
       if (!ok) return;
 
       if (wakeLockRef.current) {
@@ -1784,11 +1792,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         } catch {}
         wakeLockRef.current = null;
       }
-      if (document.fullscreenElement) {
-        try {
-          await document.exitFullscreen();
-        } catch {}
-      }
+      await exitFullscreenSafe();
       await classroomRealtime.sendSignal({
         type: 'STUDENT_PRESENCE',
         lessonId,
@@ -1801,65 +1805,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     if (onExit) onExit();
   };
-
-  // 전체화면 상태 동기화 및 파일 선택 후 복귀 시 무소음 자동 재진입 리스너
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      const doc = document as any;
-      const isFull = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
-      setIsFullscreen(isFull);
-      if (!isFull) {
-        // OS 파일 선택기나 툴바 모달에 의해 브라우저 전체화면이 일시 해제되었을 때 복구 예약
-        shouldRestoreFullscreenRef.current = true;
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-
-    // [기회주의적 전체화면 무소음 복구]:
-    // W3C 명세상 파일 선택 후 자바스크립트 자동 호출은 차단되지만,
-    // 사용자가 모달 닫기, 캔버스 터치, 툴바 선택 등 다음 첫 번째 터치를 하는 순간
-    // 브라우저의 User Gesture 권한을 즉시 획득하여 0.001초 만에 전체화면을 조용히 복원!
-    const handleGlobalUserGesture = () => {
-      const doc = document as any;
-      const isFull = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
-      if (!isFull && isConnectedToBoard) {
-        requestFullscreenSafe();
-        shouldRestoreFullscreenRef.current = false;
-      }
-    };
-
-    window.addEventListener('pointerdown', handleGlobalUserGesture, { capture: true, passive: true });
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-      window.removeEventListener('pointerdown', handleGlobalUserGesture, { capture: true } as any);
-    };
-  }, [requestFullscreenSafe, isConnectedToBoard]);
-
-  // 파일 선택기(OS 파일 다이얼로그)를 닫고 브라우저로 복귀 시, 전체화면 터치 유도 확인창 자동 활성화
-  useEffect(() => {
-    const handleWindowFocus = () => {
-      if (isFilePickerOpenRef.current) {
-        isFilePickerOpenRef.current = false;
-        setTimeout(() => {
-          const doc = document as any;
-          const isFull = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
-          // 브라우저로 돌아왔을 때 전체화면이 풀려 있고 다른 편집 모달이 열려 있지 않다면 확인창 띄우기
-          if (!isFull && !pdfPickerOpen && !cropModalOpen) {
-            setIsResumeFullscreenModalOpen(true);
-          }
-        }, 300);
-      }
-    };
-
-    window.addEventListener('focus', handleWindowFocus);
-    return () => {
-      window.removeEventListener('focus', handleWindowFocus);
-    };
-  }, [pdfPickerOpen, cropModalOpen]);
 
   // ==========================================================================
   // [초경량 백그라운드 필기 동기화 엔진 (온디맨드 호출 & 등록 공용)]
@@ -2878,7 +2823,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 type="button"
                 className="student-tool-btn"
                 onClick={() => {
-                  isFilePickerOpenRef.current = true;
                   notebookFileInputRef.current?.click();
                   setActivePopup(null);
                 }}
@@ -3521,7 +3465,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               type="button"
               className="g-btn g-btn-primary"
               onClick={() => {
-                isFilePickerOpenRef.current = true;
                 imagePdfInputRef.current?.click();
                 setActivePopup(null);
               }}
@@ -3922,7 +3865,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 type="button"
                 className="student-tool-btn"
                 onClick={() => {
-                  isFilePickerOpenRef.current = true;
                   notebookFileInputRef.current?.click();
                 }}
                 style={{
@@ -4656,8 +4598,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (window.confirm('현재 학생 로그아웃 후 로그인 화면으로 돌아가시겠습니까?')) {
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: '학생 로그아웃',
+                        message: '현재 학생 로그아웃 후 로그인 화면으로 돌아가시겠습니까?',
+                        confirmText: '로그아웃',
+                        isDanger: true
+                      });
+                      if (ok) {
                         localStorage.removeItem('lbw_student_info');
                         setStudentInfo(null);
                         setAuthStudentId('');
@@ -4885,69 +4833,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         )}
       </ModularModal>
 
-      {/* 5-2. 파일 작업 복귀 시 전체화면 터치 유도 및 울렁거림 방지 확인 모달 (사용자 아이디어 100% 반영) */}
-      <ModularModal
-        isOpen={isResumeFullscreenModalOpen}
-        onClose={() => setIsResumeFullscreenModalOpen(false)}
-        maxWidth="440px"
-        zIndex={10050}
-        showCloseButton={false}
-      >
-        <div style={{ textAlign: 'center', padding: '10px 4px' }}>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '54px',
-            height: '54px',
-            borderRadius: '16px',
-            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%)',
-            border: '1px solid rgba(99, 102, 241, 0.3)',
-            fontSize: '26px',
-            marginBottom: '14px'
-          }}>
-            📺
-          </div>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#ffffff', margin: '0 0 8px 0' }}>
-            수업 필기로 복귀합니다
-          </h3>
-          <p style={{ fontSize: '13px', color: '#94a3b8', margin: '0 0 20px 0', lineHeight: 1.6 }}>
-            파일 작업을 마치셨습니다.<br />
-            아래 버튼을 터치하시면 <strong>주소창 울렁거림 없이 쾌적한 전체화면</strong>으로 바로 복귀합니다.
-          </p>
+      {/* 5-2. 모듈화된 전체화면 자동 복구 오버레이 (FullscreenReentryModal) */}
+      <FullscreenReentryModal
+        isOpen={showReentryPrompt}
+        onReenter={requestFullscreenSafe}
+        onDismiss={dismissReentryPrompt}
+      />
 
-          <button
-            type="button"
-            autoFocus
-            onClick={() => {
-              requestFullscreenSafe();
-              setIsResumeFullscreenModalOpen(false);
-            }}
-            style={{
-              width: '100%',
-              padding: '14px',
-              borderRadius: '12px',
-              border: 'none',
-              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-              color: '#ffffff',
-              fontSize: '15px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 8px 24px rgba(59, 130, 246, 0.45)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px'
-            }}
-          >
-            <span>🚀</span>
-            <span>전체화면으로 계속하기</span>
-          </button>
-        </div>
-      </ModularModal>
+      {/* 5-3. 전체화면을 파괴하지 않는 모듈화 인앱 확인 다이얼로그 (AppConfirmModal) */}
+      {confirmModalElement}
 
-      {/* 전체화면 복귀 상단 플로팅 칩 (W3C 터치 유도용) */}
-      {!isFullscreen && isConnectedToBoard && !isResumeFullscreenModalOpen && !cropModalOpen && !pdfPickerOpen && (
+      {/* 전체화면 복귀 상단 플로팅 칩 (보조 상시 안전망) */}
+      {!isFullscreen && isConnectedToBoard && !showReentryPrompt && !cropModalOpen && !pdfPickerOpen && (
         <button
           type="button"
           onClick={requestFullscreenSafe}
