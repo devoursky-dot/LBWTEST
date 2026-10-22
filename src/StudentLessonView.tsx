@@ -420,14 +420,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }, 3000);
   };
 
-  // 애플펜슬 화면 더블탭(톡톡) 및 키보드 단축키(E/P)를 통한 펜 <-> 지우개 원터치 토글
+  // 펜 <-> 지우개 원터치 토글 (펜 모드 시 손가락 화면 더블탭 톡톡 및 키보드 단축키 E/P)
   const handleTogglePenEraser = useCallback(() => {
     setTool(prev => {
       const next = prev === 'eraser' ? 'pen' : 'eraser';
       if (next === 'eraser') {
-        showToast('🧹 지우개 모드로 전환되었습니다. (애플펜슬 더블탭)');
+        showToast('🧹 지우개 모드로 전환되었습니다. (화면 손가락 톡톡)');
       } else {
-        showToast('✏️ 펜 모드로 전환되었습니다. (애플펜슬 더블탭)');
+        showToast('✏️ 펜 모드로 전환되었습니다. (화면 손가락 톡톡)');
       }
       return next;
     });

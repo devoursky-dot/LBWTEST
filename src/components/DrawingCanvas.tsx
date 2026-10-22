@@ -72,8 +72,10 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const isInternalStrokeAddRef = useRef(false);
   const didEraseInGestureRef = useRef(false);
 
-  // 애플펜슬 화면 톡톡(더블탭) 감지 레퍼런스
-  const lastPenTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
+  const lastFingerTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+  const fingerTouchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const fingerTotalMoveDistRef = useRef<number>(0);
 
   // 손가락 위치 이동(Pan) 레퍼런스
   const fingerPanStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -177,23 +179,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         e.preventDefault();
       }
 
-      // [1. 애플펜슬 / 스타일러스 최우선권 & 화면 더블탭 전환]:
+      // [1. 애플펜슬 / 스타일러스 최우선권 (연속 점 찍기 시 지우개 오작동 원천 차단)]:
       if (e.pointerType === 'pen') {
-        // 애플펜슬 화면 더블탭(320ms 이내 두 번 톡톡) -> 펜/지우개 전환
-        const now = Date.now();
-        if (lastPenTapRef.current) {
-          const elapsed = now - lastPenTapRef.current.time;
-          const dist = Math.hypot(e.clientX - lastPenTapRef.current.x, e.clientY - lastPenTapRef.current.y);
-          if (elapsed < 340 && dist < 36) {
-            if (p.onTogglePenEraser) {
-              p.onTogglePenEraser();
-            }
-            lastPenTapRef.current = null;
-            return;
-          }
-        }
-        lastPenTapRef.current = { time: now, x: e.clientX, y: e.clientY };
-
         // 스타일러스가 감지되면 자동으로 펜 전용 모드 활성화 (손바닥 터치 오작동 원천 차단)
         if (!p.penOnlyMode && p.onAutoPenModeDetected) {
           p.onAutoPenModeDetected();
@@ -208,11 +195,12 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         }
       }
 
-      // [2. 펜 모드(penOnlyMode)일 때]:
+      // [2. 펜 모드(penOnlyMode)일 때 - 손가락 터치는 화면 이동 및 제자리 더블탭 지우개 토글]:
       if (p.penOnlyMode) {
         if (e.pointerType === 'touch') {
-          // 손가락 터치는 필기 대신 화면 이동(Pan)으로 처리
+          fingerTouchStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
           fingerPanStartRef.current = { x: e.clientX, y: e.clientY };
+          fingerTotalMoveDistRef.current = 0;
           return;
         }
         // 펜 또는 마우스가 아니면 무조건 무시 (손바닥 터치 완벽 무시)
@@ -293,18 +281,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         e.preventDefault();
       }
 
-      // 펜이 실제로 글씨를 쓰며 18px 이상 움직이면 더블탭 판정 리셋
-      if (lastPenTapRef.current && e.pointerType === 'pen') {
-        const dist = Math.hypot(e.clientX - lastPenTapRef.current.x, e.clientY - lastPenTapRef.current.y);
-        if (dist > 18) {
-          lastPenTapRef.current = null;
-        }
-      }
-
-      // 펜 모드에서 손가락 드래그로 화면 이동 중일 때
+      // 펜 모드에서 손가락 드래그로 화면 이동 중일 때 (이동 거리 누적)
       if (fingerPanStartRef.current && e.pointerType === 'touch') {
         const dx = e.clientX - fingerPanStartRef.current.x;
         const dy = e.clientY - fingerPanStartRef.current.y;
+        fingerTotalMoveDistRef.current += Math.hypot(dx, dy);
         fingerPanStartRef.current = { x: e.clientX, y: e.clientY };
         if (p.onFingerPanMove) {
           p.onFingerPanMove(dx, dy);
@@ -381,6 +362,38 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     const handleNativePointerUp = (e: PointerEvent) => {
       const p = propsRef.current;
+
+      // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지:
+      // 손가락으로 화면을 이동(Pan)한 것이 아니라, 제자리에서 가볍게 탭(< 280ms, 이동거리 < 14px)한 경우만 엄격 판별!
+      if (p.penOnlyMode && e.pointerType === 'touch' && fingerTouchStartRef.current) {
+        const touchDuration = Date.now() - fingerTouchStartRef.current.time;
+        const totalDist = fingerTotalMoveDistRef.current;
+        const isPureTap = touchDuration < 280 && totalDist < 14;
+
+        if (isPureTap) {
+          const now = Date.now();
+          if (lastFingerTapRef.current) {
+            const elapsed = now - lastFingerTapRef.current.time;
+            const distFromLastTap = Math.hypot(e.clientX - lastFingerTapRef.current.x, e.clientY - lastFingerTapRef.current.y);
+
+            // 40ms ~ 360ms 사이, 반경 35px 이내의 연속 두 번 탭(더블탭) 감지 성공!
+            if (elapsed >= 40 && elapsed < 360 && distFromLastTap < 35) {
+              if (p.onTogglePenEraser) {
+                p.onTogglePenEraser();
+              }
+              lastFingerTapRef.current = null;
+            } else {
+              lastFingerTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+            }
+          } else {
+            lastFingerTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+          }
+        } else {
+          // 손가락으로 화면을 이동(Pan)시킨 경우에는 직전 탭 기록 리셋 (화면 이동과의 간섭 100% 차단)
+          lastFingerTapRef.current = null;
+        }
+        fingerTouchStartRef.current = null;
+      }
 
       // 손가락 팬 종료
       if (fingerPanStartRef.current && e.pointerType === 'touch') {
