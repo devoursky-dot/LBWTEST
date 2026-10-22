@@ -231,6 +231,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 기본 표준: A4 세로 (Portrait)
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  // 파일 선택기(OS 파일 다이얼로그) 열림 등으로 브라우저에 의해 전체화면이 일시 해제되었을 때, 다음 사용자 터치 시 자동 복구할 플래그
+  const shouldRestoreFullscreenRef = useRef<boolean>(false);
   // 전체화면 강제 진입 안전 헬퍼 (사용자 제스처 컨텍스트에서 호출)
   const requestFullscreenSafe = useCallback(() => {
     try {
@@ -1796,21 +1798,42 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (onExit) onExit();
   };
 
-  // 전체화면 상태 동기화 리스너 (모든 브라우저 및 Safari webkit 지원)
+  // 전체화면 상태 동기화 및 파일 선택 후 복귀 시 무소음 자동 재진입 리스너
   useEffect(() => {
     const handleFullscreenChange = () => {
       const doc = document as any;
-      setIsFullscreen(Boolean(doc.fullscreenElement || doc.webkitFullscreenElement));
+      const isFull = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+      setIsFullscreen(isFull);
+      if (!isFull) {
+        // OS 파일 선택기나 툴바 모달에 의해 브라우저 전체화면이 일시 해제되었을 때 복구 예약
+        shouldRestoreFullscreenRef.current = true;
+      }
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
+    // [기회주의적 전체화면 무소음 복구]:
+    // W3C 명세상 파일 선택 후 자바스크립트 자동 호출은 차단되지만,
+    // 사용자가 모달 닫기, 캔버스 터치, 툴바 선택 등 다음 첫 번째 터치를 하는 순간
+    // 브라우저의 User Gesture 권한을 즉시 획득하여 0.001초 만에 전체화면을 조용히 복원!
+    const handleGlobalUserGesture = () => {
+      const doc = document as any;
+      const isFull = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+      if (!isFull && isConnectedToBoard) {
+        requestFullscreenSafe();
+        shouldRestoreFullscreenRef.current = false;
+      }
+    };
+
+    window.addEventListener('pointerdown', handleGlobalUserGesture, { capture: true, passive: true });
+
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      window.removeEventListener('pointerdown', handleGlobalUserGesture, { capture: true } as any);
     };
-  }, []);
+  }, [requestFullscreenSafe, isConnectedToBoard]);
 
   // ==========================================================================
   // [초경량 백그라운드 필기 동기화 엔진 (온디맨드 호출 & 등록 공용)]
@@ -2145,16 +2168,21 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       onContextMenu={(e) => e.preventDefault()}
       style={{
         overflow: 'hidden',
-        position: 'relative',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
         touchAction: 'none',
         WebkitTouchCallout: 'none',
         WebkitUserSelect: 'none',
         userSelect: 'none',
-        width: '100dvw',
-        height: '100dvh',
         boxSizing: 'border-box',
         paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
-        paddingBottom: 'max(6px, env(safe-area-inset-bottom, 0px))'
+        paddingBottom: 'max(6px, env(safe-area-inset-bottom, 0px))',
+        zIndex: 50
       }}
     >
       {/* ====================================================================
