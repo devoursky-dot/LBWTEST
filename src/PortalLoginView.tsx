@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   type UserRole,
   type UserSession,
@@ -16,6 +16,7 @@ import {
   fetchStudentNameFromCloud
 } from './lib/auth';
 import { saveSavedStudentInfo } from './lib/studentSessionManager';
+import { bindDirectTouchScroll, ensureInputVisible } from './lib/scrollModule';
 
 interface PortalLoginViewProps {
   driveTeacherFolders: string[]; // 구글 드라이브에서 가져온 선생님 폴더 목록
@@ -24,6 +25,15 @@ interface PortalLoginViewProps {
 
 export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalLoginViewProps) {
   const [activeTab, setActiveTab] = useState<UserRole>('whiteboard');
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // 태블릿/스마트폰 터치 제스처 스크롤 및 휠 스크롤 100% 보장
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      const cleanup = bindDirectTouchScroll(scrollContainerRef.current, { direction: 'y' });
+      return cleanup;
+    }
+  }, []);
 
   // 🎨 실시간 디자인 테마 ('vercel' 딥 다크 모노크롬 vs 'linear' 슬레이트 글래스)
   const [designTheme, setDesignThemeState] = useState<'vercel' | 'linear'>(() => {
@@ -321,33 +331,47 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
   };
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      background: themeStyles.bg,
-      padding: '20px',
-      fontFamily: "'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-      color: '#ffffff',
-      transition: 'background 0.3s ease',
-      position: 'relative'
-    }}>
+    <div
+      ref={scrollContainerRef}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        WebkitOverflowScrolling: 'touch',
+        touchAction: 'pan-y',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        background: themeStyles.bg,
+        padding: '76px 16px 80px 16px',
+        fontFamily: "'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+        color: '#ffffff',
+        transition: 'background 0.3s ease',
+        boxSizing: 'border-box',
+        zIndex: 10
+      }}
+    >
       {/* 🌟 실시간 디자인 스킬 체험 스위처 (실제 코드 동작 확인용) */}
       <div style={{
         position: 'fixed',
-        top: '20px',
+        top: '12px',
         display: 'flex',
         alignItems: 'center',
         gap: '6px',
-        background: 'rgba(20, 20, 20, 0.85)',
+        background: 'rgba(20, 20, 20, 0.88)',
         backdropFilter: 'blur(16px)',
         padding: '5px 8px',
         borderRadius: '30px',
         border: '1px solid rgba(255, 255, 255, 0.15)',
         boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6)',
-        zIndex: 999
+        zIndex: 1000
       }}>
         <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600, paddingLeft: '8px', paddingRight: '4px' }}>
           🎨 실시간 디자인 체험:
@@ -398,20 +422,26 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
         </button>
       </div>
 
-      <div style={{
-        width: '100%',
-        maxWidth: '480px',
-        background: themeStyles.cardBg,
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        border: themeStyles.cardBorder,
-        borderRadius: '24px',
-        padding: '36px 32px',
-        boxShadow: themeStyles.cardShadow,
-        position: 'relative',
-        overflow: 'hidden',
-        transition: 'all 0.3s ease'
-      }}>
+      <div
+        className="modal-box"
+        data-scrollable-modal="true"
+        style={{
+          width: '100%',
+          maxWidth: '480px',
+          margin: 'auto 0',
+          background: themeStyles.cardBg,
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          border: themeStyles.cardBorder,
+          borderRadius: '24px',
+          padding: '36px 32px 32px 32px',
+          boxShadow: themeStyles.cardShadow,
+          position: 'relative',
+          overflow: 'visible',
+          transition: 'all 0.3s ease',
+          boxSizing: 'border-box'
+        }}
+      >
         {/* 상단 장식 빛 */}
         <div style={{
           position: 'absolute',
@@ -554,6 +584,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="password"
                 value={wbPassword}
                 onChange={(e) => setWbPassword(e.target.value)}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="비밀번호 입력 (비워두고 시작하기를 누르면 자동 접속)"
                 style={{
                   width: '100%',
@@ -658,6 +689,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                   type="text"
                   value={teacherName}
                   onChange={(e) => setTeacherName(e.target.value)}
+                  onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                   placeholder="예: 홍길동 (드라이브 폴더 이름)"
                   style={{
                     width: '100%',
@@ -688,6 +720,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="password"
                 value={teacherPw}
                 onChange={(e) => setTeacherPw(e.target.value)}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="비밀번호 입력 (초기: 1234)"
                 style={{
                   width: '100%',
@@ -808,6 +841,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 maxLength={4}
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value.replace(/[^0-9]/g, ''))}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="예: 1101, 2315, 3830"
                 style={{
                   width: '100%',
@@ -834,6 +868,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="text"
                 value={studentName}
                 onChange={(e) => setStudentName(e.target.value)}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="예: 홍길동"
                 style={{
                   width: '100%',
@@ -857,6 +892,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="password"
                 value={studentPw}
                 onChange={(e) => setStudentPw(e.target.value)}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="비밀번호 입력"
                 style={{
                   width: '100%',
@@ -969,6 +1005,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="text"
                 value={adminId}
                 onChange={(e) => setAdminId(e.target.value)}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="관리자 아이디 입력"
                 style={{
                   width: '100%',
@@ -992,6 +1029,7 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
                 type="password"
                 value={adminPw}
                 onChange={(e) => setAdminPw(e.target.value)}
+                onFocus={(e) => ensureInputVisible(e.target as HTMLElement)}
                 placeholder="관리자 전용 비밀번호 입력"
                 style={{
                   width: '100%',

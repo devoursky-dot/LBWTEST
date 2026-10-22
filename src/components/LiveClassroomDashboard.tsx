@@ -192,9 +192,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   }, [currentLessonId, initialClear]);
 
-  // 3. 실시간 신호 채널 구독 (학생 접속, 이탈, 제출, 응답)
+  // 3. 실시간 신호 채널 구독 (전자칠판은 teacher 역할로 Supabase Realtime 채널 1개만 활성화)
   useEffect(() => {
-    classroomRealtime.joinLesson(currentLessonId);
+    classroomRealtime.joinLesson(currentLessonId, undefined, 'teacher');
 
     const unsubscribe = classroomRealtime.subscribe((signal: RealtimeSignalPayload) => {
       if (signal.lessonId !== currentLessonId) return;

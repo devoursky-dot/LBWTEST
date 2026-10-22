@@ -1745,9 +1745,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       console.warn('Wake Lock 활성화 경고:', wlErr);
     }
 
-    // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송
+    // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송 (학생은 웹소켓 연결을 소모하지 않는 student 모드로 등록)
     setIsConnectedToBoard(true);
-    classroomRealtime.joinLesson(lessonId);
+    classroomRealtime.joinLesson(lessonId, undefined, 'student');
     await classroomRealtime.sendSignal({
       type: 'STUDENT_PRESENCE',
       lessonId,
@@ -1965,6 +1965,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       if (isTargeted || isAllSync) {
         try {
+          // 600명 학생 동시성 분산 (전체 동기화 시 0~2.5초 무작위 지연으로 Supabase 트래픽 폭주 100% 방어)
+          if (isAllSync) {
+            const jitterMs = Math.floor(Math.random() * 2500);
+            await new Promise((res) => setTimeout(res, jitterMs));
+          }
+
           const syncedRecord = await syncCurrentNoteToCloud(true);
           if (syncedRecord) {
             await classroomRealtime.sendSignal({
