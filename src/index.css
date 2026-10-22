@@ -630,24 +630,70 @@ html, body {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  z-index: 1000;
-  padding: 1rem;
+  z-index: 10000;
+  padding: max(16px, env(safe-area-inset-top, 16px)) 16px max(16px, env(safe-area-inset-bottom, 16px));
+  box-sizing: border-box;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  touch-action: pan-y !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior: contain;
 }
 
 .modal-box {
-  background: #282a2c;
-  border: 1px solid var(--g-border);
+  background: #20232b;
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 20px;
   width: 100%;
   max-width: 440px;
   padding: 24px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
   animation: modalScale 0.15s ease-out;
+  box-sizing: border-box;
+  margin: auto !important;
+  max-height: min(calc(100dvh - 32px), 94vh) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  touch-action: pan-y !important;
+  -webkit-overflow-scrolling: touch !important;
+  user-select: auto !important;
+  -webkit-user-select: auto !important;
+}
+
+/* 모달 내부 인풋 및 폼 요소 터치 및 스크롤 안정화 */
+.modal-box input,
+.modal-box textarea,
+.modal-box select,
+.modal-box button,
+.modal-box form,
+.modal-box a,
+.modal-box label {
+  touch-action: manipulation !important;
+  user-select: auto !important;
+  -webkit-user-select: auto !important;
+}
+
+.modal-box input,
+.modal-box textarea {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+/* 팜리젝션(touch-action: none) 환경에서도 모달과 팝업의 터치 스크롤 정상 작동 보장 */
+.student-app-container .modal-backdrop,
+.student-app-container .modal-box,
+.student-app-container .modal-box *,
+.student-app-container .samsung-tool-popup,
+.student-app-container .samsung-tool-popup * {
+  touch-action: pan-y !important;
+  user-select: auto !important;
+  -webkit-user-select: auto !important;
 }
 
 .modal-header {
@@ -1084,6 +1130,12 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: calc(100dvh - 110px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  touch-action: pan-y !important;
+  -webkit-overflow-scrolling: touch !important;
+  scrollbar-width: thin !important;
   animation: popupSlideDown 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -1132,4 +1184,97 @@ html, body {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   cursor: pointer;
 }
+
+/* ==========================================================================
+   8. 툴바 전역 모듈화 (화면 폭 초과 시 가로 스크롤 & 찌그러짐 방지 & 터치 pan-x)
+   ========================================================================== */
+
+/* 툴바 래퍼: 전체 화면 폭을 감싸고 터치 통과 */
+.student-floating-toolbar-wrapper,
+.floating-toolbar-wrapper {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top, 10px));
+  left: 0;
+  right: 0;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  z-index: 1050;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+
+/* 툴바 본체: 모바일 터치 가로 스크롤 & 마우스 휠 완벽 지원 */
+.student-floating-toolbar,
+.floating-toolbar {
+  pointer-events: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  touch-action: pan-x !important;
+  -webkit-overflow-scrolling: touch !important;
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  flex-shrink: 0 !important;
+  scroll-behavior: smooth;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.student-floating-toolbar::-webkit-scrollbar,
+.floating-toolbar::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* 툴바 내부 모든 아이템은 좁은 화면에서도 찌그러지지 않도록 flex-shrink: 0 */
+.student-floating-toolbar > *,
+.floating-toolbar > *,
+.student-tool-btn,
+.g-tool-btn {
+  flex-shrink: 0 !important;
+  touch-action: manipulation !important;
+}
+
+/* 툴바 좌우 스크롤 내비게이션 힌트 버튼 (화면이 좁아서 양옆에 도구가 더 있을 때) */
+.toolbar-scroll-hint-btn {
+  pointer-events: auto;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 1060;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toolbar-scroll-hint-btn:hover {
+  background: #2563eb;
+  border-color: #60a5fa;
+  transform: translateY(-50%) scale(1.1);
+}
+
+.toolbar-scroll-hint-btn.left {
+  left: 4px;
+}
+
+.toolbar-scroll-hint-btn.right {
+  right: 4px;
+}
+
 

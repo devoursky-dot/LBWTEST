@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useHorizontalToolbarScroll } from './lib/scrollModule';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
@@ -279,6 +280,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 툴바 숨기기/펼치기 토글 상태 (사용자 스케치 ○)
   const [isToolbarCollapsed, setIsToolbarCollapsed] = useState(false);
+
+  // 툴바 화면 폭 초과 시 가로 스크롤 & 마우스 휠 & 좌우 힌트 모듈
+  const {
+    containerRef: toolbarScrollRef,
+    canScrollLeft: canToolbarScrollLeft,
+    canScrollRight: canToolbarScrollRight,
+    scrollToLeft: scrollToolbarToLeft,
+    scrollToRight: scrollToolbarToRight
+  } = useHorizontalToolbarScroll();
 
   // --- 3. 멀티페이지 공책 상태 ---
   const [pages, setPages] = useState<LessonPage[]>([
@@ -2144,31 +2154,42 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           <IconCollapse size={20} isCollapsed={true} />
         </button>
       ) : (
-        <div
-          id="student-main-toolbar"
-          className="student-floating-toolbar student-toolbar"
-          style={{
-            position: 'absolute',
-            top: 'max(10px, env(safe-area-inset-top, 10px))',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 1050,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            padding: '4px 8px',
-            borderRadius: '9999px',
-            background: 'rgba(18, 20, 26, 0.92)',
-            backdropFilter: 'blur(20px)',
-            WebkitBackdropFilter: 'blur(20px)',
-            border: '1px solid rgba(255, 255, 255, 0.14)',
-            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.2) inset',
-            maxWidth: 'calc(100vw - 20px)',
-            overflowX: 'auto',
-            overflowY: 'visible',
-            scrollbarWidth: 'none'
-          }}
-        >
+        <div className="student-floating-toolbar-wrapper">
+          {canToolbarScrollLeft && (
+            <button
+              id="btn-toolbar-scroll-left"
+              type="button"
+              className="toolbar-scroll-hint-btn left"
+              onClick={() => scrollToolbarToLeft(140)}
+              title="도구 왼쪽으로 스크롤"
+            >
+              ◀
+            </button>
+          )}
+
+          <div
+            id="student-main-toolbar"
+            ref={toolbarScrollRef}
+            className="student-floating-toolbar student-toolbar"
+            style={{
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '4px 8px',
+              borderRadius: '9999px',
+              background: 'rgba(18, 20, 26, 0.92)',
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255, 255, 255, 0.14)',
+              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.2) inset',
+              maxWidth: 'calc(100vw - 20px)',
+              overflowX: 'auto',
+              overflowY: 'visible',
+              scrollbarWidth: 'none',
+              touchAction: 'pan-x'
+            }}
+          >
           {/* 1. [○ 툴바숨기기 토글] */}
           <button
             id="btn-collapse-toolbar"
@@ -2517,7 +2538,20 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             <IconFitWidth size={18} />
           </button>
         </div>
-      )}
+
+        {canToolbarScrollRight && (
+          <button
+            id="btn-toolbar-scroll-right"
+            type="button"
+            className="toolbar-scroll-hint-btn right"
+            onClick={() => scrollToolbarToRight(140)}
+            title="도구 오른쪽으로 스크롤"
+          >
+            ▶
+          </button>
+        )}
+      </div>
+    )}
 
       {/* ====================================================================
           [숨김 메뉴 팝오버] ≡ 스케치: "나머지 모두 여기에 정리"
@@ -4059,33 +4093,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           id="modal-confirm-student-start"
           className="modal-backdrop"
           style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(5, 7, 12, 0.88)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 10001,
-            padding: '16px'
+            zIndex: 10001
           }}
         >
           <div
             className="modal-box"
             style={{
-              width: '100%',
               maxWidth: '430px',
               background: '#161922',
-              border: '1px solid rgba(255, 255, 255, 0.16)',
-              borderRadius: '20px',
-              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.75)',
-              padding: '28px 24px',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              textAlign: 'center',
-              color: '#ffffff'
+              textAlign: 'center'
             }}
           >
             {/* 학교/수업 아이콘 */}
@@ -4636,15 +4655,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         <div
           className="modal-backdrop"
           style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            background: 'rgba(5, 7, 12, 0.85)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '16px'
+            zIndex: 10000
           }}
           onClick={() => setIsLessonPdfPromptOpen(false)}
         >
