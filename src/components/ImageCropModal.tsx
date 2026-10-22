@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { cropImageDataUrl, type CropRect } from '../lib/pdfImporter';
 
 interface ImageCropModalProps {
@@ -231,7 +232,9 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
   const cropBoxWidth = normCrop.w * displayedRect.width;
   const cropBoxHeight = normCrop.h * displayedRect.height;
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
       style={{
         position: 'fixed',
@@ -519,6 +522,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

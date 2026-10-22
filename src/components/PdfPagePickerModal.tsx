@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { renderPdfPageToDataUrl } from '../lib/pdfImporter';
 
 export interface PdfThumbnail {
@@ -192,7 +193,9 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
     }
   };
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
       style={{
         position: 'fixed',
@@ -953,6 +956,7 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

@@ -10,6 +10,7 @@ import {
 } from './lib/pdfImporter';
 import { PdfPagePickerModal } from './components/PdfPagePickerModal';
 import { ImageCropModal } from './components/ImageCropModal';
+import { ModularModal } from './components/ModularModal';
 import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/EmbeddedImageLayer';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
@@ -4087,26 +4088,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </div>
       </main>
 
-            {/* 4-0. 시작 시 학생 확인 & 전체화면 진입 팝업 (로그인 또는 QR 접속 시 항상 전체화면 보장) */}
-      {isConfirmStudentOpen && studentInfo && (
-        <div
-          id="modal-confirm-student-start"
-          className="modal-backdrop"
-          style={{
-            zIndex: 10001
-          }}
-        >
-          <div
-            className="modal-box"
-            style={{
-              maxWidth: '430px',
-              background: '#161922',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              textAlign: 'center'
-            }}
-          >
+            {/* 4-0. 시작 시 학생 확인 & 전체화면 진입 팝업 (ModularModal: Portal + 태블릿 터치 스크롤 엔진 내장) */}
+      <ModularModal
+        isOpen={Boolean(isConfirmStudentOpen && studentInfo)}
+        maxWidth="440px"
+        zIndex={10001}
+        showCloseButton={false}
+      >
+        {studentInfo && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', color: '#ffffff' }}>
             {/* 학교/수업 아이콘 */}
             <div
               style={{
@@ -4206,26 +4196,19 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               내 정보가 아니거나 다른 학생으로 변경하기
             </button>
           </div>
-        </div>
-      )}
+        )}
+      </ModularModal>
 
-{/* 4. 학생 계정 로그인 & 비밀번호 관리 모달 */}
-      {isChangingStudent && (
-        <div className="modal-backdrop" onClick={() => { if (studentInfo) setIsChangingStudent(false); }}>
-          <div className="modal-box" style={{ maxWidth: '440px', background: '#1c202c', color: '#ffffff', borderRadius: '18px', border: '1px solid rgba(255,255,255,0.15)', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '12px', marginBottom: '16px' }}>
-              <div>
-                <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
-                  {studentInfo ? '👨‍🎓 학생 계정 & 비밀번호 관리' : '👨‍🎓 학생 수업 참여 로그인'}
-                </h2>
-                <span style={{ fontSize: '12px', color: '#94a3b8' }}>
-                  {studentInfo ? '비밀번호를 변경하거나 다른 학생으로 전환합니다' : '4자리 학번(1101~3830)과 비밀번호로 로그인하세요'}
-                </span>
-              </div>
-              {studentInfo && (
-                <button className="modal-close-btn" onClick={() => setIsChangingStudent(false)}>✕</button>
-              )}
-            </div>
+{/* 4. 학생 계정 로그인 & 비밀번호 관리 모달 (ModularModal: Portal + 태블릿 터치 스크롤 엔진 내장) */}
+      <ModularModal
+        isOpen={isChangingStudent}
+        onClose={studentInfo ? () => { setIsChangingStudent(false); setAuthErrorMsg(null); } : undefined}
+        title={studentInfo ? '👨‍🎓 학생 계정 & 비밀번호 관리' : '👨‍🎓 학생 수업 참여 로그인'}
+        subtitle={studentInfo ? '비밀번호를 변경하거나 다른 학생으로 전환합니다' : '4자리 학번(1101~3830)과 비밀번호로 로그인하세요'}
+        maxWidth="460px"
+        zIndex={10001}
+        showCloseButton={Boolean(studentInfo)}
+      >
 
             {authErrorMsg && (
               <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '10px 14px', borderRadius: '10px', fontSize: '12.5px', marginBottom: '14px', lineHeight: 1.5 }}>
@@ -4623,9 +4606,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 </div>
               </div>
             )}
-          </div>
-        </div>
-      )}
+      </ModularModal>
 
       {/* 하단 토스트 메시지 */}
       {toastMsg && (
@@ -4650,29 +4631,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         onClose={() => setPdfPickerOpen(false)}
       />
 
-      {/* 5-1. 선생님 수업 학습지 안내 & 분산 다운로드 / 일괄 생성 모달 */}
-      {isLessonPdfPromptOpen && lessonPdfInfo && (
-        <div
-          className="modal-backdrop"
-          style={{
-            zIndex: 10000
-          }}
-          onClick={() => setIsLessonPdfPromptOpen(false)}
-        >
-          <div
-            className="modal-box"
-            style={{
-              width: '100%',
-              maxWidth: '520px',
-              background: '#13161f',
-              borderRadius: '18px',
-              border: '1.5px solid rgba(99, 102, 241, 0.4)',
-              boxShadow: '0 25px 70px rgba(0, 0, 0, 0.85)',
-              padding: '24px',
-              color: '#ffffff'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
+      {/* 5-1. 선생님 수업 학습지 안내 & 분산 다운로드 / 일괄 생성 모달 (ModularModal) */}
+      <ModularModal
+        isOpen={Boolean(isLessonPdfPromptOpen && lessonPdfInfo)}
+        onClose={() => setIsLessonPdfPromptOpen(false)}
+        maxWidth="520px"
+        zIndex={10000}
+        showCloseButton={true}
+      >
+        {lessonPdfInfo && (
+          <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
               <div
                 style={{
@@ -4819,8 +4787,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModularModal>
 
       {/* 6. 이미지/문제 영역 자르기(Crop) 모달 */}
       <ImageCropModal
