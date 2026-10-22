@@ -405,6 +405,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
 
+  // OS 파일 선택창 열림 추적 및 복귀 시 전체화면 터치 유도 확인창 상태
+  const isFilePickerOpenRef = useRef<boolean>(false);
+  const [isResumeFullscreenModalOpen, setIsResumeFullscreenModalOpen] = useState<boolean>(false);
+
   // DOM 참조
   const containerRef = useRef<HTMLDivElement>(null);
   const paperSheetRef = useRef<HTMLDivElement>(null);
@@ -1835,6 +1839,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
   }, [requestFullscreenSafe, isConnectedToBoard]);
 
+  // 파일 선택기(OS 파일 다이얼로그)를 닫고 브라우저로 복귀 시, 전체화면 터치 유도 확인창 자동 활성화
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (isFilePickerOpenRef.current) {
+        isFilePickerOpenRef.current = false;
+        setTimeout(() => {
+          const doc = document as any;
+          const isFull = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+          // 브라우저로 돌아왔을 때 전체화면이 풀려 있고 다른 편집 모달이 열려 있지 않다면 확인창 띄우기
+          if (!isFull && !pdfPickerOpen && !cropModalOpen) {
+            setIsResumeFullscreenModalOpen(true);
+          }
+        }, 300);
+      }
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [pdfPickerOpen, cropModalOpen]);
+
   // ==========================================================================
   // [초경량 백그라운드 필기 동기화 엔진 (온디맨드 호출 & 등록 공용)]
   // ==========================================================================
@@ -2852,6 +2878,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 type="button"
                 className="student-tool-btn"
                 onClick={() => {
+                  isFilePickerOpenRef.current = true;
                   notebookFileInputRef.current?.click();
                   setActivePopup(null);
                 }}
@@ -3494,6 +3521,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               type="button"
               className="g-btn g-btn-primary"
               onClick={() => {
+                isFilePickerOpenRef.current = true;
                 imagePdfInputRef.current?.click();
                 setActivePopup(null);
               }}
@@ -3893,7 +3921,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 id="btn-settings-import-note-file"
                 type="button"
                 className="student-tool-btn"
-                onClick={() => notebookFileInputRef.current?.click()}
+                onClick={() => {
+                  isFilePickerOpenRef.current = true;
+                  notebookFileInputRef.current?.click();
+                }}
                 style={{
                   justifyContent: 'flex-start',
                   fontSize: '11.5px',
@@ -4853,6 +4884,97 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           </div>
         )}
       </ModularModal>
+
+      {/* 5-2. 파일 작업 복귀 시 전체화면 터치 유도 및 울렁거림 방지 확인 모달 (사용자 아이디어 100% 반영) */}
+      <ModularModal
+        isOpen={isResumeFullscreenModalOpen}
+        onClose={() => setIsResumeFullscreenModalOpen(false)}
+        maxWidth="440px"
+        zIndex={10050}
+        showCloseButton={false}
+      >
+        <div style={{ textAlign: 'center', padding: '10px 4px' }}>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '54px',
+            height: '54px',
+            borderRadius: '16px',
+            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(99, 102, 241, 0.2) 100%)',
+            border: '1px solid rgba(99, 102, 241, 0.3)',
+            fontSize: '26px',
+            marginBottom: '14px'
+          }}>
+            📺
+          </div>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#ffffff', margin: '0 0 8px 0' }}>
+            수업 필기로 복귀합니다
+          </h3>
+          <p style={{ fontSize: '13px', color: '#94a3b8', margin: '0 0 20px 0', lineHeight: 1.6 }}>
+            파일 작업을 마치셨습니다.<br />
+            아래 버튼을 터치하시면 <strong>주소창 울렁거림 없이 쾌적한 전체화면</strong>으로 바로 복귀합니다.
+          </p>
+
+          <button
+            type="button"
+            autoFocus
+            onClick={() => {
+              requestFullscreenSafe();
+              setIsResumeFullscreenModalOpen(false);
+            }}
+            style={{
+              width: '100%',
+              padding: '14px',
+              borderRadius: '12px',
+              border: 'none',
+              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+              color: '#ffffff',
+              fontSize: '15px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 8px 24px rgba(59, 130, 246, 0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            <span>🚀</span>
+            <span>전체화면으로 계속하기</span>
+          </button>
+        </div>
+      </ModularModal>
+
+      {/* 전체화면 복귀 상단 플로팅 칩 (W3C 터치 유도용) */}
+      {!isFullscreen && isConnectedToBoard && !isResumeFullscreenModalOpen && !cropModalOpen && !pdfPickerOpen && (
+        <button
+          type="button"
+          onClick={requestFullscreenSafe}
+          style={{
+            position: 'fixed',
+            top: 'max(14px, env(safe-area-inset-top, 14px))',
+            right: '16px',
+            zIndex: 1060,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '7px 14px',
+            borderRadius: '20px',
+            background: 'rgba(234, 179, 8, 0.95)',
+            color: '#1e293b',
+            fontWeight: 700,
+            fontSize: '12px',
+            border: 'none',
+            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.4)',
+            cursor: 'pointer'
+          }}
+          title="클릭하여 주소창을 숨기고 넓은 전체화면으로 필기합니다."
+        >
+          <span>📺</span>
+          <span>전체화면 켜기</span>
+        </button>
+      )}
 
       {/* 6. 이미지/문제 영역 자르기(Crop) 모달 */}
       <ImageCropModal
