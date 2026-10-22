@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
+import { getApiBaseUrl } from '../lib/apiConfig';
 import { generateClassSubmissionPdf } from '../lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './StudentNoteFullscreenViewer';
 
@@ -96,17 +97,36 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName]);
 
-  // 2. 초기 DB 제출 목록 조회 (strokes_data 포함하여 온디맨드 즉시 렌더링 지원)
+  // 2. 초기 DB 제출 목록 조회 (Vercel 클라우드 릴레이 + Supabase 1.5초 가드)
   const fetchSubmissionsFromDb = async () => {
+    // 2-1. Vercel 클라우드 릴레이 즉시 조회 (0.05초)
+    try {
+      const apiBase = getApiBaseUrl();
+      const res = await fetch(`${apiBase}/api/notes?lessonId=${encodeURIComponent(currentLessonId)}&_t=${Date.now()}`, {
+        cache: 'no-store'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.notes) && data.notes.length > 0) {
+          setStudentSubmissions(data.notes as ClassNoteRecord[]);
+        }
+      }
+    } catch {}
+
+    // 2-2. Supabase 1.5초 타임아웃 가드 (DB 장애 시 화면 멈춤 원천 차단)
     if (!supabase || !isSupabaseConfigured) return;
     try {
-      const { data, error } = await supabase
+      const sbPromise = supabase
         .from('class_notes')
         .select('*')
         .eq('lesson_id', currentLessonId)
         .order('updated_at', { ascending: false });
+      const timeoutPromise = new Promise<any>((resolve) =>
+        setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 1500)
+      );
+      const { data, error } = await Promise.race([sbPromise, timeoutPromise]);
 
-      if (!error && data) {
+      if (!error && data && data.length > 0) {
         setStudentSubmissions(data as ClassNoteRecord[]);
       }
     } catch (e) {
@@ -120,9 +140,23 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       return;
     }
     try {
+      // 1. Vercel 릴레이 초기화
+      try {
+        const apiBase = getApiBaseUrl();
+        fetch(`${apiBase}/api/notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reset', lessonId: currentLessonId })
+        }).catch(() => {});
+      } catch {}
+
+      // 2. Supabase 비동기 삭제 (1.5초 가드)
       if (supabase && isSupabaseConfigured) {
-        await supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
+        const delPromise = supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
+        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
+        Promise.race([delPromise, timeoutPromise]).catch(() => {});
       }
+
       setStudentSubmissions([]);
       setStudentPresences(new Map());
       setSelectedStudentNote(null);

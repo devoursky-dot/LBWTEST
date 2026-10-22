@@ -674,12 +674,18 @@ export default function App() {
   const handleOpenQrLesson = async (item: DriveItem) => {
     const currentLessonId = item.folderId || item.id;
     let existingCount = 0;
+
+    // ⚡ 1.2초 타임아웃 가드 (Supabase 일시중지/지연 시 화면 멈춤 원천 차단)
     if (supabase && isSupabaseConfigured) {
       try {
-        const { count, error } = await supabase
+        const sbPromise = supabase
           .from('class_notes')
           .select('id', { count: 'exact', head: true })
           .eq('lesson_id', currentLessonId);
+        const timeoutPromise = new Promise<any>((resolve) =>
+          setTimeout(() => resolve({ count: null, error: new Error('TIMEOUT') }), 1200)
+        );
+        const { count, error } = await Promise.race([sbPromise, timeoutPromise]);
         if (!error && typeof count === 'number') {
           existingCount = count;
         }
@@ -703,14 +709,28 @@ export default function App() {
   // 실제 QR 수업 대시보드 진입 실행 함수
   const startQrLessonViewer = async (item: DriveItem, clearExisting: boolean) => {
     const currentLessonId = item.folderId || item.id;
-    if (clearExisting && supabase && isSupabaseConfigured) {
+    if (clearExisting) {
+      // 1. Vercel 클라우드 릴레이 세션 초기화
       try {
-        await supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
-        setStudentSubmissions([]);
-        showToast('✨ 이전 기록을 모두 초기화하고 새 수업을 시작합니다.');
-      } catch (e) {
-        console.warn('초기화 오류:', e);
+        fetch(`${apiBase}/api/notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reset', lessonId: currentLessonId })
+        }).catch(() => {});
+      } catch {}
+
+      // 2. Supabase 비동기 삭제 (비차단 1.5초 타임아웃 가드)
+      if (supabase && isSupabaseConfigured) {
+        try {
+          const delPromise = supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
+          const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
+          Promise.race([delPromise, timeoutPromise]).catch(() => {});
+        } catch (e) {
+          console.warn('초기화 오류:', e);
+        }
       }
+      setStudentSubmissions([]);
+      showToast('✨ 이전 기록을 모두 초기화하고 새 수업을 시작합니다.');
     }
 
     setIsQrLessonInitialClear(clearExisting);

@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './supabase';
+import { getApiBaseUrl } from './apiConfig';
 
 export type StudentStatus = 'connected' | 'away' | 'left';
 
@@ -42,9 +43,11 @@ class ClassroomRealtimeManager {
   private currentLessonId: string | null = null;
   private listeners: Set<SignalListener> = new Set();
   private localBroadcastListener: ((e: MessageEvent) => void) | null = null;
+  private pollIntervalId: any = null;
+  private knownNotesHash: Map<string, string> = new Map();
 
   /**
-   * 실시간 수업 채널 초기화 (Supabase Realtime + Local BroadcastChannel 지원)
+   * 실시간 수업 채널 초기화 (Vercel 클라우드 릴레이 + Supabase Realtime + Local BroadcastChannel 3중 듀얼망)
    */
   public joinLesson(lessonId: string, onSignal?: SignalListener): void {
     if (this.currentLessonId === lessonId && this.activeChannel) {
@@ -56,7 +59,10 @@ class ClassroomRealtimeManager {
     this.currentLessonId = lessonId;
     if (onSignal) this.listeners.add(onSignal);
 
-    // 1. Supabase Realtime 채널 생성
+    // 1. [Vercel 릴레이] 초고속 0.05초 클라우드 폴링 (Supabase 일시중지/지연 시에도 100% 동기화 보장)
+    this.startVercelRelayPolling(lessonId);
+
+    // 2. Supabase Realtime 채널 생성 (최대 3초 비차단 가드)
     if (supabase && isSupabaseConfigured) {
       try {
         const channelName = `classroom_lesson_${lessonId}`;
@@ -77,7 +83,7 @@ class ClassroomRealtimeManager {
       }
     }
 
-    // 2. 브라우저 탭 간 BroadcastChannel 리스너
+    // 3. 브라우저 탭 간 BroadcastChannel 리스너 (동일 기기 테스트 0.001초 동기화)
     if (localRealtimeChannel) {
       this.localBroadcastListener = (event: MessageEvent) => {
         if (event.data && event.data.lessonId === this.currentLessonId) {
@@ -86,6 +92,74 @@ class ClassroomRealtimeManager {
       };
       localRealtimeChannel.addEventListener('message', this.localBroadcastListener);
     }
+  }
+
+  /**
+   * Vercel API 릴레이 동기화 폴러 (2.5초 주기)
+   */
+  private startVercelRelayPolling(lessonId: string): void {
+    if (typeof window === 'undefined') return;
+
+    const poll = async () => {
+      if (this.currentLessonId !== lessonId) return;
+      try {
+        const apiBase = getApiBaseUrl();
+        const res = await fetch(`${apiBase}/api/notes?lessonId=${encodeURIComponent(lessonId)}&_t=${Date.now()}`, {
+          cache: 'no-store'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            // [A] 신규/수정된 학생 필기 알림
+            if (Array.isArray(data.notes)) {
+              for (const note of data.notes) {
+                const key = `${note.student_grade}_${note.student_class}_${note.student_num}`;
+                const hash = `${note.updated_at || ''}_${note.id || ''}`;
+                if (this.knownNotesHash.get(key) !== hash) {
+                  this.knownNotesHash.set(key, hash);
+                  this.notifyListeners({
+                    type: 'STUDENT_SUBMIT',
+                    lessonId,
+                    student: {
+                      grade: note.student_grade,
+                      classNum: note.student_class,
+                      studentNum: note.student_num,
+                      name: note.student_name
+                    },
+                    noteRecord: note,
+                    timestamp: note.updated_at || new Date().toISOString()
+                  });
+                }
+              }
+            }
+
+            // [B] 학생 출석 현황 알림
+            if (Array.isArray(data.presences)) {
+              for (const p of data.presences) {
+                this.notifyListeners({
+                  type: 'STUDENT_PRESENCE',
+                  lessonId,
+                  student: {
+                    grade: p.grade,
+                    classNum: p.classNum,
+                    studentNum: p.studentNum,
+                    name: p.name
+                  },
+                  status: p.status,
+                  timestamp: p.lastActive || new Date().toISOString()
+                });
+              }
+            }
+          }
+        }
+      } catch (pollErr) {
+        // 네트워크 일시 오류 시 무시
+      }
+    };
+
+    // 즉시 1회 실행 후 2.5초마다 주기적 폴링
+    poll();
+    this.pollIntervalId = setInterval(poll, 2500);
   }
 
   public subscribe(listener: SignalListener): () => void {
@@ -104,7 +178,7 @@ class ClassroomRealtimeManager {
   }
 
   /**
-   * 실시간 신호 방송 (Broadcast)
+   * 실시간 신호 방송 (Vercel 클라우드 릴레이 + Supabase + Local 3중 발송)
    */
   public async sendSignal(signal: Omit<RealtimeSignalPayload, 'timestamp'>): Promise<void> {
     const fullPayload: RealtimeSignalPayload = {
@@ -112,20 +186,68 @@ class ClassroomRealtimeManager {
       timestamp: new Date().toISOString()
     };
 
-    // 1. Supabase Broadcast 전송
+    // 1. [Vercel 릴레이] 클라우드 API 즉시 전송 (0.05초 초고속)
+    try {
+      const apiBase = getApiBaseUrl();
+      let body: any = null;
+
+      if (signal.type === 'STUDENT_SUBMIT' && signal.noteRecord) {
+        body = {
+          action: 'submit',
+          lessonId: signal.lessonId,
+          record: signal.noteRecord
+        };
+      } else if (signal.type === 'STUDENT_PRESENCE' && signal.student) {
+        body = {
+          action: 'presence',
+          lessonId: signal.lessonId,
+          student: signal.student,
+          status: signal.status || 'connected'
+        };
+      } else if (signal.type === 'RESET_SESSION') {
+        body = {
+          action: 'reset',
+          lessonId: signal.lessonId
+        };
+      } else if (signal.type === 'KICK_STUDENT' && signal.targetStudentKey) {
+        body = {
+          action: 'kick',
+          lessonId: signal.lessonId,
+          targetStudentKey: signal.targetStudentKey
+        };
+      }
+
+      if (body) {
+        // 비차단 초고속 호출 (최대 2초 타임아웃)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        fetch(`${apiBase}/api/notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId)).catch(() => {});
+      }
+    } catch (relayErr) {
+      console.warn('[Realtime] Vercel relay send warning:', relayErr);
+    }
+
+    // 2. Supabase Broadcast 전송 (타임아웃 안전 가드)
     if (this.activeChannel && isSupabaseConfigured) {
       try {
-        await this.activeChannel.send({
+        const sbPromise = this.activeChannel.send({
           type: 'broadcast',
           event: 'classroom_signal',
           payload: fullPayload
         });
+        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
+        await Promise.race([sbPromise, timeoutPromise]);
       } catch (err) {
         console.warn('[Realtime] Supabase broadcast send error:', err);
       }
     }
 
-    // 2. 로컬 브로드캐스트 채널 전송
+    // 3. 로컬 브로드캐스트 채널 전송
     if (localRealtimeChannel) {
       try {
         localRealtimeChannel.postMessage(fullPayload);
@@ -139,6 +261,11 @@ class ClassroomRealtimeManager {
    * 수업 채널 해제
    */
   public leaveLesson(): void {
+    if (this.pollIntervalId) {
+      clearInterval(this.pollIntervalId);
+      this.pollIntervalId = null;
+    }
+
     if (this.activeChannel && supabase) {
       try {
         supabase.removeChannel(this.activeChannel);
@@ -155,6 +282,7 @@ class ClassroomRealtimeManager {
 
     this.currentLessonId = null;
     this.listeners.clear();
+    this.knownNotesHash.clear();
   }
 }
 

@@ -10,6 +10,57 @@ function localDriveApiPlugin(): Plugin {
     name: 'local-drive-api-plugin',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        if (req.url && req.url.startsWith('/api/notes')) {
+          const urlObj = new URL(req.url, 'http://localhost:5173');
+          const lessonId = urlObj.searchParams.get('lessonId');
+          const g = globalThis as any;
+          if (!g.__DEV_NOTES__) g.__DEV_NOTES__ = new Map();
+          if (!g.__DEV_PRESENCES__) g.__DEV_PRESENCES__ = new Map();
+
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+
+          if (req.method === 'GET') {
+            const notesMap = lessonId ? g.__DEV_NOTES__.get(lessonId) : null;
+            const notes = notesMap ? Array.from(notesMap.values()) : [];
+            const presencesMap = lessonId ? g.__DEV_PRESENCES__.get(lessonId) : null;
+            const presences = presencesMap ? Array.from(presencesMap.values()) : [];
+            res.writeHead(200);
+            res.end(JSON.stringify({ success: true, lessonId, notes, presences }));
+            return;
+          }
+
+          if (req.method === 'POST') {
+            let bodyStr = '';
+            req.on('data', chunk => { bodyStr += chunk; });
+            req.on('end', () => {
+              try {
+                const body = JSON.parse(bodyStr || '{}');
+                const targetLessonId = body.lessonId;
+                if (body.action === 'submit' && body.record) {
+                  if (!g.__DEV_NOTES__.has(targetLessonId)) g.__DEV_NOTES__.set(targetLessonId, new Map());
+                  const rec = body.record;
+                  const key = `${rec.student_grade}_${rec.student_class}_${rec.student_num}`;
+                  g.__DEV_NOTES__.get(targetLessonId).set(key, rec);
+                } else if (body.action === 'reset') {
+                  g.__DEV_NOTES__.delete(targetLessonId);
+                  g.__DEV_PRESENCES__.delete(targetLessonId);
+                } else if (body.action === 'kick' && body.targetStudentKey) {
+                  g.__DEV_NOTES__.get(targetLessonId)?.delete(body.targetStudentKey);
+                  g.__DEV_PRESENCES__.get(targetLessonId)?.delete(body.targetStudentKey);
+                }
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true }));
+              } catch (e: any) {
+                res.writeHead(500);
+                res.end(JSON.stringify({ success: false, error: e.message }));
+              }
+            });
+            return;
+          }
+          return;
+        }
+
         if (req.url && req.url.startsWith('/api/drive')) {
           const urlObj = new URL(req.url, 'http://localhost:5173');
           const action = urlObj.searchParams.get('action') || 'list';
