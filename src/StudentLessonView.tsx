@@ -129,6 +129,22 @@ const IconImageDoc: React.FC<{ size?: number; color?: string }> = ({ size = 18, 
   </svg>
 );
 
+/** 취소 (실행 취소 ↩️) 벡터 아이콘 */
+const IconUndo: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7v6h6" />
+    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+  </svg>
+);
+
+/** 되돌리기 (다시 실행 ↪️) 벡터 아이콘 */
+const IconRedo: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 7v6h-6" />
+    <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+  </svg>
+);
+
 /** 폭 맞춤 벡터 아이콘 */
 const IconFitWidth: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = 'currentColor' }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -166,6 +182,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 학생 학번/비밀번호 인증 모달 상태 (학생 정보가 없으면 수업 진입 시 바로 로그인 모달 오픈)
   const [isChangingStudent, setIsChangingStudent] = useState(() => !getSavedStudentInfo());
+  const [isConfirmStudentOpen, setIsConfirmStudentOpen] = useState(() => Boolean(getSavedStudentInfo()));
 
   const [authStudentId, setAuthStudentId] = useState('');
   const [authStudentName, setAuthStudentName] = useState('');
@@ -212,6 +229,48 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 기본 표준: A4 세로 (Portrait)
   const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('portrait');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  // 전체화면 강제 진입 안전 헬퍼 (사용자 제스처 컨텍스트에서 호출)
+  const requestFullscreenSafe = useCallback(() => {
+    try {
+      const doc = document as any;
+      const docEl = document.documentElement as any;
+      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+        if (typeof docEl.requestFullscreen === 'function') {
+          docEl.requestFullscreen().catch(() => {});
+        } else if (typeof docEl.webkitRequestFullscreen === 'function') {
+          docEl.webkitRequestFullscreen();
+        }
+        setIsFullscreen(true);
+      }
+    } catch (e) {
+      console.warn('전체화면 요청 예외:', e);
+    }
+  }, []);
+
+  // 전체화면 토글 (iOS Safari 등 미지원 환경 안전 방어)
+  const toggleFullscreen = useCallback(() => {
+    try {
+      const doc = document as any;
+      const docEl = document.documentElement as any;
+      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+        if (typeof docEl.requestFullscreen === 'function') {
+          docEl.requestFullscreen().catch(() => {});
+        } else if (typeof docEl.webkitRequestFullscreen === 'function') {
+          docEl.webkitRequestFullscreen();
+        }
+        setIsFullscreen(true);
+      } else {
+        if (typeof doc.exitFullscreen === 'function') {
+          doc.exitFullscreen().catch(() => {});
+        } else if (typeof doc.webkitExitFullscreen === 'function') {
+          doc.webkitExitFullscreen();
+        }
+        setIsFullscreen(false);
+      }
+    } catch (e) {
+      console.warn('전체화면 전환 예외:', e);
+    }
+  }, []);
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -451,6 +510,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setStudentInfo(info);
       saveSavedStudentInfo(info);
       setIsChangingStudent(false);
+      requestFullscreenSafe();
       setAuthPassword('');
       setAuthNewPassword('');
       setAuthConfirmPassword('');
@@ -593,33 +653,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [lessonId, studentInfo]);
 
-  // 전체화면 토글 (iOS Safari 등 미지원 환경 안전 방어)
-  const toggleFullscreen = () => {
-    try {
-      const doc = document as any;
-      const docEl = document.documentElement as any;
-      if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
-        if (typeof docEl.requestFullscreen === 'function') {
-          docEl.requestFullscreen().catch(() => {});
-          setIsFullscreen(true);
-        } else if (typeof docEl.webkitRequestFullscreen === 'function') {
-          docEl.webkitRequestFullscreen();
-          setIsFullscreen(true);
-        } else {
-          showToast('ℹ️ 모바일 사파리는 브라우저 보안 정책상 전체화면 API를 지원하지 않습니다.');
-        }
-      } else {
-        if (typeof doc.exitFullscreen === 'function') {
-          doc.exitFullscreen().catch(() => {});
-        } else if (typeof doc.webkitExitFullscreen === 'function') {
-          doc.webkitExitFullscreen();
-        }
-        setIsFullscreen(false);
-      }
-    } catch (e) {
-      console.warn('전체화면 전환 예외:', e);
-    }
-  };
+
 
 
 
@@ -722,6 +756,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 파일 선택 처리 (PDF 또는 일반 이미지)
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    requestFullscreenSafe();
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -1742,20 +1777,21 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (onExit) onExit();
   };
 
-  // 전체화면 상태 동기화 리스너 (이탈 감지 기능 제거하여 억울한 빨간색 경고 원천 차단)
+  // 전체화면 상태 동기화 리스너 (모든 브라우저 및 Safari webkit 지원)
   useEffect(() => {
-    if (!isConnectedToBoard || !studentInfo) return;
-
     const handleFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const doc = document as any;
+      setIsFullscreen(Boolean(doc.fullscreenElement || doc.webkitFullscreenElement));
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, [isConnectedToBoard, studentInfo, lessonId]);
+  }, []);
 
   // ==========================================================================
   // [초경량 백그라운드 필기 동기화 엔진 (온디맨드 호출 & 등록 공용)]
@@ -2039,6 +2075,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // [공책 편집 파일(.lbwnote / .json) 불러오기]
   const handleImportNotebookFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    requestFullscreenSafe();
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
@@ -2356,6 +2393,62 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           >
             <IconImageDoc size={18} color={activePopup === 'image' ? '#a5b4fc' : '#e2e8f0'} />
           </button>
+
+          <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
+
+          {/* 7. [↩️ 취소] & [↪️ 되돌리기] */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+            <button
+              id="btn-tool-undo"
+              type="button"
+              className="student-tool-btn"
+              disabled={undoStack.length === 0}
+              onClick={handleUndo}
+              style={{
+                width: '34px',
+                height: '34px',
+                padding: 0,
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: '1px solid transparent',
+                color: undoStack.length > 0 ? '#e2e8f0' : '#475569',
+                opacity: undoStack.length > 0 ? 1 : 0.35,
+                cursor: undoStack.length > 0 ? 'pointer' : 'not-allowed',
+                flexShrink: 0
+              }}
+              title="취소 (방금 그린 획 실행 취소, Ctrl+Z)"
+            >
+              <IconUndo size={17} />
+            </button>
+            <button
+              id="btn-tool-redo"
+              type="button"
+              className="student-tool-btn"
+              disabled={redoStack.length === 0}
+              onClick={handleRedo}
+              style={{
+                width: '34px',
+                height: '34px',
+                padding: 0,
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'transparent',
+                border: '1px solid transparent',
+                color: redoStack.length > 0 ? '#e2e8f0' : '#475569',
+                opacity: redoStack.length > 0 ? 1 : 0.35,
+                cursor: redoStack.length > 0 ? 'pointer' : 'not-allowed',
+                flexShrink: 0
+              }}
+              title="되돌리기 (취소한 획 다시 실행, Ctrl+Y)"
+            >
+              <IconRedo size={17} />
+            </button>
+          </div>
 
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
 
@@ -3768,6 +3861,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         onWheel={handleWheel}
         onPointerDown={() => {
           if (activePopup) setActivePopup(null);
+          requestFullscreenSafe();
         }}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         style={{
@@ -3959,7 +4053,144 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </div>
       </main>
 
-      {/* 4. 학생 계정 로그인 & 비밀번호 관리 모달 */}
+            {/* 4-0. 시작 시 학생 확인 & 전체화면 진입 팝업 (로그인 또는 QR 접속 시 항상 전체화면 보장) */}
+      {isConfirmStudentOpen && studentInfo && (
+        <div
+          id="modal-confirm-student-start"
+          className="modal-backdrop"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(5, 7, 12, 0.88)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10001,
+            padding: '16px'
+          }}
+        >
+          <div
+            className="modal-box"
+            style={{
+              width: '100%',
+              maxWidth: '430px',
+              background: '#161922',
+              border: '1px solid rgba(255, 255, 255, 0.16)',
+              borderRadius: '20px',
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.75)',
+              padding: '28px 24px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              color: '#ffffff'
+            }}
+          >
+            {/* 학교/수업 아이콘 */}
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '16px',
+                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
+                border: '1px solid rgba(96, 165, 250, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '28px',
+                marginBottom: '14px'
+              }}
+            >
+              🏫
+            </div>
+
+            <span style={{ fontSize: '13px', color: '#93c5fd', fontWeight: 600, letterSpacing: '0.5px' }}>
+              디지털 스마트 노트 수업 참여
+            </span>
+            <h2 style={{ fontSize: '19px', fontWeight: 800, margin: '4px 0 18px 0', color: '#ffffff' }}>
+              {lessonTitle}
+            </h2>
+
+            {/* 학생 신원 확인 카드 */}
+            <div
+              style={{
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '14px',
+                padding: '14px 16px',
+                marginBottom: '20px',
+                boxSizing: 'border-box'
+              }}
+            >
+              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '6px' }}>참여 학생 확인</div>
+              <div style={{ fontSize: '17px', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                <span style={{ color: '#60a5fa' }}>{studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번</span>
+                <span>{studentInfo.name}</span>
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#34d399', marginTop: '6px' }}>
+                ✓ 본인 정보가 맞으면 아래 버튼을 눌러 전체화면으로 시작하세요.
+              </div>
+            </div>
+
+            {/* 전체화면으로 수업 시작하기 */}
+            <button
+              id="btn-confirm-start-lesson-fullscreen"
+              type="button"
+              className="g-btn g-btn-primary"
+              onClick={() => {
+                requestFullscreenSafe();
+                setIsConfirmStudentOpen(false);
+                showToast(`👋 ${studentInfo.name} 학생, 수업에 오신 것을 환영합니다! (전체화면)`);
+              }}
+              style={{
+                width: '100%',
+                padding: '13px 20px',
+                fontSize: '15px',
+                fontWeight: 800,
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                color: '#ffffff',
+                border: '1px solid #60a5fa',
+                boxShadow: '0 6px 20px rgba(37, 99, 235, 0.45)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                marginBottom: '10px'
+              }}
+            >
+              <span>⛶</span>
+              <span>전체화면으로 수업 시작하기</span>
+            </button>
+
+            {/* 다른 학생으로 로그인 또는 변경 */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsConfirmStudentOpen(false);
+                setIsChangingStudent(true);
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#94a3b8',
+                fontSize: '12.5px',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                padding: '6px'
+              }}
+            >
+              내 정보가 아니거나 다른 학생으로 변경하기
+            </button>
+          </div>
+        </div>
+      )}
+
+{/* 4. 학생 계정 로그인 & 비밀번호 관리 모달 */}
       {isChangingStudent && (
         <div className="modal-backdrop" onClick={() => { if (studentInfo) setIsChangingStudent(false); }}>
           <div className="modal-box" style={{ maxWidth: '440px', background: '#1c202c', color: '#ffffff', borderRadius: '18px', border: '1px solid rgba(255,255,255,0.15)', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
