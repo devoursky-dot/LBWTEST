@@ -8,7 +8,6 @@ import {
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
-  renderPdfThumbnailsProgressive,
   renderPdfPageToDataUrl,
   loadImageFile,
   type CropRect
@@ -20,6 +19,12 @@ import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/Embedde
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { PageOverviewModal } from './components/PageOverviewModal';
 import { ToolbarPageNavigator } from './components/ToolbarPageNavigator';
+import {
+  OfflineStatusBadge,
+  initOfflineSync,
+  enqueuePendingSubmission,
+  saveOfflineNotebookDraft
+} from './modules/offline';
 import {
   defaultLassoFocusConfig,
   LassoFocusCanvasOverlay,
@@ -848,13 +853,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         setPdfTotalPages(totalP);
         setIsPdfLoading(false);
 
-        // REA 아키텍처 기반 점진적(Progressive/Streaming) 썸네일 고속 생성
-        renderPdfThumbnailsProgressive(pdfDoc, (newThumb) => {
-          setPdfThumbnails(prev => {
-            if (prev.some(t => t.pageNumber === newThumb.pageNumber)) return prev;
-            return [...prev, newThumb].sort((a, b) => a.pageNumber - b.pageNumber);
-          });
-        }, 180);
+        // 썸네일 자동 생성 루프를 제거하여 화면 번쩍임 및 과부하 100% 방지
+        // 사용자가 터치한 페이지만 온디맨드로 선명하게 렌더링합니다.
       } catch (err: any) {
         console.error('PDF 로드 실패:', err);
         showToast(`❌ PDF 로드 실패: ${err.message || '파일을 열 수 없습니다.'}`);
@@ -2120,6 +2120,34 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         updated_at: now
       };
 
+      const curStudentId = studentInfo ? studentInfoToId(studentInfo) : 'anonymous';
+
+      // 4-0. [오프라인 모듈]: IndexedDB 영구 저장소에 5MB 한계 없이 안전 백업
+      saveOfflineNotebookDraft(lessonId, curStudentId, {
+        student: studentInfo,
+        lessonId,
+        pages: optimizedPages,
+        orientation,
+        paperTheme,
+        timestamp: now
+      });
+
+      // 4-0-1. 오프라인 상태 감지 시: Outbox 대기열에 담고 즉시 완료 처리
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await enqueuePendingSubmission({
+          lessonId,
+          studentId: curStudentId,
+          studentName: studentInfo.name,
+          classNumber: `${studentInfo.grade}-${studentInfo.classNum}`,
+          payload: record
+        });
+        if (!quiet) {
+          showToast(`📡 오프라인 상태입니다. 기기에 안전하게 저장되었으며, 연결 시 자동 제출됩니다.`);
+        }
+        setHasSavedNote(true);
+        return record;
+      }
+
       // 4-1. 🚀 [Vercel 클라우드 릴레이] 초고속 0.05초 즉시 등록 (Supabase 장애/지연 시에도 100% 가용성 보장)
       try {
         const apiBase = getApiBaseUrl();
@@ -2198,6 +2226,36 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return null;
     }
   }, [studentInfo, pages, currentPageIndex, strokes, textItems, fullPageBackground, embeddedImages, lessonId, orientation]);
+
+  // [오프라인 모듈]: 백그라운드 자동 재전송 엔진 가동
+  useEffect(() => {
+    const cleanup = initOfflineSync(async (item) => {
+      try {
+        const apiBase = getApiBaseUrl();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(`${apiBase}/api/notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'submit',
+            lessonId: item.lessonId,
+            record: item.payload
+          }),
+          signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId));
+
+        if (res.ok) {
+          showToast(`🚀 '${item.studentName}' 학생의 오프라인 필기가 전자칠판으로 자동 전송되었습니다!`);
+          return true;
+        }
+      } catch (err) {
+        console.warn('[OfflineSync] 자동 전송 지연:', err);
+      }
+      return false;
+    });
+    return cleanup;
+  }, []);
 
   // 실시간 신호 리스너 (선생님이 특정 학생을 클릭하거나 전체 동기화 요청 시)
   useEffect(() => {
@@ -2553,6 +2611,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onOpenOverview={() => setIsPageOverviewOpen(true)}
             onAddPage={handleAddPage}
           />
+
+          {/* [오프라인 모듈]: 네트워크 상태 및 동기화 대기열 배지 */}
+          <OfflineStatusBadge style={{ marginLeft: '4px', flexShrink: 0 }} />
 
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { renderPdfPageToDataUrl } from '../lib/pdfImporter';
 
@@ -29,26 +29,20 @@ export interface PdfPagePickerModalProps {
  */
 interface PageCardProps {
   pageNumber: number;
-  thumbUrl?: string;
   isChecked: boolean;
   isSingleSelected: boolean;
   isSelectionMode: boolean;
   isProcessing: boolean;
   onCardClick: (pNum: number) => void;
-  onCropClick: (pNum: number) => void;
-  onFullPageClick: (pNum: number) => void;
 }
 
 const PdfPageCard: React.FC<PageCardProps> = React.memo(({
   pageNumber,
-  thumbUrl,
   isChecked,
   isSingleSelected,
   isSelectionMode,
   isProcessing,
-  onCardClick,
-  onCropClick,
-  onFullPageClick
+  onCardClick
 }) => {
   const isHighlighted = isChecked || isSingleSelected;
 
@@ -58,8 +52,8 @@ const PdfPageCard: React.FC<PageCardProps> = React.memo(({
       style={{
         position: 'relative',
         aspectRatio: '1 / 1.414', // A4 비율
-        background: '#ffffff',
-        border: isHighlighted ? '3px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.18)',
+        background: isHighlighted ? '#f0fdf4' : '#ffffff',
+        border: isHighlighted ? '3px solid #3b82f6' : '1.5px solid #cbd5e1',
         borderRadius: '12px',
         overflow: 'hidden',
         display: 'flex',
@@ -68,45 +62,45 @@ const PdfPageCard: React.FC<PageCardProps> = React.memo(({
         justifyContent: 'center',
         cursor: 'pointer',
         userSelect: 'none',
-        transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+        transition: 'transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease',
         boxShadow: isHighlighted
-          ? '0 0 20px rgba(59, 130, 246, 0.55), 0 8px 16px rgba(0, 0, 0, 0.5)'
-          : '0 4px 14px rgba(0, 0, 0, 0.35)'
+          ? '0 0 18px rgba(59, 130, 246, 0.5), 0 6px 14px rgba(0, 0, 0, 0.4)'
+          : '0 2px 8px rgba(0, 0, 0, 0.15)'
       }}
-      title={`${pageNumber}쪽 (터치하여 선택 또는 아래 버튼으로 즉시 자르기/배경)`}
+      title={`${pageNumber}쪽 (터치하여 크게 보기)`}
     >
-      {/* 실제 PDF 페이지 썸네일 이미지 */}
-      {thumbUrl ? (
-        <img
-          src={thumbUrl}
-          alt={`${pageNumber}쪽`}
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain',
-            background: '#ffffff',
-            display: 'block'
-          }}
-        />
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '8px' }}>
-          <span style={{ fontSize: '24px', opacity: 0.6 }}>📄</span>
-          <span style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
-            {pageNumber}쪽
+      {/* 종이 상단 가상 헤더 라인 장식 */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '6px',
+          background: isHighlighted ? '#3b82f6' : '#e2e8f0'
+        }}
+      />
+
+      {/* 중앙: 문서 아이콘 및 큼직한 페이지 번호 */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ fontSize: '32px', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.15))' }}>📄</span>
+        <span style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginTop: '6px', letterSpacing: '-0.3px' }}>
+          {pageNumber}쪽
+        </span>
+        {!isSelectionMode && (
+          <span style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', fontWeight: 600 }}>
+            터치하여 보기 🔍
           </span>
-          <span style={{ fontSize: '10px', color: '#64748b', marginTop: '2px' }}>
-            렌더링 중...
-          </span>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* 쪽수 배지 (좌측 상단) */}
       <div
         style={{
           position: 'absolute',
-          top: '6px',
-          left: '6px',
-          background: 'rgba(15, 23, 42, 0.88)',
+          top: '10px',
+          left: '8px',
+          background: 'rgba(15, 23, 42, 0.85)',
           backdropFilter: 'blur(4px)',
           color: '#38bdf8',
           padding: '2px 7px',
@@ -114,11 +108,11 @@ const PdfPageCard: React.FC<PageCardProps> = React.memo(({
           fontSize: '11px',
           fontWeight: 800,
           border: '1px solid rgba(56, 189, 248, 0.4)',
-          boxShadow: '0 2px 5px rgba(0,0,0,0.5)',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
           zIndex: 3
         }}
       >
-        {pageNumber}쪽
+        {pageNumber}
       </div>
 
       {/* 다중 선택 모드 체크박스 */}
@@ -126,88 +120,24 @@ const PdfPageCard: React.FC<PageCardProps> = React.memo(({
         <div
           style={{
             position: 'absolute',
-            top: '6px',
-            right: '6px',
-            width: '22px',
-            height: '22px',
-            borderRadius: '5px',
-            background: isChecked ? '#3b82f6' : 'rgba(0, 0, 0, 0.6)',
+            top: '8px',
+            right: '8px',
+            width: '24px',
+            height: '24px',
+            borderRadius: '6px',
+            background: isChecked ? '#3b82f6' : 'rgba(0, 0, 0, 0.4)',
             border: '2px solid #ffffff',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontSize: '13px',
+            fontSize: '14px',
             color: '#ffffff',
             fontWeight: 900,
-            zIndex: 3
+            zIndex: 3,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.4)'
           }}
         >
           {isChecked ? '✓' : ''}
-        </div>
-      )}
-
-      {/* 일반 모드: 카드 하단 원터치 빠른 액션 버튼 바 (자르기 / 배경) */}
-      {!isSelectionMode && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '5px',
-            left: '5px',
-            right: '5px',
-            display: 'flex',
-            gap: '4px',
-            zIndex: 3
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            onClick={() => onCropClick(pageNumber)}
-            style={{
-              flex: 1,
-              padding: '6px 2px',
-              borderRadius: '6px',
-              border: 'none',
-              background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-              color: '#ffffff',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '2px'
-            }}
-            title="이 쪽에서 문제 영역 잘라내기"
-          >
-            <span>✂️</span>
-            <span>자르기</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onFullPageClick(pageNumber)}
-            style={{
-              flex: 1,
-              padding: '6px 2px',
-              borderRadius: '6px',
-              border: 'none',
-              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-              color: '#ffffff',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '2px'
-            }}
-            title="이 쪽 전체를 공책에 배경으로 넣기"
-          >
-            <span>📄</span>
-            <span>배경</span>
-          </button>
         </div>
       )}
 
@@ -241,7 +171,7 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   fileName,
   pdfDocProxy,
   totalPages = 0,
-  thumbnails = [],
+  thumbnails: _thumbnails = [],
   fileObject,
   downloadUrl,
   onSelectPage,
@@ -268,17 +198,6 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
 
-  // 썸네일 고속 O(1) 맵 캐시
-  const thumbnailMap = useMemo(() => {
-    const map = new Map<number, string>();
-    if (thumbnails) {
-      for (const t of thumbnails) {
-        map.set(t.pageNumber, t.dataUrl);
-      }
-    }
-    return map;
-  }, [thumbnails]);
-
   // 모달 오픈 시 초기화
   useEffect(() => {
     if (isOpen) {
@@ -293,6 +212,22 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
       setRangeEnd(Math.min(5, totalPageCount));
     }
   }, [isOpen, totalPageCount]);
+
+  // 미리보기 팝업 열려있을 때 좌우 키보드(←, →)로 페이지 넘기기 지원
+  useEffect(() => {
+    if (previewPage === null) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        setPreviewPage(prev => (prev && prev > 1 ? prev - 1 : prev));
+      } else if (e.key === 'ArrowRight') {
+        setPreviewPage(prev => (prev && prev < totalPageCount ? prev + 1 : prev));
+      } else if (e.key === 'Escape') {
+        setPreviewPage(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewPage, totalPageCount]);
 
   // 미리보기 페이지 변경 시 온디맨드 1페이지 렌더링
   useEffect(() => {
@@ -319,7 +254,7 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   }, [previewPage, pdfDocProxy]);
 
   // --------------------------------------------------------------------------
-  // 핸들러: 터치 / 직접 자르기 / 직접 배경 (useCallback 최적화로 불필요한 카드 리렌더링 방지)
+  // 핸들러: 터치 / 직접 자르기 / 직접 배경
   // --------------------------------------------------------------------------
   const handleSelectCropDirect = useCallback((pNum: number) => {
     setProcessingPage(pNum);
@@ -341,7 +276,9 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
           return next;
         });
       } else {
-        setSelectedSinglePage(prev => (prev === pNum ? null : pNum));
+        // 단일 페이지 선택 시: 즉시 해당 페이지의 상세 뷰어(이전/다음 지원)를 오픈!
+        setSelectedSinglePage(pNum);
+        setPreviewPage(pNum);
       }
       return isSel;
     });
@@ -691,14 +628,11 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
               <PdfPageCard
                 key={pNum}
                 pageNumber={pNum}
-                thumbUrl={thumbnailMap.get(pNum)}
                 isChecked={selectedPages.has(pNum)}
                 isSingleSelected={selectedSinglePage === pNum}
                 isSelectionMode={isSelectionMode}
                 isProcessing={processingPage === pNum}
                 onCardClick={handlePageCardClick}
-                onCropClick={handleSelectCropDirect}
-                onFullPageClick={handleSelectFullPageDirect}
               />
             ))}
           </div>
