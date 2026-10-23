@@ -4,9 +4,9 @@
  * 올가미 집중 풀이 코어 연산 엔진 (Zero React Dependency)
  * 
  * 1. 올가미 다각형 기하학 계산 (Bounding Box, 둘레, 자석 스냅)
- * 2. 원본 화면 합성 (배경 + 이미지 + 필기 획 + 텍스트)
+ * 2. 원본 화면 고해상도 슈퍼샘플링 합성 (2x High-DPI Super-sampling)
  * 3. 지능형 배경색 자동 스포이드 추출 (경계면 픽셀 샘플링)
- * 4. 상단 중앙 자동 스케일링 & 클린 풀이 백지 페이지 생성
+ * 4. 고해상도 업스케일링(High-DPI Bicubic Upscaling) & 상단 중앙 스마트 재배치
  * ============================================================================
  */
 
@@ -59,6 +59,10 @@ export interface CreateFocusPageOptions {
   /** 캔버스 너비/높이 */
   A4_WIDTH: number;
   A4_HEIGHT: number;
+  /** 사용자 지정 확대 배율 (0.8x ~ 2.5x) */
+  userScale?: number;
+  /** 사용자가 드래그 핸들로 조절한 커스텀 바운딩 박스 */
+  customBounds?: PolygonBounds;
   /** 배치 모드: 상단 중앙(권장) 또는 원본 위치 */
   placement?: 'top_center' | 'original';
   /** 플러그인 커스텀 옵션 */
@@ -70,6 +74,7 @@ export interface FocusPageResult {
   bgColor: string;
   bounds: PolygonBounds;
   placement: 'top_center' | 'original';
+  scaleApplied: number;
 }
 
 /**
@@ -116,12 +121,12 @@ export function getPointDistance(p1: Point, p2: Point): number {
 
 /**
  * 3. 지능형 배경색 자동 스포이드 추출
- * 올가미 둘레와 바운딩 박스 모서리 픽셀의 색상을 표본 추출하여 가장 주도적인 배경색을 산출합니다.
  */
 export function sampleBackgroundColor(
   ctx: CanvasRenderingContext2D,
   points: Point[],
-  bounds: PolygonBounds
+  bounds: PolygonBounds,
+  superSample = 1.0
 ): string {
   try {
     const samplePoints: Point[] = [];
@@ -144,10 +149,10 @@ export function sampleBackgroundColor(
     let validSamples = 0;
 
     for (const sp of samplePoints) {
-      const px = Math.max(0, Math.min(ctx.canvas.width - 1, Math.round(sp.x)));
-      const py = Math.max(0, Math.min(ctx.canvas.height - 1, Math.round(sp.y)));
+      const px = Math.max(0, Math.min(ctx.canvas.width - 1, Math.round(sp.x * superSample)));
+      const py = Math.max(0, Math.min(ctx.canvas.height - 1, Math.round(sp.y * superSample)));
       const pixel = ctx.getImageData(px, py, 1, 1).data;
-      if (pixel[3] > 100) { // 투명이 아닌 경우
+      if (pixel[3] > 100) {
         totalR += pixel[0];
         totalG += pixel[1];
         totalB += pixel[2];
@@ -161,7 +166,6 @@ export function sampleBackgroundColor(
     const avgG = Math.round(totalG / validSamples);
     const avgB = Math.round(totalB / validSamples);
 
-    // 종이가 매우 밝은 백색에 가까운 경우(RGB 각 235 이상) 완벽한 백색(#ffffff)으로 깔끔하게 정규화
     if (avgR >= 238 && avgG >= 238 && avgB >= 238) {
       return '#ffffff';
     }
@@ -174,10 +178,12 @@ export function sampleBackgroundColor(
 }
 
 /**
- * 4. 현재 페이지의 모든 시각 요소(배경, 이미지, 필기획, 텍스트)를 단일 캔버스로 정밀 합성
+ * 4. 현재 페이지 시각 요소를 [2.0x 고해상도 슈퍼샘플링] 캔버스로 정밀 합성
+ * 확대 시 글씨와 수식이 깨지지 않도록 원본을 2배 해상도로 렌더링합니다.
  */
 export async function renderCurrentPageToCompositeCanvas(
-  options: CreateFocusPageOptions
+  options: CreateFocusPageOptions,
+  superSample = 2.0
 ): Promise<HTMLCanvasElement> {
   const {
     fullPageBackground,
@@ -190,10 +196,18 @@ export async function renderCurrentPageToCompositeCanvas(
   } = options;
 
   const canvas = document.createElement('canvas');
-  canvas.width = A4_WIDTH;
-  canvas.height = A4_HEIGHT;
+  canvas.width = Math.round(A4_WIDTH * superSample);
+  canvas.height = Math.round(A4_HEIGHT * superSample);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('Composite canvas context2D 생성 실패');
+
+  // 고화질 업스케일링 안티앨리어싱 활성화
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // 2x 스케일 좌표계 설정
+  ctx.save();
+  ctx.scale(superSample, superSample);
 
   // 1) 기본 종이 배경 채우기
   let baseFill = '#ffffff';
@@ -237,42 +251,51 @@ export async function renderCurrentPageToCompositeCanvas(
     ctx.restore();
   }
 
+  ctx.restore();
   return canvas;
 }
 
 /**
- * 5. 집중 풀이 페이지 배경 최종 생성 (상단 중앙 재배치 & 여백 자동 구성)
+ * 5. 집중 풀이 페이지 배경 최종 생성 (상단 중앙 재배치 & 고해상도 업스케일링)
  */
 export async function createFocusedPageBackground(
   options: CreateFocusPageOptions
 ): Promise<FocusPageResult> {
   const cfg: LassoFocusConfig = { ...defaultLassoFocusConfig, ...options.config };
   const placement = options.placement || 'top_center';
+  const userScale = options.userScale || 1.0;
   const { lassoPoints, A4_WIDTH, A4_HEIGHT } = options;
 
-  // 바운딩 박스 계산
-  const bounds = getPolygonBounds(lassoPoints);
+  // 바운딩 박스 계산 (사용자가 핸들로 조절한 customBounds가 있으면 우선 적용)
+  const baseBounds = getPolygonBounds(lassoPoints);
+  const bounds = options.customBounds || baseBounds;
+
   if (bounds.width < cfg.minDimension || bounds.height < cfg.minDimension) {
     throw new Error('선택된 영역이 너무 작습니다. 문제를 조금 더 넉넉하게 둘러싸주세요.');
   }
 
-  // 1. 현재 화면 종합 캔버스 렌더링
-  const sourceCanvas = await renderCurrentPageToCompositeCanvas(options);
+  // 1. [고해상도 업스케일링 대비]: 2.0x 슈퍼샘플링 소스 캔버스 렌더링
+  const superSample = 2.0;
+  const sourceCanvas = await renderCurrentPageToCompositeCanvas(options, superSample);
   const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
   if (!sourceCtx) throw new Error('Source context 실패');
 
   // 2. 배경색 지능형 자동 추출
-  const detectedBgColor = sampleBackgroundColor(sourceCtx, lassoPoints, bounds);
+  const detectedBgColor = sampleBackgroundColor(sourceCtx, lassoPoints, bounds, superSample);
 
-  // 3. 올가미 영역만 클리핑하여 별도 캔버스에 추출
+  // 3. 올가미 영역만 클리핑하여 2x 고해상도 세그먼트 캔버스에 추출
   const segmentCanvas = document.createElement('canvas');
-  segmentCanvas.width = bounds.width;
-  segmentCanvas.height = bounds.height;
+  segmentCanvas.width = Math.round(bounds.width * superSample);
+  segmentCanvas.height = Math.round(bounds.height * superSample);
   const segCtx = segmentCanvas.getContext('2d');
   if (!segCtx) throw new Error('Segment context 실패');
 
-  // 클리핑 패스 생성 (오프셋: -bounds.minX, -bounds.minY)
+  segCtx.imageSmoothingEnabled = true;
+  segCtx.imageSmoothingQuality = 'high';
+
+  // 클리핑 패스 생성 (2x 스케일 적용)
   segCtx.save();
+  segCtx.scale(superSample, superSample);
   segCtx.beginPath();
   const startP = lassoPoints[0];
   segCtx.moveTo(startP.x - bounds.minX, startP.y - bounds.minY);
@@ -282,13 +305,13 @@ export async function createFocusedPageBackground(
   segCtx.closePath();
   segCtx.clip();
 
-  // 소스 캔버스에서 해당 바운딩 박스 영역 그대로 복사
+  // 소스 캔버스(2x)에서 해당 바운딩 박스(2x) 영역 정밀 복사
   segCtx.drawImage(
     sourceCanvas,
-    bounds.minX,
-    bounds.minY,
-    bounds.width,
-    bounds.height,
+    Math.round(bounds.minX * superSample),
+    Math.round(bounds.minY * superSample),
+    Math.round(bounds.width * superSample),
+    Math.round(bounds.height * superSample),
     0,
     0,
     bounds.width,
@@ -303,30 +326,40 @@ export async function createFocusedPageBackground(
   const targetCtx = targetCanvas.getContext('2d');
   if (!targetCtx) throw new Error('Target context 실패');
 
+  targetCtx.imageSmoothingEnabled = true;
+  targetCtx.imageSmoothingQuality = 'high';
+
   // 4-1) 전체 캔버스를 추출한 배경색으로 도색 (이질감 제로)
   targetCtx.fillStyle = detectedBgColor;
   targetCtx.fillRect(0, 0, A4_WIDTH, A4_HEIGHT);
 
+  let appliedScale = 1.0;
+
   if (placement === 'top_center') {
     // ------------------------------------------------------------------------
-    // [A안 (추천)]: 상단 중앙 스마트 재배치 & 하단 광활한 풀이 백지 확보
+    // [A안 (상단 중앙 재배치 + 고해상도 업스케일링)]:
     // ------------------------------------------------------------------------
-    const maxAllowedWidth = Math.round(A4_WIDTH * cfg.maxWidthRatio);
-    const maxAllowedHeight = Math.round(A4_HEIGHT * cfg.maxHeightRatio);
+    // 확대 시 상단 최대 55%까지 허용, 너비는 최대 92%까지 허용
+    const maxAllowedWidth = Math.round(A4_WIDTH * 0.92);
+    const maxAllowedHeight = Math.round(A4_HEIGHT * 0.52);
 
-    // 작은 문제는 1.05배 약간 확대, 큰 문제는 상단 40% 내에 맞게 비율 축소
-    const scale = Math.min(
-      1.1,
+    // 기본 가로폭 맞춤 배율
+    const baseFitScale = Math.min(
       maxAllowedWidth / bounds.width,
       maxAllowedHeight / bounds.height
     );
 
-    const destW = Math.round(bounds.width * scale);
-    const destH = Math.round(bounds.height * scale);
+    // 사용자 요청 배율(userScale)을 적용하되 용지 한계선 보호
+    appliedScale = Math.min(baseFitScale, (baseFitScale * userScale));
+    // 단, 원본 대비 최소 0.7x ~ 최대 2.2x 클램프
+    appliedScale = Math.max(0.65, Math.min(2.2, appliedScale));
+
+    const destW = Math.round(bounds.width * appliedScale);
+    const destH = Math.round(bounds.height * appliedScale);
     const destX = Math.round((A4_WIDTH - destW) / 2);
     const destY = cfg.topMargin;
 
-    // 문제 이미지 그리기
+    // 2x 슈퍼샘플링 세그먼트로부터 고품질 바이큐빅 업스케일 렌더링
     targetCtx.drawImage(segmentCanvas, destX, destY, destW, destH);
 
     // 4-2) 문제와 풀이 공간을 구분하는 우아한 시각적 디바이더 렌더링
@@ -344,12 +377,13 @@ export async function createFocusedPageBackground(
       targetCtx.stroke();
 
       // 중앙 세련된 뱃지: "✍️ [집중 풀이 공간] 아래 여백에 자유롭게 풀이하세요"
-      const badgeText = '✍️ 집중 풀이 공간 (아래 여백에 자유롭게 풀이하세요)';
+      const scaleStr = userScale > 1.05 ? ` (${Math.round(userScale * 100)}% 확대)` : '';
+      const badgeText = `✍️ 집중 풀이 공간${scaleStr} - 아래 여백에 자유롭게 풀이하세요`;
       targetCtx.font = 'bold 13px "Pretendard", -apple-system, sans-serif';
       const textMetrics = targetCtx.measureText(badgeText);
       const textW = textMetrics.width;
-      const badgeW = textW + 28;
-      const badgeH = 24;
+      const badgeW = textW + 30;
+      const badgeH = 26;
       const badgeX = Math.round((A4_WIDTH - badgeW) / 2);
       const badgeY = Math.round(dividerY - badgeH / 2);
 
@@ -362,7 +396,7 @@ export async function createFocusedPageBackground(
       targetCtx.lineWidth = 1;
       targetCtx.setLineDash([]);
       targetCtx.beginPath();
-      targetCtx.roundRect(badgeX, badgeY, badgeW, badgeH, 12);
+      targetCtx.roundRect(badgeX, badgeY, badgeW, badgeH, 13);
       targetCtx.fill();
       targetCtx.stroke();
 
@@ -376,7 +410,7 @@ export async function createFocusedPageBackground(
     }
   } else {
     // ------------------------------------------------------------------------
-    // [B안]: 원래 위치 그대로 유지하고 나머지 영역만 마스킹
+    // [B안]: 원래 위치 그대로 유지
     // ------------------------------------------------------------------------
     targetCtx.drawImage(
       segmentCanvas,
@@ -387,13 +421,14 @@ export async function createFocusedPageBackground(
     );
   }
 
-  const dataUrl = targetCanvas.toDataURL('image/jpeg', 0.92);
+  const dataUrl = targetCanvas.toDataURL('image/jpeg', 0.94);
 
   return {
     dataUrl,
     bgColor: detectedBgColor,
     bounds,
-    placement
+    placement,
+    scaleApplied: appliedScale
   };
 }
 

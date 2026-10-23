@@ -3,10 +3,9 @@
  * ============================================================================
  * 올가미 집중 풀이 인터랙티브 오버레이 컴포넌트
  * 
- * - 애플펜슬 / 갤럭시 S펜 / 손가락 터치 100% 호환
- * - 0ms 실시간 부드러운 SVG 궤적 시각화
- * - 시작점 자석 스냅(Magnetic Snap) & 자동 폐곡선 닫기
- * - 선택 완료 시 우아한 플로팅 액션 버블 (상단 중앙 재배치 vs 원위치 생성)
+ * - 4개 모서리 드래그 크기 조절 핸들 (Interactive Corner Resize Handles)
+ * - 원터치 고해상도 확대 배율 선택 버튼 (0.8x, 1.0x, 1.25x, 1.5x, 2.0x)
+ * - 0ms 실시간 부드러운 SVG 궤적 시각화 & 시작점 자석 스냅(Magnetic Snap)
  * ============================================================================
  */
 
@@ -18,7 +17,12 @@ export interface LassoFocusCanvasOverlayProps {
   isActive: boolean;
   A4_WIDTH: number;
   A4_HEIGHT: number;
-  onConfirmLasso: (points: Point[], placement: 'top_center' | 'original') => void;
+  onConfirmLasso: (
+    points: Point[],
+    placement: 'top_center' | 'original',
+    scale?: number,
+    customBounds?: PolygonBounds
+  ) => void;
   onCancel: () => void;
   isProcessing?: boolean;
 }
@@ -37,12 +41,19 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
   const [selectedBounds, setSelectedBounds] = useState<PolygonBounds | null>(null);
   const [isSelectionCompleted, setIsSelectionCompleted] = useState<boolean>(false);
 
+  // 배율 상태 (기본 1.2x)
+  const [scaleFactor, setScaleFactor] = useState<number>(1.2);
+
+  // 핸들 드래그 크기 조절 상태
+  const [resizingHandle, setResizingHandle] = useState<'nw' | 'ne' | 'se' | 'sw' | null>(null);
+  const resizeStartRef = useRef<{ clientX: number; clientY: number; initialBounds: PolygonBounds } | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   // --------------------------------------------------------------------------
   // 좌표 정규화: 화면(CSS px) 좌표를 캔버스 기준 좌표(A4_WIDTH x A4_HEIGHT)로 변환
   // --------------------------------------------------------------------------
-  const getCanvasCoords = useCallback((e: React.PointerEvent): Point => {
+  const getCanvasCoords = useCallback((e: React.PointerEvent | PointerEvent): Point => {
     if (!containerRef.current) return { x: e.clientX, y: e.clientY };
     const rect = containerRef.current.getBoundingClientRect();
     const scaleX = A4_WIDTH / rect.width;
@@ -57,7 +68,7 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
   // 드로잉 포인터 이벤트 핸들러
   // --------------------------------------------------------------------------
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (isProcessing) return;
+    if (isProcessing || resizingHandle) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -74,6 +85,51 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (resizingHandle && resizeStartRef.current && selectedBounds) {
+      // 핸들 크기 조절 드래그 처리
+      e.preventDefault();
+      e.stopPropagation();
+      const currPt = getCanvasCoords(e);
+      const initPt = getCanvasCoords({ clientX: resizeStartRef.current.clientX, clientY: resizeStartRef.current.clientY } as any);
+      const dx = currPt.x - initPt.x;
+      const dy = currPt.y - initPt.y;
+      const initB = resizeStartRef.current.initialBounds;
+
+      let newMinX = initB.minX;
+      let newMaxX = initB.maxX;
+      let newMinY = initB.minY;
+      let newMaxY = initB.maxY;
+
+      if (resizingHandle === 'se') {
+        newMaxX = Math.max(initB.minX + 40, initB.maxX + dx);
+        newMaxY = Math.max(initB.minY + 40, initB.maxY + dy);
+      } else if (resizingHandle === 'sw') {
+        newMinX = Math.min(initB.maxX - 40, initB.minX + dx);
+        newMaxY = Math.max(initB.minY + 40, initB.maxY + dy);
+      } else if (resizingHandle === 'ne') {
+        newMaxX = Math.max(initB.minX + 40, initB.maxX + dx);
+        newMinY = Math.min(initB.maxY - 40, initB.minY + dy);
+      } else if (resizingHandle === 'nw') {
+        newMinX = Math.min(initB.maxX - 40, initB.minX + dx);
+        newMinY = Math.min(initB.maxY - 40, initB.minY + dy);
+      }
+
+      const w = Math.max(40, newMaxX - newMinX);
+      const h = Math.max(40, newMaxY - newMinY);
+
+      setSelectedBounds({
+        minX: newMinX,
+        minY: newMinY,
+        maxX: newMaxX,
+        maxY: newMaxY,
+        width: w,
+        height: h,
+        centerX: Math.round(newMinX + w / 2),
+        centerY: Math.round(newMinY + h / 2)
+      });
+      return;
+    }
+
     if (!isDrawing || isProcessing) return;
     e.preventDefault();
     e.stopPropagation();
@@ -83,13 +139,11 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
     setPoints(prev => {
       if (prev.length === 0) return [currPt];
       const lastPt = prev[prev.length - 1];
-      // 미세 떨림 방지: 최소 4px 이상 이동했을 때만 포인트 추가
       if (Math.hypot(currPt.x - lastPt.x, currPt.y - lastPt.y) < 4) {
         return prev;
       }
 
-      // 시작점과의 거리 검사 (자석 스냅 반경 내에 들어왔는지)
-      if (prev.length > 8) {
+      if (prev.length >= 3) {
         const distToStart = getPointDistance(currPt, prev[0]);
         const near = distToStart <= defaultLassoFocusConfig.snapRadius;
         setIsNearStart(near);
@@ -100,6 +154,12 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (resizingHandle) {
+      setResizingHandle(null);
+      resizeStartRef.current = null;
+      return;
+    }
+
     if (!isDrawing) return;
     e.preventDefault();
     e.stopPropagation();
@@ -109,19 +169,16 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
 
-    if (points.length < 8) {
-      // 점 하나만 찍었거나 너무 짧은 경우 초기화
+    if (points.length < 3) {
       setPoints([]);
       setIsNearStart(false);
       return;
     }
 
-    // 폐곡선 닫기 (마지막 점을 시작점과 연결)
     const closedPoints = [...points, points[0]];
     const bounds = getPolygonBounds(closedPoints);
 
     if (bounds.width < defaultLassoFocusConfig.minDimension || bounds.height < defaultLassoFocusConfig.minDimension) {
-      // 너무 작은 영역은 취소
       setPoints([]);
       setSelectedBounds(null);
       setIsSelectionCompleted(false);
@@ -132,6 +189,19 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
     setSelectedBounds(bounds);
     setIsSelectionCompleted(true);
     setIsNearStart(false);
+  };
+
+  // 핸들 드래그 시작
+  const handleHandlePointerDown = (e: React.PointerEvent, handle: 'nw' | 'ne' | 'se' | 'sw') => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!selectedBounds) return;
+    setResizingHandle(handle);
+    resizeStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      initialBounds: { ...selectedBounds }
+    };
   };
 
   if (!isActive) return null;
@@ -148,14 +218,13 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
     }
   }
 
-  // 액션 버블 위치 (A4 캔버스 % 기준)
+  // 액션 버블 위치 계산
   let bubbleTopPct = 50;
   let bubbleLeftPct = 50;
   if (selectedBounds) {
-    bubbleLeftPct = Math.max(10, Math.min(90, (selectedBounds.centerX / A4_WIDTH) * 100));
-    // 선택 영역 위쪽에 공간이 있으면 위쪽에, 없으면 아래쪽에 표시
-    const topPx = selectedBounds.minY > 120 ? selectedBounds.minY - 75 : selectedBounds.maxY + 20;
-    bubbleTopPct = Math.max(5, Math.min(92, (topPx / A4_HEIGHT) * 100));
+    bubbleLeftPct = Math.max(12, Math.min(88, (selectedBounds.centerX / A4_WIDTH) * 100));
+    const topPx = selectedBounds.minY > 150 ? selectedBounds.minY - 110 : selectedBounds.maxY + 25;
+    bubbleTopPct = Math.max(8, Math.min(90, (topPx / A4_HEIGHT) * 100));
   }
 
   return (
@@ -168,7 +237,7 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
         position: 'absolute',
         inset: 0,
         zIndex: 25,
-        cursor: 'crosshair',
+        cursor: isSelectionCompleted ? 'default' : 'crosshair',
         userSelect: 'none',
         touchAction: 'none'
       }}
@@ -182,9 +251,9 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 35,
-            background: 'rgba(15, 23, 42, 0.88)',
+            background: 'rgba(15, 23, 42, 0.9)',
             backdropFilter: 'blur(8px)',
-            border: '1.5px solid rgba(139, 92, 246, 0.5)',
+            border: '1.5px solid rgba(139, 92, 246, 0.55)',
             borderRadius: '24px',
             padding: '8px 20px',
             color: '#ffffff',
@@ -193,15 +262,15 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
             display: 'flex',
             alignItems: 'center',
             gap: '10px',
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
             pointerEvents: 'none',
             whiteSpace: 'nowrap'
           }}
         >
           <span style={{ fontSize: '18px' }}>🎯</span>
-          <span>원하는 문제를 펜이나 손가락으로 둥글게 둘러싸세요</span>
+          <span>원하는 문제를 둘러싸세요 (선택 후 모서리를 당겨 크기 조절 가능)</span>
           {points.length > 5 && isNearStart && (
-            <span style={{ color: '#4ade80', fontWeight: 800 }}>✨ 손을 떼면 선택 완료!</span>
+            <span style={{ color: '#4ade80', fontWeight: 800 }}>✨ 손을 떼면 완료!</span>
           )}
         </div>
       )}
@@ -219,7 +288,7 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
       >
         <defs>
           <filter id="lasso-glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#8b5cf6" floodOpacity="0.7" />
+            <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#8b5cf6" floodOpacity="0.75" />
           </filter>
         </defs>
 
@@ -259,15 +328,97 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
             width={selectedBounds.width}
             height={selectedBounds.height}
             fill="none"
-            stroke="rgba(56, 189, 248, 0.5)"
-            strokeWidth="1.5"
-            strokeDasharray="4, 4"
+            stroke="#38bdf8"
+            strokeWidth="2"
+            strokeDasharray="5, 4"
             rx="6"
           />
         )}
       </svg>
 
-      {/* 3. 선택 완료 시 뜨는 우아한 플로팅 액션 버블 */}
+      {/* 2-1. 선택 완료 시 4개 모서리 크기 조절 핸들 (HTML 엘리먼트 오버레이) */}
+      {selectedBounds && isSelectionCompleted && (
+        <>
+          {/* NW 핸들 */}
+          <div
+            onPointerDown={(e) => handleHandlePointerDown(e, 'nw')}
+            style={{
+              position: 'absolute',
+              left: `${(selectedBounds.minX / A4_WIDTH) * 100}%`,
+              top: `${(selectedBounds.minY / A4_HEIGHT) * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              width: '26px',
+              height: '26px',
+              borderRadius: '50%',
+              background: '#38bdf8',
+              border: '2.5px solid #ffffff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+              cursor: 'nwse-resize',
+              zIndex: 38
+            }}
+            title="크기 조절 (좌상단)"
+          />
+          {/* NE 핸들 */}
+          <div
+            onPointerDown={(e) => handleHandlePointerDown(e, 'ne')}
+            style={{
+              position: 'absolute',
+              left: `${(selectedBounds.maxX / A4_WIDTH) * 100}%`,
+              top: `${(selectedBounds.minY / A4_HEIGHT) * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              width: '26px',
+              height: '26px',
+              borderRadius: '50%',
+              background: '#38bdf8',
+              border: '2.5px solid #ffffff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+              cursor: 'nesw-resize',
+              zIndex: 38
+            }}
+            title="크기 조절 (우상단)"
+          />
+          {/* SE 핸들 */}
+          <div
+            onPointerDown={(e) => handleHandlePointerDown(e, 'se')}
+            style={{
+              position: 'absolute',
+              left: `${(selectedBounds.maxX / A4_WIDTH) * 100}%`,
+              top: `${(selectedBounds.maxY / A4_HEIGHT) * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              width: '26px',
+              height: '26px',
+              borderRadius: '50%',
+              background: '#38bdf8',
+              border: '2.5px solid #ffffff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+              cursor: 'nwse-resize',
+              zIndex: 38
+            }}
+            title="크기 조절 (우하단)"
+          />
+          {/* SW 핸들 */}
+          <div
+            onPointerDown={(e) => handleHandlePointerDown(e, 'sw')}
+            style={{
+              position: 'absolute',
+              left: `${(selectedBounds.minX / A4_WIDTH) * 100}%`,
+              top: `${(selectedBounds.maxY / A4_HEIGHT) * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              width: '26px',
+              height: '26px',
+              borderRadius: '50%',
+              background: '#38bdf8',
+              border: '2.5px solid #ffffff',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
+              cursor: 'nesw-resize',
+              zIndex: 38
+            }}
+            title="크기 조절 (좌하단)"
+          />
+        </>
+      )}
+
+      {/* 3. 선택 완료 시 뜨는 우아한 플로팅 액션 & 크기 조절 버블 */}
       {isSelectionCompleted && selectedBounds && (
         <div
           onClick={(e) => e.stopPropagation()}
@@ -281,13 +432,13 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
             background: '#131620',
             border: '1.5px solid #8b5cf6',
             borderRadius: '16px',
-            padding: '12px 16px',
-            boxShadow: '0 16px 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(139, 92, 246, 0.35)',
+            padding: '14px 18px',
+            boxShadow: '0 18px 45px rgba(0, 0, 0, 0.85), 0 0 20px rgba(139, 92, 246, 0.35)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '10px',
-            minWidth: '280px',
-            maxWidth: '360px',
+            gap: '12px',
+            minWidth: '310px',
+            maxWidth: '380px',
             fontFamily: '"Pretendard", "Apple SD Gothic Neo", sans-serif'
           }}
         >
@@ -295,8 +446,8 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ fontSize: '18px' }}>🎯</span>
-              <span style={{ fontSize: '13.5px', fontWeight: 800, color: '#ffffff' }}>
-                선택한 문제 집중 풀이장 생성
+              <span style={{ fontSize: '14px', fontWeight: 800, color: '#ffffff' }}>
+                선택 영역 크기 및 풀이장 생성
               </span>
             </div>
             <button
@@ -320,16 +471,50 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
             </button>
           </div>
 
-          <p style={{ margin: 0, fontSize: '11px', color: '#cbd5e1', lineHeight: 1.4 }}>
-            💡 문제를 다음 쪽에 <b>상단 중앙</b>으로 깔끔하게 배치하고, 아래에 넓은 백지 풀이 공간을 만들어줍니다.
-          </p>
+          {/* 크기 및 확대 배율 선택 바 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+                🔍 고해상도 확대 배율
+              </span>
+              <span style={{ fontSize: '11.5px', color: '#a78bfa', fontWeight: 800 }}>
+                {scaleFactor}x ({Math.round(selectedBounds.width * scaleFactor)} × {Math.round(selectedBounds.height * scaleFactor)} px)
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '5px' }}>
+              {[0.8, 1.0, 1.25, 1.5, 2.0].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setScaleFactor(s)}
+                  style={{
+                    flex: 1,
+                    padding: '5px 0',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    borderRadius: '6px',
+                    border: scaleFactor === s ? '1px solid #8b5cf6' : '1px solid rgba(255, 255, 255, 0.12)',
+                    background: scaleFactor === s ? '#8b5cf6' : 'rgba(255, 255, 255, 0.06)',
+                    color: scaleFactor === s ? '#ffffff' : '#cbd5e1',
+                    cursor: 'pointer',
+                    transition: 'all 0.1s ease'
+                  }}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+            <span style={{ fontSize: '10px', color: '#6ee7b7' }}>
+              ✨ 2x 슈퍼샘플링 엔진으로 1.5x~2x 확대 시에도 글씨와 수식이 칼처럼 선명합니다.
+            </span>
+          </div>
 
           {/* 버튼 액션 바 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <button
               type="button"
               disabled={isProcessing}
-              onClick={() => onConfirmLasso(points, 'top_center')}
+              onClick={() => onConfirmLasso(points, 'top_center', scaleFactor, selectedBounds)}
               style={{
                 background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
                 color: '#ffffff',
@@ -347,14 +532,14 @@ export const LassoFocusCanvasOverlay: React.FC<LassoFocusCanvasOverlayProps> = (
               }}
             >
               <span>{isProcessing ? '⏳' : '🚀'}</span>
-              <span>{isProcessing ? '새 풀이장 생성 중...' : '다음 쪽에 집중 풀이 생성 (상단 재배치)'}</span>
+              <span>{isProcessing ? '고해상도 풀이장 생성 중...' : `다음 쪽에 생성 (상단 ${scaleFactor}x)`}</span>
             </button>
 
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 type="button"
                 disabled={isProcessing}
-                onClick={() => onConfirmLasso(points, 'original')}
+                onClick={() => onConfirmLasso(points, 'original', scaleFactor, selectedBounds)}
                 style={{
                   flex: 1,
                   background: 'rgba(255, 255, 255, 0.08)',
