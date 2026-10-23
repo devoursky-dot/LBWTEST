@@ -91,6 +91,17 @@ export function useFullscreenManager(options?: {
   const [showReentryPrompt, setShowReentryPrompt] = useState<boolean>(false);
   const wasEverFullscreenRef = useRef<boolean>(false);
 
+  // 리렌더링마다 이벤트 리스너가 재등록/해제되는 현상 방지용 Ref
+  const isEnabledRef = useRef(isEnabled);
+  const isSuspendedRef = useRef(isSuspended);
+  const onFsChangeRef = useRef(options?.onFullscreenChange);
+
+  useEffect(() => {
+    isEnabledRef.current = isEnabled;
+    isSuspendedRef.current = isSuspended;
+    onFsChangeRef.current = options?.onFullscreenChange;
+  });
+
   // 모달이 열려있는 동안은 전체화면 복구 팝업을 즉시 숨김
   useEffect(() => {
     if (isSuspended) {
@@ -98,15 +109,15 @@ export function useFullscreenManager(options?: {
     }
   }, [isSuspended]);
 
-  // 전체화면 상태 동기화 및 이탈 자동 감지 리스너
+  // 전체화면 상태 동기화 및 이탈 자동 감지 리스너 (안정적인 1회 등록)
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleFsChange = () => {
       const isCurrentlyFull = checkIsFullscreen();
       setIsFullscreen(isCurrentlyFull);
-      if (options?.onFullscreenChange) {
-        options.onFullscreenChange(isCurrentlyFull);
+      if (onFsChangeRef.current) {
+        onFsChangeRef.current(isCurrentlyFull);
       }
 
       if (isCurrentlyFull) {
@@ -114,7 +125,7 @@ export function useFullscreenManager(options?: {
         setShowReentryPrompt(false);
       } else {
         // 이전에 한 번이라도 전체화면이었는데 풀렸다면 복구 대기 상태로 전환 (단, 모달 작업 중이 아닐 때만)
-        if (wasEverFullscreenRef.current && isEnabled && !isSuspended) {
+        if (wasEverFullscreenRef.current && isEnabledRef.current && !isSuspendedRef.current) {
           setShowReentryPrompt(true);
         }
       }
@@ -125,7 +136,7 @@ export function useFullscreenManager(options?: {
 
     // [기회주의적 무소음 자동 재진입]: 모달이 닫힌 상태에서 사용자가 화면 어디든 다음 터치를 하는 순간 캡처
     const handleGlobalPointer = () => {
-      if (!checkIsFullscreen() && wasEverFullscreenRef.current && isEnabled && !isSuspended) {
+      if (!checkIsFullscreen() && wasEverFullscreenRef.current && isEnabledRef.current && !isSuspendedRef.current) {
         requestFullscreenSafe().then((success) => {
           if (success) {
             setShowReentryPrompt(false);
@@ -141,7 +152,7 @@ export function useFullscreenManager(options?: {
       document.removeEventListener('webkitfullscreenchange', handleFsChange);
       window.removeEventListener('pointerdown', handleGlobalPointer, { capture: true } as any);
     };
-  }, [isEnabled, isSuspended, options]);
+  }, []);
 
   const enterFullscreen = useCallback(async () => {
     const success = await requestFullscreenSafe();

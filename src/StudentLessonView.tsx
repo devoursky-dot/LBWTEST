@@ -969,12 +969,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   // PDF 특정 페이지 선택 처리 (전체 배경 또는 특정 영역 자르기)
-  const handleSelectPdfPage = async (pageNumber: number, mode: 'full_page' | 'crop') => {
+  const handleSelectPdfPage = async (pageNumber: number, mode: 'full_page' | 'crop', preloadedDataUrl?: string) => {
     if (!pdfDocProxy) return;
 
     try {
-      showToast(`⏳ PDF ${pageNumber}페이지를 고해상도로 렌더링하고 있습니다...`);
-      const { dataUrl } = await renderPdfPageToDataUrl(pdfDocProxy, pageNumber, 2400);
+      let dataUrl = preloadedDataUrl;
+      if (!dataUrl) {
+        showToast(`⏳ PDF ${pageNumber}페이지를 고해상도로 렌더링하고 있습니다...`);
+        const result = await renderPdfPageToDataUrl(pdfDocProxy, pageNumber, 2000);
+        dataUrl = result.dataUrl;
+      }
 
       setPdfPickerOpen(false);
 
@@ -983,7 +987,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         requestFullscreenSafe();
         showToast(`📄 PDF ${pageNumber}페이지가 현재 쪽 전체 배경으로 설정되었습니다.`);
       } else {
-        // 크롭 모달 열기
+        // 크롭 모달 열기 (원자적 상태 전환)
         setEditingImageItem(null);
         setCropTargetImageSrc(dataUrl);
         setCropModalOpen(true);
@@ -993,6 +997,37 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       showToast(`❌ PDF 페이지 처리 실패: ${err.message || '페이지 렌더링 오류'}`);
     }
   };
+
+  // [시뮬레이션 및 테스트 전용]: 브라우저에서 100회 이상의 대량 페이지 선택 및 스트레스 테스트를 즉시 수행할 수 있도록 지원
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__openPdfPickerForTest = (totalPages = 20) => {
+        setPdfFileName('테스트_학습지_20쪽.pdf');
+        setPdfTotalPages(totalPages);
+        setPdfThumbnails(Array.from({ length: totalPages }, (_, i) => ({
+          pageNumber: i + 1,
+          dataUrl: `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="280"><rect width="200" height="280" fill="%23ffffff" stroke="%233b82f6" stroke-width="2"/><text x="100" y="140" font-size="22" font-weight="bold" fill="%231e293b" text-anchor="middle">Page ${i + 1}</text></svg>`,
+          width: 200,
+          height: 280
+        })));
+        setPdfDocProxy({
+          numPages: totalPages,
+          getPage: async (num: number) => ({
+            getViewport: () => ({ width: 800, height: 1120 }),
+            render: ({ canvasContext }: any) => {
+              canvasContext.fillStyle = '#ffffff';
+              canvasContext.fillRect(0, 0, 800, 1120);
+              canvasContext.fillStyle = '#1e293b';
+              canvasContext.font = 'bold 36px sans-serif';
+              canvasContext.fillText(`Page ${num} Content`, 250, 400);
+              return { promise: Promise.resolve() };
+            }
+          })
+        });
+        setPdfPickerOpen(true);
+      };
+    }
+  }, []);
 
   // 크롭 확정 핸들러 (새 이미지 추가 또는 기존 이미지 자르기 수정)
   const handleConfirmCrop = (croppedDataUrl: string, cropRect: CropRect) => {
@@ -1113,6 +1148,66 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setCropModalOpen(true);
     setActivePopup(null);
     showToast('📄 샘플 문제지를 불러왔습니다. 원하는 영역을 잘라보세요!');
+  };
+
+  // 20쪽 다쪽 샘플 PDF 학습지 즉시 로드 (페이지 선택/자르기/배경/다중선택 종합 테스트용)
+  const handleLoadSamplePdf = () => {
+    dismissReentryPrompt();
+    setActivePopup(null);
+    setPdfFileName('단원평가_수학학습지_20쪽.pdf');
+    const totalP = 20;
+    setPdfTotalPages(totalP);
+    setPdfThumbnails(Array.from({ length: totalP }, (_, i) => {
+      const pNum = i + 1;
+      const cvs = document.createElement('canvas');
+      cvs.width = 200;
+      cvs.height = 282;
+      const c = cvs.getContext('2d');
+      if (c) {
+        c.fillStyle = '#ffffff';
+        c.fillRect(0, 0, 200, 282);
+        c.fillStyle = '#3b82f6';
+        c.fillRect(10, 10, 180, 25);
+        c.fillStyle = '#ffffff';
+        c.font = 'bold 12px sans-serif';
+        c.fillText(`수학 학습지 - ${pNum}쪽`, 20, 27);
+        c.fillStyle = '#1e293b';
+        c.font = 'bold 14px sans-serif';
+        c.fillText(`[문제 ${pNum * 2 - 1}] 3x + ${pNum} = 15`, 20, 70);
+        c.fillText(`[문제 ${pNum * 2}] y = 2x - ${pNum}`, 20, 130);
+        c.fillStyle = '#94a3b8';
+        c.font = '10px sans-serif';
+        c.fillText(`© 2026 전자칠판 수업자료`, 20, 260);
+      }
+      return {
+        pageNumber: pNum,
+        dataUrl: cvs.toDataURL('image/jpeg', 0.8),
+        width: 200,
+        height: 282
+      };
+    }));
+    setPdfDocProxy({
+      numPages: totalP,
+      getPage: async (num: number) => ({
+        getViewport: () => ({ width: 900, height: 1272 }),
+        render: ({ canvasContext }: any) => {
+          canvasContext.fillStyle = '#ffffff';
+          canvasContext.fillRect(0, 0, 900, 1272);
+          canvasContext.fillStyle = '#2563eb';
+          canvasContext.fillRect(40, 40, 820, 70);
+          canvasContext.fillStyle = '#ffffff';
+          canvasContext.font = 'bold 30px sans-serif';
+          canvasContext.fillText(`📐 [수학 단원평가] ${num}페이지 학습지`, 60, 88);
+          canvasContext.fillStyle = '#0f172a';
+          canvasContext.font = 'bold 24px sans-serif';
+          canvasContext.fillText(`[문제 ${num * 2 - 1}] 다음 식을 계산하시오: 4x + ${num * 3} = 24`, 60, 190);
+          canvasContext.fillText(`[문제 ${num * 2}] 그래프의 기울기를 구하시오: y = ${num}x + 5`, 60, 360);
+          return { promise: Promise.resolve() };
+        }
+      })
+    });
+    setPdfPickerOpen(true);
+    showToast('📑 20쪽 분량의 샘플 PDF 학습지가 로드되었습니다.');
   };
 
 
@@ -3510,7 +3605,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               }}
               title="테스트용 샘플 수학 문제지 즉시 불러오기"
             >
-              <span>🧪</span> 샘플 수학 문제지 불러오기 (테스트)
+              <span>🧪</span> 샘플 수학 문제지 불러오기 (단일)
+            </button>
+
+            <button
+              id="btn-load-sample-pdf"
+              type="button"
+              className="student-tool-btn"
+              onClick={handleLoadSamplePdf}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                padding: '7px 12px',
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(59, 130, 246, 0.2) 100%)',
+                color: '#60a5fa',
+                border: '1px solid rgba(99, 102, 241, 0.4)',
+                fontWeight: 700
+              }}
+              title="20쪽 분량의 샘플 PDF 학습지를 즉시 열어 페이지 선택 및 자르기 테스트"
+            >
+              <span>📑</span> 20쪽 PDF 학습지 열기 (시뮬레이션/테스트)
             </button>
 
             {fullPageBackground && (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { renderPdfPageToDataUrl } from '../lib/pdfImporter';
 
@@ -18,16 +18,230 @@ export interface PdfPagePickerModalProps {
   isLoading?: boolean;
   fileObject?: File | null;
   downloadUrl?: string | null;
-  onSelectPage: (pageNumber: number, mode: 'full_page' | 'crop') => void;
+  onSelectPage: (pageNumber: number, mode: 'full_page' | 'crop', preloadedDataUrl?: string) => void;
   onBatchInsertPages?: (pageNumbers: number[]) => void;
   onClose: () => void;
 }
+
+/**
+ * [성능 최적화]: React.memo로 완전히 독립 격리된 단일 페이지 카드 컴포넌트
+ * 다른 페이지의 썸네일 수신이나 선택 상태 변경 시 불필요한 전체 그리드 리렌더링 및 base64 디코딩 깜빡임을 100% 차단합니다.
+ */
+interface PageCardProps {
+  pageNumber: number;
+  thumbUrl?: string;
+  isChecked: boolean;
+  isSingleSelected: boolean;
+  isSelectionMode: boolean;
+  isProcessing: boolean;
+  onCardClick: (pNum: number) => void;
+  onCropClick: (pNum: number) => void;
+  onFullPageClick: (pNum: number) => void;
+}
+
+const PdfPageCard: React.FC<PageCardProps> = React.memo(({
+  pageNumber,
+  thumbUrl,
+  isChecked,
+  isSingleSelected,
+  isSelectionMode,
+  isProcessing,
+  onCardClick,
+  onCropClick,
+  onFullPageClick
+}) => {
+  const isHighlighted = isChecked || isSingleSelected;
+
+  return (
+    <div
+      onClick={() => onCardClick(pageNumber)}
+      style={{
+        position: 'relative',
+        aspectRatio: '1 / 1.414', // A4 비율
+        background: '#ffffff',
+        border: isHighlighted ? '3px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.18)',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        userSelect: 'none',
+        transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+        boxShadow: isHighlighted
+          ? '0 0 20px rgba(59, 130, 246, 0.55), 0 8px 16px rgba(0, 0, 0, 0.5)'
+          : '0 4px 14px rgba(0, 0, 0, 0.35)'
+      }}
+      title={`${pageNumber}쪽 (터치하여 선택 또는 아래 버튼으로 즉시 자르기/배경)`}
+    >
+      {/* 실제 PDF 페이지 썸네일 이미지 */}
+      {thumbUrl ? (
+        <img
+          src={thumbUrl}
+          alt={`${pageNumber}쪽`}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            background: '#ffffff',
+            display: 'block'
+          }}
+        />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '8px' }}>
+          <span style={{ fontSize: '24px', opacity: 0.6 }}>📄</span>
+          <span style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', marginTop: '4px' }}>
+            {pageNumber}쪽
+          </span>
+          <span style={{ fontSize: '10px', color: '#64748b', marginTop: '2px' }}>
+            렌더링 중...
+          </span>
+        </div>
+      )}
+
+      {/* 쪽수 배지 (좌측 상단) */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '6px',
+          left: '6px',
+          background: 'rgba(15, 23, 42, 0.88)',
+          backdropFilter: 'blur(4px)',
+          color: '#38bdf8',
+          padding: '2px 7px',
+          borderRadius: '5px',
+          fontSize: '11px',
+          fontWeight: 800,
+          border: '1px solid rgba(56, 189, 248, 0.4)',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.5)',
+          zIndex: 3
+        }}
+      >
+        {pageNumber}쪽
+      </div>
+
+      {/* 다중 선택 모드 체크박스 */}
+      {isSelectionMode && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '6px',
+            right: '6px',
+            width: '22px',
+            height: '22px',
+            borderRadius: '5px',
+            background: isChecked ? '#3b82f6' : 'rgba(0, 0, 0, 0.6)',
+            border: '2px solid #ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '13px',
+            color: '#ffffff',
+            fontWeight: 900,
+            zIndex: 3
+          }}
+        >
+          {isChecked ? '✓' : ''}
+        </div>
+      )}
+
+      {/* 일반 모드: 카드 하단 원터치 빠른 액션 버튼 바 (자르기 / 배경) */}
+      {!isSelectionMode && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '5px',
+            left: '5px',
+            right: '5px',
+            display: 'flex',
+            gap: '4px',
+            zIndex: 3
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => onCropClick(pageNumber)}
+            style={{
+              flex: 1,
+              padding: '6px 2px',
+              borderRadius: '6px',
+              border: 'none',
+              background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+              color: '#ffffff',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '2px'
+            }}
+            title="이 쪽에서 문제 영역 잘라내기"
+          >
+            <span>✂️</span>
+            <span>자르기</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onFullPageClick(pageNumber)}
+            style={{
+              flex: 1,
+              padding: '6px 2px',
+              borderRadius: '6px',
+              border: 'none',
+              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              color: '#ffffff',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '2px'
+            }}
+            title="이 쪽 전체를 공책에 배경으로 넣기"
+          >
+            <span>📄</span>
+            <span>배경</span>
+          </button>
+        </div>
+      )}
+
+      {/* 처리 중 로딩 오버레이 */}
+      {isProcessing && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(2px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 6
+          }}
+        >
+          <span style={{ fontSize: '26px' }}>⏳</span>
+          <span style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700, marginTop: '4px' }}>
+            준비 중...
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});
 
 export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   isOpen,
   fileName,
   pdfDocProxy,
   totalPages = 0,
+  thumbnails = [],
   fileObject,
   downloadUrl,
   onSelectPage,
@@ -41,6 +255,8 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   // 모달 상태
   const [isSelectionMode, setIsSelectionMode] = useState<boolean>(false);
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
+  const [selectedSinglePage, setSelectedSinglePage] = useState<number | null>(null);
+  const [processingPage, setProcessingPage] = useState<number | null>(null);
 
   // 범위 지정 상태
   const [isRangeOpen, setIsRangeOpen] = useState<boolean>(false);
@@ -52,22 +268,27 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
 
-  // 롱프레스 / 더블클릭 빠른 액션 팝업
-  const [quickActionPage, setQuickActionPage] = useState<number | null>(null);
-
-  // 롱프레스 터치 감지 타이머 ref
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const isLongPressTriggeredRef = useRef<boolean>(false);
+  // 썸네일 고속 O(1) 맵 캐시
+  const thumbnailMap = useMemo(() => {
+    const map = new Map<number, string>();
+    if (thumbnails) {
+      for (const t of thumbnails) {
+        map.set(t.pageNumber, t.dataUrl);
+      }
+    }
+    return map;
+  }, [thumbnails]);
 
   // 모달 오픈 시 초기화
   useEffect(() => {
     if (isOpen) {
       setIsSelectionMode(false);
       setSelectedPages(new Set());
+      setSelectedSinglePage(null);
+      setProcessingPage(null);
       setIsRangeOpen(false);
       setPreviewPage(null);
       setPreviewDataUrl(null);
-      setQuickActionPage(null);
       setRangeStart(1);
       setRangeEnd(Math.min(5, totalPageCount));
     }
@@ -97,50 +318,36 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
     };
   }, [previewPage, pdfDocProxy]);
 
+  // --------------------------------------------------------------------------
+  // 핸들러: 터치 / 직접 자르기 / 직접 배경 (useCallback 최적화로 불필요한 카드 리렌더링 방지)
+  // --------------------------------------------------------------------------
+  const handleSelectCropDirect = useCallback((pNum: number) => {
+    setProcessingPage(pNum);
+    onSelectPage(pNum, 'crop');
+  }, [onSelectPage]);
+
+  const handleSelectFullPageDirect = useCallback((pNum: number) => {
+    setProcessingPage(pNum);
+    onSelectPage(pNum, 'full_page');
+  }, [onSelectPage]);
+
+  const handlePageCardClick = useCallback((pNum: number) => {
+    setIsSelectionMode(isSel => {
+      if (isSel) {
+        setSelectedPages(prev => {
+          const next = new Set(prev);
+          if (next.has(pNum)) next.delete(pNum);
+          else next.add(pNum);
+          return next;
+        });
+      } else {
+        setSelectedSinglePage(prev => (prev === pNum ? null : pNum));
+      }
+      return isSel;
+    });
+  }, []);
+
   if (!isOpen) return null;
-
-  // --------------------------------------------------------------------------
-  // 핸들러: 터치 / 더블클릭 / 롱프레스
-  // --------------------------------------------------------------------------
-  const handlePageClick = (pNum: number) => {
-    if (isLongPressTriggeredRef.current) {
-      isLongPressTriggeredRef.current = false;
-      return;
-    }
-
-    if (isSelectionMode) {
-      // 다중 선택 모드: 토글
-      setSelectedPages(prev => {
-        const next = new Set(prev);
-        if (next.has(pNum)) next.delete(pNum);
-        else next.add(pNum);
-        return next;
-      });
-    } else {
-      // 일반 모드: 단일 페이지 미리보기 팝업 열기
-      setPreviewPage(pNum);
-    }
-  };
-
-  const handlePageDoubleClick = (pNum: number) => {
-    setQuickActionPage(pNum);
-  };
-
-  const handlePointerDown = (pNum: number) => {
-    isLongPressTriggeredRef.current = false;
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-    longPressTimerRef.current = setTimeout(() => {
-      isLongPressTriggeredRef.current = true;
-      setQuickActionPage(pNum);
-    }, 450); // 0.45초 롱탭 시 액션 메뉴
-  };
-
-  const handlePointerUp = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-  };
 
   // --------------------------------------------------------------------------
   // 핸들러: 원본 PDF 파일 기기 다운로드
@@ -476,86 +683,110 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(95px, 1fr))',
-              gap: '12px'
+              gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+              gap: '14px'
             }}
           >
-            {pageNumbers.map((pNum) => {
-              const isChecked = selectedPages.has(pNum);
-
-              return (
-                <div
-                  key={pNum}
-                  onClick={() => handlePageClick(pNum)}
-                  onDoubleClick={() => handlePageDoubleClick(pNum)}
-                  onPointerDown={() => handlePointerDown(pNum)}
-                  onPointerUp={handlePointerUp}
-                  onPointerLeave={handlePointerUp}
-                  style={{
-                    position: 'relative',
-                    aspectRatio: '1 / 1.414', // A4 황금 비율
-                    background: isChecked ? 'rgba(37, 99, 235, 0.25)' : '#1a1e28',
-                    border: isChecked ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: '10px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    userSelect: 'none',
-                    transition: 'all 0.12s ease',
-                    boxShadow: isChecked
-                      ? '0 0 16px rgba(59, 130, 246, 0.45)'
-                      : '0 4px 12px rgba(0, 0, 0, 0.3)'
-                  }}
-                  title={`${pNum}쪽 (탭: 미리보기 / 길게누름: 배경/자르기)`}
-                >
-                  {/* 다중 선택 모드 체크박스 */}
-                  {isSelectionMode && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        top: '6px',
-                        left: '6px',
-                        width: '20px',
-                        height: '20px',
-                        borderRadius: '4px',
-                        background: isChecked ? '#3b82f6' : 'rgba(0, 0, 0, 0.5)',
-                        border: '1.5px solid #ffffff',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '12px',
-                        color: '#ffffff',
-                        fontWeight: 900
-                      }}
-                    >
-                      {isChecked ? '✓' : ''}
-                    </div>
-                  )}
-
-                  {/* 문서 아이콘 장식 */}
-                  <span style={{ fontSize: '18px', opacity: 0.5, marginBottom: '2px' }}>📄</span>
-
-                  {/* 큼직한 페이지 번호 */}
-                  <span
-                    style={{
-                      fontSize: '22px',
-                      fontWeight: 800,
-                      color: isChecked ? '#60a5fa' : '#f8fafc'
-                    }}
-                  >
-                    {pNum}
-                  </span>
-
-                  <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
-                    PAGE
-                  </span>
-                </div>
-              );
-            })}
+            {pageNumbers.map((pNum) => (
+              <PdfPageCard
+                key={pNum}
+                pageNumber={pNum}
+                thumbUrl={thumbnailMap.get(pNum)}
+                isChecked={selectedPages.has(pNum)}
+                isSingleSelected={selectedSinglePage === pNum}
+                isSelectionMode={isSelectionMode}
+                isProcessing={processingPage === pNum}
+                onCardClick={handlePageCardClick}
+                onCropClick={handleSelectCropDirect}
+                onFullPageClick={handleSelectFullPageDirect}
+              />
+            ))}
           </div>
         </div>
+
+        {/* ====================================================================
+            [2-1. 단일 페이지 선택 시 하단 빠른 실행 액션 바]
+            ==================================================================== */}
+        {selectedSinglePage !== null && !isSelectionMode && (
+          <div
+            style={{
+              padding: '12px 20px',
+              borderTop: '1px solid rgba(59, 130, 246, 0.4)',
+              background: '#131826',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+              flexWrap: 'wrap',
+              boxShadow: '0 -4px 16px rgba(0, 0, 0, 0.5)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '20px' }}>📑</span>
+              <span style={{ fontSize: '14.5px', fontWeight: 800, color: '#60a5fa' }}>
+                {selectedSinglePage}페이지 선택됨
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => handleSelectCropDirect(selectedSinglePage)}
+                style={{
+                  padding: '9px 18px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                  color: '#ffffff',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 3px 12px rgba(5, 150, 105, 0.45)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <span>✂️</span> 이 쪽에서 문제 자르기
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectFullPageDirect(selectedSinglePage)}
+                style={{
+                  padding: '9px 18px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                  color: '#ffffff',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 3px 12px rgba(37, 99, 235, 0.45)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                <span>📄</span> 현재 쪽 전체 배경으로 넣기
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewPage(selectedSinglePage)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  color: '#cbd5e1',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                <span>🔍</span> 크게 미리보기
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ====================================================================
             [3. 다중 선택 모드 활성화 시 하단 제어 바]
@@ -794,8 +1025,11 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onSelectPage(previewPage, 'full_page');
-                      setPreviewPage(null);
+                      if (previewPage !== null) {
+                        const p = previewPage;
+                        onSelectPage(p, 'full_page', previewDataUrl || undefined);
+                        setPreviewPage(null);
+                      }
                     }}
                     style={{
                       background: '#2563eb',
@@ -817,8 +1051,11 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onSelectPage(previewPage, 'crop');
-                      setPreviewPage(null);
+                      if (previewPage !== null) {
+                        const p = previewPage;
+                        onSelectPage(p, 'crop', previewDataUrl || undefined);
+                        setPreviewPage(null);
+                      }
                     }}
                     style={{
                       background: '#059669',
@@ -839,119 +1076,6 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
                   </button>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* ====================================================================
-            [5. 팝업 2: 더블클릭 / 롱프레스 즉시 액션 팝업]
-            ==================================================================== */}
-        {quickActionPage !== null && (
-          <div
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 10001,
-              background: 'rgba(0, 0, 0, 0.7)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '16px'
-            }}
-            onClick={() => setQuickActionPage(null)}
-          >
-            <div
-              style={{
-                width: '100%',
-                maxWidth: '360px',
-                background: '#1e2430',
-                borderRadius: '16px',
-                border: '1.5px solid #3b82f6',
-                padding: '20px',
-                boxShadow: '0 20px 50px rgba(0, 0, 0, 0.9)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '12px'
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div style={{ textAlign: 'center', marginBottom: '4px' }}>
-                <span style={{ fontSize: '28px' }}>📑</span>
-                <h4 style={{ margin: '6px 0 0', fontSize: '16px', fontWeight: 700, color: '#ffffff' }}>
-                  {quickActionPage}페이지 작업 선택
-                </h4>
-                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
-                  원하시는 삽입 방식을 선택해 주세요.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onSelectPage(quickActionPage, 'full_page');
-                  setQuickActionPage(null);
-                }}
-                style={{
-                  background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '10px',
-                  padding: '11px',
-                  fontSize: '13.5px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  boxShadow: '0 4px 12px rgba(37, 99, 235, 0.35)'
-                }}
-              >
-                <span>🖼️</span> 현재 쪽 전체 배경으로 넣기
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onSelectPage(quickActionPage, 'crop');
-                  setQuickActionPage(null);
-                }}
-                style={{
-                  background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '10px',
-                  padding: '11px',
-                  fontSize: '13.5px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  boxShadow: '0 4px 12px rgba(5, 150, 105, 0.35)'
-                }}
-              >
-                <span>✂️</span> 특정 문제 영역 잘라서 넣기
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setQuickActionPage(null)}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  color: '#94a3b8',
-                  border: 'none',
-                  borderRadius: '8px',
-                  padding: '8px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  marginTop: '4px'
-                }}
-              >
-                취소
-              </button>
             </div>
           </div>
         )}

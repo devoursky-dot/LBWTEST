@@ -66,6 +66,20 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
     } else {
       setNormCrop({ x: 0.05, y: 0.05, w: 0.9, h: 0.9 });
     }
+
+    // [무깜빡임 동기 계산]: 이미지가 브라우저에 배치되자마자 즉시 좌표를 계산하여 60ms 마스크 팝인 깜빡임 방지
+    if (containerRef.current) {
+      const contRect = containerRef.current.getBoundingClientRect();
+      const imgRect = img.getBoundingClientRect();
+      if (imgRect.width > 0 && imgRect.height > 0) {
+        setDisplayedRect({
+          left: imgRect.left - contRect.left,
+          top: imgRect.top - contRect.top,
+          width: imgRect.width,
+          height: imgRect.height
+        });
+      }
+    }
   };
 
   // 컨테이너 크기 및 렌더링된 이미지 영역 재계산
@@ -77,19 +91,24 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
     const contRect = container.getBoundingClientRect();
     const imgRect = img.getBoundingClientRect();
 
-    setDisplayedRect({
-      left: imgRect.left - contRect.left,
-      top: imgRect.top - contRect.top,
-      width: imgRect.width,
-      height: imgRect.height
-    });
+    if (imgRect.width > 0 && imgRect.height > 0) {
+      setDisplayedRect({
+        left: imgRect.left - contRect.left,
+        top: imgRect.top - contRect.top,
+        width: imgRect.width,
+        height: imgRect.height
+      });
+    }
   }, []);
 
   useEffect(() => {
     if (isOpen) {
-      const timer = setTimeout(updateDisplayedRect, 60);
+      // 프레임 시작 즉시 및 레이아웃 안정화 타이머 이중 보장
+      const animFrame = requestAnimationFrame(updateDisplayedRect);
+      const timer = setTimeout(updateDisplayedRect, 40);
       window.addEventListener('resize', updateDisplayedRect);
       return () => {
+        cancelAnimationFrame(animFrame);
         clearTimeout(timer);
         window.removeEventListener('resize', updateDisplayedRect);
       };
