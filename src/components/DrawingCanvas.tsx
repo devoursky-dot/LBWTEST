@@ -11,7 +11,7 @@ export interface DrawingCanvasProps {
   onStrokeComplete: (stroke: Stroke) => void;
   onStrokesChange: (strokes: Stroke[]) => void;
   onUndoSnapshot: () => void;
-  tool: 'pen' | 'highlighter' | 'eraser' | 'text' | 'image';
+  tool: 'pen' | 'highlighter' | 'eraser' | 'text' | 'image' | 'lasso';
   penColor: string;
   penSize: number;
   highlighterColor: string;
@@ -171,8 +171,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         p.onCanvasPointerDown();
       }
 
-      // 텍스트나 이미지 편집 도구 중일 때는 캔버스 필기 패스
-      if (p.tool === 'text' || p.tool === 'image') return;
+      // 텍스트, 이미지 편집, 올가미 집중 풀이 도구 중일 때는 캔버스 필기 패스
+      if (p.tool === 'text' || p.tool === 'image' || p.tool === 'lasso') return;
 
       // iOS Safari의 기본 제스처(스크롤, 돋보기 루페, 스크리블, 선택) 즉시 차단
       if (e.cancelable) {

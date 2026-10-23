@@ -18,6 +18,12 @@ import { ImageCropModal } from './components/ImageCropModal';
 import { ModularModal } from './components/ModularModal';
 import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/EmbeddedImageLayer';
 import { DrawingCanvas } from './components/DrawingCanvas';
+import {
+  defaultLassoFocusConfig,
+  LassoFocusCanvasOverlay,
+  createFocusedPageBackground,
+  type Point
+} from './modules/lassoFocus';
 import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
 import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
@@ -270,7 +276,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 교실 통일성을 위해 항상 검정색 칠판 다크 모드(#131314)로 고정
   const paperTheme = 'dark';
 
-  const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text' | 'image'>('pen');
+  const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text' | 'image' | 'lasso'>('pen');
   const [penColor, setPenColor] = useState<string>('#ffffff'); // 기본값: 칠판에 가장 선명한 흰색 분필
   const [penSize, setPenSize] = useState<number>(3);
   const [highlighterColor, setHighlighterColor] = useState<string>('#fde047');
@@ -1085,6 +1091,82 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     setEmbeddedImages(prev => prev.filter(img => img.id !== id));
     if (selectedImageId === id) setSelectedImageId(null);
     showToast('🗑️ 이미지가 삭제되었습니다.');
+  };
+
+  // ==========================================================================
+  // [모듈 플러그인]: 올가미 집중 풀이 모듈 (Lasso Focus Page Handler)
+  // ==========================================================================
+  const [isLassoProcessing, setIsLassoProcessing] = useState<boolean>(false);
+
+  const handleConfirmLassoFocus = async (lassoPoints: Point[], placement: 'top_center' | 'original') => {
+    if (!defaultLassoFocusConfig.enabled) return;
+    setIsLassoProcessing(true);
+    try {
+      showToast('⏳ 선택한 문제로 집중 풀이 페이지를 생성하고 있습니다...');
+      const result = await createFocusedPageBackground({
+        fullPageBackground,
+        embeddedImages,
+        strokes,
+        textItems,
+        paperTheme,
+        lassoPoints,
+        A4_WIDTH,
+        A4_HEIGHT,
+        placement
+      });
+
+      // 1. 현재 작성 중인 페이지 상태를 메모리에 안전하게 동기화 (기존 필기 100% 보존)
+      const currentSavedPages = pages.map((p, idx) => {
+        if (idx === currentPageIndex) {
+          return {
+            ...p,
+            strokes,
+            textItems,
+            fullPageBackground,
+            images: embeddedImages
+          };
+        }
+        return p;
+      });
+
+      // 2. 새로운 집중 풀이 페이지 생성
+      const newPageId = `page_focus_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newFocusPage: LessonPage = {
+        id: newPageId,
+        strokes: [],
+        textItems: [],
+        fullPageBackground: result.dataUrl,
+        images: []
+      };
+
+      // 3. 현재 페이지 바로 다음 쪽에 삽입!
+      const nextIndex = currentPageIndex + 1;
+      const updatedPages = [
+        ...currentSavedPages.slice(0, nextIndex),
+        newFocusPage,
+        ...currentSavedPages.slice(nextIndex)
+      ];
+
+      setPages(updatedPages);
+      setCurrentPageIndex(nextIndex);
+      setStrokes([]);
+      setTextItems([]);
+      setFullPageBackground(result.dataUrl);
+      setEmbeddedImages([]);
+      setSelectedImageId(null);
+      setUndoStack([]);
+      setRedoStack([]);
+      setActiveTextId(null);
+
+      // 4. 즉시 풀이를 시작할 수 있도록 펜 도구로 자동 전환!
+      setTool('pen');
+      showToast(`✨ [집중 풀이] 문제가 상단에 배치된 ${nextIndex + 1}쪽 풀이장이 생성되었습니다! 바로 필기하세요.`);
+    } catch (err: any) {
+      console.error('올가미 집중 풀이 생성 오류:', err);
+      showToast(`❌ 집중 풀이 페이지 생성 실패: ${err.message || '오류 발생'}`);
+    } finally {
+      setIsLassoProcessing(false);
+    }
   };
 
   // 이미지 직접 전체 배경 설정
@@ -2529,6 +2611,52 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               }}
             />
           </button>
+
+          {/* [모듈 플러그인]: 5-1. [🎯 올가미 집중 풀이 도구] */}
+          {defaultLassoFocusConfig.enabled && (
+            <button
+              id="btn-tool-lasso"
+              type="button"
+              className={`student-tool-btn ${tool === 'lasso' ? 'active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (tool !== 'lasso') {
+                  setTool('lasso');
+                  setActivePopup(null);
+                  showToast('🎯 올가미 활성화: 집중해서 풀고 싶은 문제를 동그랗게 둘러싸세요!');
+                } else {
+                  setTool('pen');
+                }
+              }}
+              style={{
+                width: '36px',
+                height: '34px',
+                padding: 0,
+                borderRadius: '8px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: tool === 'lasso' ? 'linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(99, 102, 241, 0.3) 100%)' : 'transparent',
+                border: tool === 'lasso' ? '1.5px solid #8b5cf6' : '1px solid transparent',
+                color: tool === 'lasso' ? '#c084fc' : '#e2e8f0',
+                gap: '2px',
+                flexShrink: 0,
+                boxShadow: tool === 'lasso' ? '0 0 12px rgba(139, 92, 246, 0.5)' : 'none'
+              }}
+              title="집중 풀이 올가미 (문제를 둘러싸면 상단에 배치된 새 풀이장이 다음 쪽에 자동 생성됩니다)"
+            >
+              <span style={{ fontSize: '16px' }}>🎯</span>
+              <div
+                style={{
+                  width: '14px',
+                  height: '2px',
+                  borderRadius: '2px',
+                  backgroundColor: tool === 'lasso' ? '#c084fc' : 'transparent'
+                }}
+              />
+            </button>
+          )}
 
           {/* 6. [□ PDF/이미지] */}
           <button
@@ -4201,6 +4329,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             }}
             paperTheme={paperTheme}
           />
+
+          {/* Layer 3: [모듈 플러그인] 올가미 집중 풀이 캔버스 오버레이 레이어 */}
+          {defaultLassoFocusConfig.enabled && tool === 'lasso' && (
+            <LassoFocusCanvasOverlay
+              isActive={tool === 'lasso'}
+              A4_WIDTH={A4_WIDTH}
+              A4_HEIGHT={A4_HEIGHT}
+              onConfirmLasso={handleConfirmLassoFocus}
+              onCancel={() => setTool('pen')}
+              isProcessing={isLassoProcessing}
+            />
+          )}
 
           {/* 텍스트 타이핑 오버레이 레이어 */}
           {textItems.map(item => (
