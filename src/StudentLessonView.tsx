@@ -19,6 +19,7 @@ import { ModularModal } from './components/ModularModal';
 import { EmbeddedImageLayer, type EmbeddedImageItem } from './components/EmbeddedImageLayer';
 import { DrawingCanvas } from './components/DrawingCanvas';
 import { PageOverviewModal } from './components/PageOverviewModal';
+import { ToolbarPageNavigator } from './components/ToolbarPageNavigator';
 import {
   defaultLassoFocusConfig,
   LassoFocusCanvasOverlay,
@@ -26,7 +27,7 @@ import {
   type Point,
   type PolygonBounds
 } from './modules/lassoFocus';
-import { type Stroke, type StrokePoint, drawSingleStroke } from './lib/drawingGeometry';
+import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
 import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
 import { classroomRealtime } from './lib/classroomRealtime';
@@ -185,150 +186,6 @@ const isPageReload = (): boolean => {
   }
 };
 
-/**
- * 연속 세로 스크롤 모드 전용 비활성 페이지 미리보기 렌더러
- * - 원본 A4 비율 유지, 배경/스티커/텍스트/필기 스트로크를 고품질로 실시간 시각화
- * - 원클릭으로 해당 페이지 편집 모드로 전환
- */
-interface StaticPagePreviewProps {
-  page: LessonPage;
-  pageNumber: number;
-  totalPageCount: number;
-  A4_WIDTH: number;
-  A4_HEIGHT: number;
-  width: number;
-  height: number;
-  onClick: () => void;
-}
-
-const StaticPagePreview: React.FC<StaticPagePreviewProps> = ({
-  page,
-  pageNumber,
-  A4_WIDTH,
-  A4_HEIGHT,
-  width,
-  height,
-  onClick
-}) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, A4_WIDTH, A4_HEIGHT);
-    if (page.strokes && page.strokes.length > 0) {
-      page.strokes.forEach((s) => drawSingleStroke(ctx, s));
-    }
-  }, [page.strokes, A4_WIDTH, A4_HEIGHT]);
-
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        width: `${width}px`,
-        height: `${height}px`,
-        position: 'relative',
-        boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.12)',
-        border: '1px solid rgba(255, 255, 255, 0.12)',
-        borderRadius: '8px',
-        background: '#131314',
-        overflow: 'hidden',
-        cursor: 'pointer',
-        transition: 'transform 0.15s ease, box-shadow 0.15s ease'
-      }}
-      title={`터치하여 ${pageNumber}쪽에서 필기 시작`}
-    >
-      {/* 배경 이미지 */}
-      {page.fullPageBackground && (
-        <img
-          src={page.fullPageBackground}
-          alt={`Page ${pageNumber} Background`}
-          style={{
-            position: 'absolute',
-            inset: 0,
-            width: '100%',
-            height: '100%',
-            objectFit: 'fill',
-            pointerEvents: 'none'
-          }}
-        />
-      )}
-
-      {/* 스티커 이미지들 */}
-      {page.images?.map((img) => (
-        <div
-          key={img.id}
-          style={{
-            position: 'absolute',
-            left: `${(img.x / A4_WIDTH) * 100}%`,
-            top: `${(img.y / A4_HEIGHT) * 100}%`,
-            width: `${(img.width / A4_WIDTH) * 100}%`,
-            height: `${(img.height / A4_HEIGHT) * 100}%`,
-            pointerEvents: 'none'
-          }}
-        >
-          <img src={img.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-        </div>
-      ))}
-
-      {/* 스트로크 필기 캔버스 */}
-      <canvas
-        ref={canvasRef}
-        width={A4_WIDTH}
-        height={A4_HEIGHT}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          pointerEvents: 'none'
-        }}
-      />
-
-      {/* 텍스트 아이템들 */}
-      {page.textItems?.map((item) => (
-        <div
-          key={item.id}
-          style={{
-            position: 'absolute',
-            left: `${(item.x / A4_WIDTH) * 100}%`,
-            top: `${(item.y / A4_HEIGHT) * 100}%`,
-            color: item.color,
-            fontSize: `${item.fontSize}px`,
-            pointerEvents: 'none',
-            textShadow: '0 2px 4px rgba(0,0,0,0.8)'
-          }}
-        >
-          {item.text}
-        </div>
-      ))}
-
-      {/* 터치 안내 배너 오버레이 */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '12px',
-          right: '12px',
-          background: 'rgba(15, 23, 42, 0.88)',
-          backdropFilter: 'blur(6px)',
-          border: '1px solid rgba(59, 130, 246, 0.4)',
-          color: '#93c5fd',
-          padding: '5px 12px',
-          borderRadius: '20px',
-          fontSize: '11px',
-          fontWeight: 700,
-          pointerEvents: 'none',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.6)'
-        }}
-      >
-        👆 터치하여 이 쪽으로 전환
-      </div>
-    </div>
-  );
-};
-
 export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   lessonId,
   lessonTitle,
@@ -410,7 +267,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     { id: 'page_1', strokes: [], textItems: [] }
   ]);
   const [currentPageIndex, setCurrentPageIndex] = useState<number>(0);
-  const [pageViewMode, setPageViewMode] = useState<'single' | 'vertical_scroll'>('single');
   const [isPageOverviewOpen, setIsPageOverviewOpen] = useState<boolean>(false);
 
   // 현재 활성 페이지의 데이터 & Undo/Redo 스택 (획 추가 및 획 삭제 모두 지원)
@@ -1721,7 +1577,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // [휠 줌 및 스크롤 이벤트 핸들러 - 마우스 커서 위치 중심 줌]
   // ==========================================================================
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (pageViewMode === 'vertical_scroll') return;
     const { minScale: minS, maxScale: maxS } = getFitScales();
     if (e.ctrlKey) {
       // Ctrl + 휠: 마우스 커서 위치 중심 확대/축소 (최소 배율은 한 페이지 전체 보기로 제한!)
@@ -2689,6 +2544,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             )}
           </button>
 
+          {/* [모듈 플러그인]: 메인 툴바 컴팩트 페이지 내비게이션 위젯 */}
+          <ToolbarPageNavigator
+            currentPageIndex={currentPageIndex}
+            totalPages={pages.length}
+            onPrevPage={() => handleGoToPage(currentPageIndex - 1)}
+            onNextPage={() => handleGoToPage(currentPageIndex + 1)}
+            onOpenOverview={() => setIsPageOverviewOpen(true)}
+            onAddPage={handleAddPage}
+          />
+
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
 
           {/* 3. [/ 펜] */}
@@ -3179,68 +3044,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
           <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
 
-          {/* 페이지 보기 방식 & 관리 */}
+          {/* 페이지 관리 & 모아보기 */}
           <div>
             <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>📄 페이지 보기 및 관리</span>
+              <span>📄 공책 페이지 관리</span>
               <span style={{ color: '#38bdf8' }}>총 {pages.length}쪽</span>
             </div>
 
-            {/* 1. 보기 방식 토글 버튼 (단일 페이지 vs 연속 세로 스크롤) */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
-              <button
-                type="button"
-                id="btn-viewmode-single"
-                onClick={() => {
-                  setPageViewMode('single');
-                  showToast('📄 단일 페이지 보기 모드로 전환되었습니다.');
-                }}
-                style={{
-                  padding: '7px 6px',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '5px',
-                  cursor: 'pointer',
-                  border: pageViewMode === 'single' ? '1.5px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.12)',
-                  background: pageViewMode === 'single' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.04)',
-                  color: pageViewMode === 'single' ? '#60a5fa' : '#94a3b8',
-                  transition: 'all 0.15s ease'
-                }}
-              >
-                <span>📄</span> 단일 페이지
-              </button>
-              <button
-                type="button"
-                id="btn-viewmode-scroll"
-                onClick={() => {
-                  setPageViewMode('vertical_scroll');
-                  showToast('📜 연속 세로 스크롤 보기 모드로 전환되었습니다.');
-                }}
-                style={{
-                  padding: '7px 6px',
-                  borderRadius: '8px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '5px',
-                  cursor: 'pointer',
-                  border: pageViewMode === 'vertical_scroll' ? '1.5px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.12)',
-                  background: pageViewMode === 'vertical_scroll' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.04)',
-                  color: pageViewMode === 'vertical_scroll' ? '#60a5fa' : '#94a3b8',
-                  transition: 'all 0.15s ease'
-                }}
-              >
-                <span>📜</span> 세로 스크롤
-              </button>
-            </div>
-
-            {/* 2. 전체 페이지 모아보기 팝업 버튼 */}
+            {/* 전체 페이지 모아보기 팝업 버튼 */}
             <button
               type="button"
               id="btn-open-page-overview"
@@ -3250,26 +3061,27 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               }}
               style={{
                 width: '100%',
-                padding: '8px 12px',
+                padding: '9px 12px',
                 borderRadius: '8px',
                 fontSize: '12.5px',
                 fontWeight: 600,
-                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%)',
-                border: '1px solid rgba(139, 92, 246, 0.4)',
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.22) 0%, rgba(139, 92, 246, 0.22) 100%)',
+                border: '1px solid rgba(139, 92, 246, 0.45)',
                 color: '#c084fc',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
+                gap: '7px',
                 cursor: 'pointer',
-                marginBottom: '8px'
+                marginBottom: '8px',
+                boxShadow: '0 2px 8px rgba(139, 92, 246, 0.15)'
               }}
             >
               <span>🖼️</span>
-              <span>전체 페이지 모아보기 ({pages.length}쪽)</span>
+              <span>전체 페이지 모아보기 및 빠른 이동 ({pages.length}쪽)</span>
             </button>
 
-            {/* 3. 이전/다음 쪽 이동 & 추가 */}
+            {/* 이전/다음 쪽 이동 & 추가 */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.04)', padding: '6px 10px', borderRadius: '8px' }}>
               <button
                 type="button"
@@ -4474,393 +4286,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           </div>
         )}
 
-      {/* 3. 메인 작업 영역: A4 종이 시트 & 줌/스크롤 뷰포트 (단일 페이지 vs 연속 세로 스크롤) */}
-      {pageViewMode === 'vertical_scroll' ? (
-        <main
-          ref={containerRef}
-          className="student-canvas-wrapper vertical-scroll-mode"
-          onPointerDown={() => {
-            if (activePopup) setActivePopup(null);
-            requestFullscreenSafe();
-          }}
-          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            background: '#090b10',
-            position: 'relative',
-            padding: '24px 16px 120px 16px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '32px',
-            WebkitOverflowScrolling: 'touch',
-            userSelect: 'none'
-          }}
-        >
-          {/* 플로팅 모드 안내 배지 */}
-          <div
-            style={{
-              position: 'sticky',
-              top: '12px',
-              zIndex: 30,
-              background: 'rgba(15, 23, 42, 0.92)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              border: '1.5px solid rgba(59, 130, 246, 0.4)',
-              borderRadius: '24px',
-              padding: '6px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.7)',
-              color: '#ffffff',
-              fontSize: '12.5px',
-              fontWeight: 700
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>📜</span>
-              <span>연속 세로 스크롤 모드 ({currentPageIndex + 1}/{pages.length}쪽)</span>
-            </div>
-            <div style={{ width: '1px', height: '14px', background: 'rgba(255, 255, 255, 0.2)' }} />
-            <button
-              type="button"
-              id="btn-scroll-open-overview"
-              onClick={() => {
-                setIsPageOverviewOpen(true);
-              }}
-              style={{
-                background: 'rgba(139, 92, 246, 0.25)',
-                border: '1px solid rgba(139, 92, 246, 0.5)',
-                color: '#c084fc',
-                borderRadius: '12px',
-                padding: '3px 9px',
-                fontSize: '11px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              🖼️ 전체 모아보기
-            </button>
-            <button
-              type="button"
-              id="btn-scroll-switch-single"
-              onClick={() => {
-                setPageViewMode('single');
-                showToast('📄 단일 페이지 보기 모드로 전환되었습니다.');
-              }}
-              style={{
-                background: 'rgba(59, 130, 246, 0.25)',
-                border: '1px solid rgba(59, 130, 246, 0.5)',
-                color: '#93c5fd',
-                borderRadius: '12px',
-                padding: '3px 9px',
-                fontSize: '11px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              📄 단일 보기로 전환
-            </button>
-          </div>
-
-          {pages.map((p, pageIdx) => {
-            const isCurrent = pageIdx === currentPageIndex;
-            return (
-              <div
-                key={p.id || pageIdx}
-                id={`scroll-page-section-${pageIdx}`}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '8px',
-                  maxWidth: '100%'
-                }}
-              >
-                {/* 각 쪽 상단 헤더 배지 */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    width: `${paperBaseWidth}px`,
-                    maxWidth: 'calc(100vw - 32px)',
-                    padding: '6px 14px',
-                    borderRadius: '8px',
-                    background: isCurrent ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                    border: isCurrent ? '1.5px solid rgba(59, 130, 246, 0.6)' : '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#ffffff',
-                    fontSize: '12.5px',
-                    fontWeight: 700
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ color: isCurrent ? '#60a5fa' : '#94a3b8' }}>
-                      📄 {pageIdx + 1}쪽 / 총 {pages.length}쪽
-                    </span>
-                    {isCurrent && (
-                      <span
-                        style={{
-                          background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                          color: '#ffffff',
-                          fontSize: '10px',
-                          padding: '2px 8px',
-                          borderRadius: '10px',
-                          fontWeight: 800,
-                          boxShadow: '0 0 10px rgba(37, 99, 235, 0.5)'
-                        }}
-                      >
-                        ✏️ 현재 필기 중
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    {!isCurrent ? (
-                      <button
-                        type="button"
-                        onClick={() => handleGoToPage(pageIdx)}
-                        style={{
-                          background: 'rgba(59, 130, 246, 0.2)',
-                          border: '1px solid #3b82f6',
-                          color: '#93c5fd',
-                          borderRadius: '6px',
-                          padding: '4px 10px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        이 쪽에서 필기하기 ➔
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setPageViewMode('single')}
-                        style={{
-                          background: 'rgba(255, 255, 255, 0.08)',
-                          border: '1px solid rgba(255, 255, 255, 0.2)',
-                          color: '#cbd5e1',
-                          borderRadius: '6px',
-                          padding: '4px 10px',
-                          fontSize: '11px',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        단일 화면으로 확대 ⤢
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* 종이 시트: 활성 페이지 vs 비활성 미리보기 */}
-                {isCurrent ? (
-                  <div
-                    ref={paperSheetRef}
-                    onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                    style={{
-                      width: `${paperBaseWidth}px`,
-                      height: `${paperBaseHeight}px`,
-                      position: 'relative',
-                      boxShadow: '0 0 24px rgba(59, 130, 246, 0.4), 0 12px 48px rgba(0, 0, 0, 0.8)',
-                      border: '2px solid rgba(59, 130, 246, 0.7)',
-                      borderRadius: '8px',
-                      background: '#131314',
-                      overflow: 'hidden',
-                      touchAction: 'none',
-                      WebkitTouchCallout: 'none',
-                      WebkitUserSelect: 'none',
-                      userSelect: 'none'
-                    }}
-                  >
-                    {/* Layer 0: 배경 */}
-                    {fullPageBackground && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          width: '100%',
-                          height: '100%',
-                          zIndex: 1,
-                          pointerEvents: 'none',
-                          overflow: 'hidden'
-                        }}
-                      >
-                        <img
-                          src={fullPageBackground}
-                          alt="Worksheet Background"
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'fill',
-                            display: 'block'
-                          }}
-                        />
-                      </div>
-                    )}
-
-                    {/* 배경 제거 버튼 */}
-                    {fullPageBackground && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFullPageBackground(null);
-                          showToast('🗑️ 현재 쪽의 배경이 제거되었습니다.');
-                        }}
-                        style={{
-                          position: 'absolute',
-                          top: '10px',
-                          right: '10px',
-                          zIndex: 15,
-                          background: 'rgba(0, 0, 0, 0.75)',
-                          color: '#cbd5e1',
-                          border: '1px solid rgba(255, 255, 255, 0.25)',
-                          borderRadius: '6px',
-                          padding: '3px 8px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          backdropFilter: 'blur(4px)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px'
-                        }}
-                        title="배경 PDF/이미지 제거"
-                      >
-                        <span>✕</span> 배경 제거
-                      </button>
-                    )}
-
-                    {/* Layer 1: 임베드 스티커 레이어 */}
-                    <EmbeddedImageLayer
-                      images={embeddedImages}
-                      selectedImageId={selectedImageId}
-                      onSelectImage={setSelectedImageId}
-                      onUpdateImage={handleUpdateEmbeddedImage}
-                      onDeleteImage={handleDeleteEmbeddedImage}
-                      onEditCrop={handleEditCrop}
-                      isDrawingToolActive={tool === 'pen' || tool === 'highlighter' || tool === 'eraser'}
-                      A4_WIDTH={A4_WIDTH}
-                      A4_HEIGHT={A4_HEIGHT}
-                    />
-
-                    {/* Layer 2: 필기 캔버스 */}
-                    <DrawingCanvas
-                      strokes={strokes}
-                      onStrokeComplete={handleStrokeComplete}
-                      onStrokesChange={handleStrokesChange}
-                      onUndoSnapshot={handleUndoSnapshot}
-                      tool={tool}
-                      penColor={penColor}
-                      penSize={penSize}
-                      highlighterColor={highlighterColor}
-                      highlighterSize={highlighterSize}
-                      eraserSize={eraserSize}
-                      eraserMode={eraserMode}
-                      penOnlyMode={penOnlyMode}
-                      onAutoPenModeDetected={() => {
-                        if (!penOnlyMode) {
-                          setPenOnlyMode(true);
-                          try { localStorage.setItem('lbw_pen_mode', 'true'); } catch {}
-                        }
-                      }}
-                      onTogglePenEraser={handleTogglePenEraser}
-                      fullPageBackground={fullPageBackground}
-                      A4_WIDTH={A4_WIDTH}
-                      A4_HEIGHT={A4_HEIGHT}
-                      selectedImageId={selectedImageId}
-                      onFingerPanMove={handleFingerPanMove}
-                      onCanvasPointerDown={() => {
-                        if (activePopup) setActivePopup(null);
-                      }}
-                      paperTheme={paperTheme}
-                    />
-
-                    {/* Layer 3: 올가미 집중 풀이 오버레이 */}
-                    {defaultLassoFocusConfig.enabled && tool === 'lasso' && (
-                      <LassoFocusCanvasOverlay
-                        isActive={tool === 'lasso'}
-                        A4_WIDTH={A4_WIDTH}
-                        A4_HEIGHT={A4_HEIGHT}
-                        onConfirmLasso={handleConfirmLassoFocus}
-                        onCancel={() => setTool('pen')}
-                        isProcessing={isLassoProcessing}
-                      />
-                    )}
-
-                    {/* 텍스트 아이템들 */}
-                    {textItems.map(item => (
-                      <div
-                        key={item.id}
-                        style={{
-                          position: 'absolute',
-                          left: `${(item.x / A4_WIDTH) * 100}%`,
-                          top: `${(item.y / A4_HEIGHT) * 100}%`,
-                          zIndex: 10
-                        }}
-                      >
-                        {activeTextId === item.id ? (
-                          <input
-                            type="text"
-                            value={item.text}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setTextItems(prev => prev.map(t => t.id === item.id ? { ...t, text: val } : t));
-                            }}
-                            onBlur={() => setActiveTextId(null)}
-                            autoFocus
-                            style={{
-                              background: 'rgba(0,0,0,0.7)',
-                              border: '1px solid var(--g-primary-blue)',
-                              color: item.color,
-                              fontSize: `${item.fontSize}px`,
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                              outline: 'none'
-                            }}
-                          />
-                        ) : (
-                          <span
-                            onClick={() => setActiveTextId(item.id)}
-                            style={{
-                              color: item.color,
-                              fontSize: `${item.fontSize}px`,
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              userSelect: 'none',
-                              textShadow: '0 2px 4px rgba(0,0,0,0.8)'
-                            }}
-                          >
-                            {item.text || '클릭하여 입력'}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <StaticPagePreview
-                    page={p}
-                    pageNumber={pageIdx + 1}
-                    totalPageCount={pages.length}
-                    A4_WIDTH={A4_WIDTH}
-                    A4_HEIGHT={A4_HEIGHT}
-                    width={paperBaseWidth}
-                    height={paperBaseHeight}
-                    onClick={() => handleGoToPage(pageIdx)}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </main>
-      ) : (
-        /* 기존 단일 페이지 메인 캔버스 */
-        <main
-          ref={containerRef}
-          className="student-canvas-wrapper"
-          onWheel={handleWheel}
+      {/* 3. 메인 작업 영역: A4 종이 시트 & 줌/스크롤 뷰포트 (단일 페이지 집중 모드) */}
+      <main
+        ref={containerRef}
+        className="student-canvas-wrapper"
+        onWheel={handleWheel}
         onPointerDown={() => {
           if (activePopup) setActivePopup(null);
           requestFullscreenSafe();
@@ -5066,7 +4496,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           ))}
         </div>
       </main>
-      )}
 
       {/* 4. 전체 페이지 모아보기 그리드 모달 (PageOverviewModal) */}
       <PageOverviewModal
