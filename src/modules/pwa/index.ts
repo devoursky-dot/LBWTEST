@@ -3,3 +3,4 @@
  */
 export * from './usePwaInstall';
 export * from './PwaInstallButton';
+export * from './PwaLaunchPromptModal';

@@ -1,6 +1,30 @@
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
+import path from 'path';
+
+// KST 빌드 시간 및 버전 생성 헬퍼
+function getBuildInfo() {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const buildTime = `${kst.getUTCFullYear()}-${pad(kst.getUTCMonth() + 1)}-${pad(kst.getUTCDate())} ${pad(kst.getUTCHours())}:${pad(kst.getUTCMinutes())}`;
+  const version = `${kst.getUTCFullYear()}.${pad(kst.getUTCMonth() + 1)}.${pad(kst.getUTCDate())}.${pad(kst.getUTCHours())}${pad(kst.getUTCMinutes())}`;
+  return { version, buildTime, timestamp: now.getTime() };
+}
+
+function autoVersionPlugin(): Plugin {
+  return {
+    name: 'auto-version-plugin',
+    buildStart() {
+      const info = getBuildInfo();
+      const versionFile = path.resolve(__dirname, 'public/version.json');
+      fs.writeFileSync(versionFile, JSON.stringify(info, null, 2));
+      console.log(`[Vite AutoVersion] 새 앱 버전 생성 완료: ${info.version} (${info.buildTime})`);
+    }
+  };
+}
 
 const DEFAULT_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
 
@@ -259,8 +283,11 @@ function localDriveApiPlugin(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), localDriveApiPlugin()],
+  plugins: [react(), localDriveApiPlugin(), autoVersionPlugin()],
   base: './',
+  define: {
+    __APP_BUILD_INFO__: JSON.stringify(getBuildInfo())
+  },
   build: {
     target: ['es2015', 'chrome60', 'safari11', 'edge18'],
     cssTarget: 'chrome60',

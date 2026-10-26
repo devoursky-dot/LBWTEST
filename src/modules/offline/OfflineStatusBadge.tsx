@@ -57,11 +57,10 @@ export const OfflineStatusBadge: React.FC<OfflineStatusBadgeProps> = ({ style })
         type="button"
         onClick={() => setPopoverOpen(prev => !prev)}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '5px',
-          padding: '3px 8px',
-          borderRadius: '14px',
+          width: '32px',
+          height: '32px',
+          padding: 0,
+          borderRadius: '50%',
           border: !status.isOnline
             ? '1.5px solid #f59e0b'
             : status.pendingCount > 0
@@ -72,47 +71,47 @@ export const OfflineStatusBadge: React.FC<OfflineStatusBadgeProps> = ({ style })
             : status.pendingCount > 0
             ? 'rgba(59, 130, 246, 0.18)'
             : 'rgba(255, 255, 255, 0.06)',
-          color: !status.isOnline
-            ? '#fbbf24'
-            : status.pendingCount > 0
-            ? '#60a5fa'
-            : '#94a3b8',
-          fontSize: '11px',
-          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           cursor: 'pointer',
           backdropFilter: 'blur(4px)',
-          transition: 'all 0.15s ease'
+          transition: 'all 0.15s ease',
+          position: 'relative'
         }}
-        title="네트워크 및 오프라인 저장 상태 확인"
+        title={
+          !status.isOnline
+            ? '📡 네트워크 연결 끊김 (오프라인 모드: 기기에 안전하게 저장 중)'
+            : status.isSyncing
+            ? '🔄 전자칠판으로 필기 동기화 전송 중...'
+            : status.pendingCount > 0
+            ? `🔄 전송 대기 과제 ${status.pendingCount}건 (연결 시 자동 제출)`
+            : '🟢 네트워크 연결됨 (온라인: 실시간 동기화 완료)'
+        }
       >
-        <span
-          style={{
-            width: '7px',
-            height: '7px',
-            borderRadius: '50%',
-            background: !status.isOnline
-              ? '#f59e0b'
-              : status.isSyncing
-              ? '#60a5fa'
-              : status.pendingCount > 0
-              ? '#3b82f6'
-              : '#10b981',
-            boxShadow: !status.isOnline
-              ? '0 0 6px #f59e0b'
-              : status.pendingCount > 0
-              ? '0 0 6px #3b82f6'
-              : '0 0 6px #10b981'
-          }}
-        />
+        <span style={{ fontSize: '14px', lineHeight: 1 }}>
+          {!status.isOnline ? '📡' : status.isSyncing ? '⏳' : status.pendingCount > 0 ? '🔄' : '🟢'}
+        </span>
 
-        {!status.isOnline ? (
-          <span>오프라인</span>
-        ) : status.isSyncing ? (
-          <span>동기화 중...</span>
-        ) : status.pendingCount > 0 ? (
-          <span>대기 {status.pendingCount}건</span>
-        ) : (
-          <span>온라인</span>
+        {/* 대기열 건수 미니 뱃지 */}
+        {status.pendingCount > 0 && (
+          <span
+            style={{
+              position: 'absolute',
+              top: '-2px',
+              right: '-2px',
+              background: '#3b82f6',
+              color: '#ffffff',
+              fontSize: '9px',
+              fontWeight: 900,
+              padding: '1px 4px',
+              borderRadius: '8px',
+              border: '1px solid #131620',
+              lineHeight: 1
+            }}
+          >
+            {status.pendingCount}
+          </span>
         )}
       </button>
 

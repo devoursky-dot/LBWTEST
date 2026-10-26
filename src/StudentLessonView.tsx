@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useHorizontalToolbarScroll } from './lib/scrollModule';
 import { useAppConfirm } from './lib/fullscreenModule';
 import { useFullscreen } from './modules/fullscreen';
-import { PwaInstallButton } from './modules/pwa';
+import { PwaInstallButton, PwaLaunchPromptModal, usePwaInstall } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
+import { useAppVersionCheck, VersionUpdateOverlay } from './modules/version';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
@@ -423,6 +424,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setToastMsg(prev => (prev === msg ? null : prev));
     }, 3000);
   };
+
+  // 🚀 최신 앱 배포 버전 자동 검증 및 강제 업데이트 훅
+  const { localVersion, isUpdating, newVersionInfo, checkVersion } = useAppVersionCheck({
+    autoCheckOnMount: true,
+    onToast: showToast
+  });
+
+  // 📲 PWA 설치 상태 및 프롬프트 제어 훅
+  const { isStandalone, canInstall, promptInstall } = usePwaInstall();
 
   // 펜 <-> 지우개 원터치 토글 (펜 모드 시 손가락 화면 더블탭 톡톡 및 키보드 단축키 E/P)
   const handleTogglePenEraser = useCallback(() => {
@@ -2609,38 +2619,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onAddPage={handleAddPage}
           />
 
-          {/* [오프라인 모듈]: 네트워크 상태 및 동기화 대기열 배지 */}
+          {/* [오프라인 모듈]: 네트워크 상태 및 동기화 대기열 컴팩트 아이콘 배지 */}
           <OfflineStatusBadge style={{ marginLeft: '4px', flexShrink: 0 }} />
-
-          {/* [PWA 모듈]: 브라우저 접속 시 홈 화면 앱 설치 배지 (설치 시 자동 숨김) */}
-          <PwaInstallButton style={{ marginLeft: '4px', flexShrink: 0 }} />
-
-          {/* [QR 스캐너 모듈]: 카메라로 전자칠판 QR코드 즉시 스캔 버튼 */}
-          <button
-            type="button"
-            onClick={() => setIsQrScannerOpen(true)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '3px 8px',
-              borderRadius: '14px',
-              border: '1px solid rgba(168, 85, 247, 0.45)',
-              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(139, 92, 246, 0.25) 100%)',
-              color: '#c084fc',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              marginLeft: '4px',
-              flexShrink: 0,
-              userSelect: 'none',
-              backdropFilter: 'blur(4px)'
-            }}
-            title="카메라로 전자칠판의 수업 QR코드를 찍어서 바로 입장"
-          >
-            <span>📷</span>
-            <span>QR 찍기</span>
-          </button>
 
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
 
@@ -3338,10 +3318,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 onClick={() => {
                   setActivePopup('settings');
                 }}
-                style={{ justifyContent: 'center', fontSize: '11.5px', padding: '7px 6px', gridColumn: 'span 2' }}
+                style={{ justifyContent: 'center', fontSize: '11.5px', padding: '7px 6px' }}
               >
                 ⚙️ 상세 설정
               </button>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <PwaInstallButton style={{ width: '100%', justifyContent: 'center' }} />
+              </div>
             </div>
           </div>
 
@@ -3368,6 +3351,37 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           >
             🚪 수업 나가기
           </button>
+
+          {/* 하단 버전 정보 및 최신 버전 확인 */}
+          <div
+            style={{
+              paddingTop: '6px',
+              borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '10.5px',
+              color: '#64748b'
+            }}
+          >
+            <span>v{localVersion.buildTime}</span>
+            <button
+              type="button"
+              onClick={() => checkVersion(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#38bdf8',
+                fontSize: '10.5px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                padding: '2px 4px'
+              }}
+              title="서버의 최신 버전 확인"
+            >
+              🔄 업데이트 확인
+            </button>
+          </div>
         </div>
       )}
 
@@ -4702,9 +4716,43 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 marginBottom: '10px'
               }}
             >
-              <span>⛶</span>
+              <span>▶</span>
               <span>전체화면으로 수업 시작하기</span>
             </button>
+
+            {/* 홈 화면에 앱 설치하기 버튼 (웹 브라우저 접속 시 노출) */}
+            {!isStandalone && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (canInstall) {
+                    await promptInstall();
+                  } else {
+                    showToast('💡 브라우저 메뉴(⋮ 또는 공유)에서 [홈 화면에 추가] 또는 [앱 설치]를 선택하세요.');
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '11px 16px',
+                  fontSize: '13.5px',
+                  fontWeight: 700,
+                  borderRadius: '12px',
+                  background: 'rgba(59, 130, 246, 0.12)',
+                  color: '#93c5fd',
+                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  marginBottom: '10px',
+                  transition: 'background 0.2s'
+                }}
+              >
+                <span>📲</span>
+                <span>태블릿 홈 화면에 앱 설치</span>
+              </button>
+            )}
 
             {/* 다른 학생으로 로그인 또는 변경 */}
             <button
@@ -5335,6 +5383,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       {/* 5-3. 전체화면을 파괴하지 않는 모듈화 인앱 확인 다이얼로그 (AppConfirmModal) */}
       {confirmModalElement}
+
+      {/* 5-4. 앱 실행 시 PWA 최적화 및 전체화면 바로 시작 안내 모달 (학생 확인 모달 닫힌 후) */}
+      {!isConfirmStudentOpen && !isChangingStudent && (
+        <PwaLaunchPromptModal onStartFullscreen={requestFullscreenSafe} />
+      )}
+
+      {/* 5-5. 최신 배포 버전 감지 시 자동 업데이트 진행 오버레이 */}
+      <VersionUpdateOverlay isOpen={isUpdating} newVersionTime={newVersionInfo?.buildTime} />
 
       {/* 6. 이미지/문제 영역 자르기(Crop) 모달 */}
       <ImageCropModal
