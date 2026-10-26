@@ -361,14 +361,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isLessonPdfPromptOpen, setIsLessonPdfPromptOpen] = useState<boolean>(false);
   const [isDownloadingLessonPdf, setIsDownloadingLessonPdf] = useState<boolean>(false);
 
-  // 📺 표준 모듈화된 전체화면 관리 (강제 복구 편법 인터셉터 제거)
+  // 📺 표준 모듈화된 전체화면 관리 (불필요한 강제 재진입 편법 및 하드코딩 제거)
   const {
     isFullscreen,
     toggleFullscreen,
     enterFullscreen: requestFullscreenSafe,
     exitFullscreen: exitFullscreenSafe
   } = useFullscreen();
-  const dismissReentryPrompt = useCallback(() => {}, []);
 
   // 📷 카메라 QR코드 스캐너 모달 상태 및 처리 액션
   const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
@@ -535,7 +534,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setStudentInfo(info);
       saveSavedStudentInfo(info);
       setIsChangingStudent(false);
-      requestFullscreenSafe();
       setAuthPassword('');
       setAuthNewPassword('');
       setAuthConfirmPassword('');
@@ -837,7 +835,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 파일 선택 처리 (PDF 또는 일반 이미지)
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    requestFullscreenSafe();
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -847,7 +844,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 
     if (isPdf) {
-      dismissReentryPrompt();
       currentPdfFileRef.current = file;
       setPdfFileName(file.name);
       setIsPdfLoading(true);
@@ -872,7 +868,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     } else {
       // 일반 이미지 파일
       try {
-        dismissReentryPrompt();
         const { dataUrl } = await loadImageFile(file);
         setEditingImageItem(null);
         setCropTargetImageSrc(dataUrl);
@@ -954,7 +949,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setRedoStack([]);
       setActiveTextId(null);
       setPdfPickerOpen(false);
-      requestFullscreenSafe();
 
       showToast(`🎉 PDF ${pageNumbers.length}개 쪽이 공책 맨 앞쪽에 성공적으로 생성되었습니다!`);
     } catch (err: any) {
@@ -1051,7 +1045,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       if (mode === 'full_page') {
         setFullPageBackground(dataUrl);
-        requestFullscreenSafe();
         showToast(`📄 PDF ${pageNumber}페이지가 현재 쪽 전체 배경으로 설정되었습니다.`);
       } else {
         // 크롭 모달 열기 (원자적 상태 전환)
@@ -1132,7 +1125,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       showToast('🖼️ 이미지가 공책에 추가되었습니다. 위치와 크기를 조절할 수 있습니다.');
     }
     setCropModalOpen(false);
-    requestFullscreenSafe();
   };
 
   // 기존 이미지 재자르기
@@ -1302,7 +1294,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 20쪽 다쪽 샘플 PDF 학습지 즉시 로드 (페이지 선택/자르기/배경/다중선택 종합 테스트용)
   const handleLoadSamplePdf = () => {
-    dismissReentryPrompt();
     setActivePopup(null);
     setPdfFileName('단원평가_수학학습지_20쪽.pdf');
     const totalP = 20;
@@ -1993,16 +1984,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return;
     }
 
-    // 1. 브라우저 전체화면 요청
-    try {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen();
-      }
-    } catch (fsErr) {
-      console.warn('전체화면 요청 실패(사용자 제스처 필요):', fsErr);
-    }
-
-    // 2. 화면 꺼짐 방지 (Screen Wake Lock API)
+    // 1. 화면 꺼짐 방지 (Screen Wake Lock API)
     try {
       if ('wakeLock' in navigator && !wakeLockRef.current) {
         wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
@@ -2430,7 +2412,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // [공책 편집 파일(.lbwnote / .json) 불러오기]
   const handleImportNotebookFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    requestFullscreenSafe();
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
@@ -4406,7 +4387,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         onWheel={handleWheel}
         onPointerDown={() => {
           if (activePopup) setActivePopup(null);
-          requestFullscreenSafe();
         }}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         style={{
