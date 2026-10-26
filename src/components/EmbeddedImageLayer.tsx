@@ -52,8 +52,7 @@ export const EmbeddedImageLayer: React.FC<EmbeddedImageLayerProps> = ({
   const handlePointerDown = (
     e: React.PointerEvent,
     img: EmbeddedImageItem,
-    handleType: string,
-    element: HTMLElement
+    handleType: string
   ) => {
     e.preventDefault();
     e.stopPropagation();
@@ -61,8 +60,10 @@ export const EmbeddedImageLayer: React.FC<EmbeddedImageLayerProps> = ({
     onSelectImage(img.id);
     setDraggingHandle(handleType);
 
-    const rect = element.getBoundingClientRect();
-    const scale = img.width > 0 ? img.width / rect.width : 1;
+    // 14px 핸들 대신 실제 이미지 컨테이너의 크기를 기준으로 scale 계산 (1:1 정확한 드래그/리사이즈 보장)
+    const imageContainer = document.getElementById(`embedded-img-${img.id}`);
+    const rect = imageContainer ? imageContainer.getBoundingClientRect() : null;
+    const scale = (rect && rect.width > 0) ? img.width / rect.width : 1;
 
     dragStartRef.current = {
       clientX: e.clientX,
@@ -136,6 +137,29 @@ export const EmbeddedImageLayer: React.FC<EmbeddedImageLayerProps> = ({
 
   return (
     <>
+      {/* 빈 공간 클릭 시 이미지 선택 해제 & 고정 처리하는 투명 백드롭 */}
+      {selectedImageId && (
+        <div
+          id="embedded-image-backdrop"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onSelectImage(null);
+          }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            zIndex: 10,
+            cursor: 'default',
+            userSelect: 'none',
+            touchAction: 'none'
+          }}
+          title="빈 공간을 클릭하면 고정됩니다"
+        />
+      )}
+
       {images.map(img => {
         const isSelected = selectedImageId === img.id;
         const leftPct = (img.x / A4_WIDTH) * 100;
@@ -166,7 +190,7 @@ export const EmbeddedImageLayer: React.FC<EmbeddedImageLayerProps> = ({
               alt="Embedded Problem/Worksheet"
               onPointerDown={(e) => {
                 if (!isDrawingToolActive || isSelected) {
-                  handlePointerDown(e, img, 'move', e.currentTarget);
+                  handlePointerDown(e, img, 'move');
                 }
               }}
               style={{
@@ -176,8 +200,8 @@ export const EmbeddedImageLayer: React.FC<EmbeddedImageLayerProps> = ({
                 display: 'block',
                 borderRadius: '4px',
                 boxShadow: isSelected
-                  ? '0 0 0 2px #38bdf8, 0 8px 24px rgba(0,0,0,0.5)'
-                  : '0 2px 8px rgba(0, 0, 0, 0.4)',
+                  ? '0 0 0 2.5px #38bdf8, 0 8px 24px rgba(0,0,0,0.5)'
+                  : 'none',
                 cursor: isDrawingToolActive && !isSelected ? 'default' : 'move'
               }}
             />
@@ -251,36 +275,36 @@ export const EmbeddedImageLayer: React.FC<EmbeddedImageLayerProps> = ({
                     type="button"
                     onClick={() => onSelectImage(null)}
                     style={{
-                      background: 'rgba(255, 255, 255, 0.1)',
-                      color: '#cbd5e1',
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                      padding: '3px 8px',
+                      background: 'rgba(56, 189, 248, 0.25)',
+                      color: '#38bdf8',
+                      border: '1px solid rgba(56, 189, 248, 0.5)',
+                      padding: '3px 10px',
                       fontSize: '11px',
-                      fontWeight: 600,
+                      fontWeight: 700,
                       borderRadius: '4px',
                       cursor: 'pointer'
                     }}
-                    title="선택 완료 (필기 모드로 전환)"
+                    title="선택 완료 및 고정 (필기 모드로 전환)"
                   >
-                    ✓ 완료
+                    ✓ 고정 및 필기 시작
                   </button>
                 </div>
 
                 {/* 4방향 모서리 리사이즈 핸들 */}
                 <div
-                  onPointerDown={(e) => handlePointerDown(e, img, 'nw', e.currentTarget)}
+                  onPointerDown={(e) => handlePointerDown(e, img, 'nw')}
                   style={{ position: 'absolute', left: -6, top: -6, width: 14, height: 14, background: '#38bdf8', border: '2px solid #ffffff', borderRadius: '3px', cursor: 'nwse-resize', zIndex: 15 }}
                 />
                 <div
-                  onPointerDown={(e) => handlePointerDown(e, img, 'ne', e.currentTarget)}
+                  onPointerDown={(e) => handlePointerDown(e, img, 'ne')}
                   style={{ position: 'absolute', right: -6, top: -6, width: 14, height: 14, background: '#38bdf8', border: '2px solid #ffffff', borderRadius: '3px', cursor: 'nesw-resize', zIndex: 15 }}
                 />
                 <div
-                  onPointerDown={(e) => handlePointerDown(e, img, 'se', e.currentTarget)}
+                  onPointerDown={(e) => handlePointerDown(e, img, 'se')}
                   style={{ position: 'absolute', right: -6, bottom: -6, width: 14, height: 14, background: '#38bdf8', border: '2px solid #ffffff', borderRadius: '3px', cursor: 'nwse-resize', zIndex: 15 }}
                 />
                 <div
-                  onPointerDown={(e) => handlePointerDown(e, img, 'sw', e.currentTarget)}
+                  onPointerDown={(e) => handlePointerDown(e, img, 'sw')}
                   style={{ position: 'absolute', left: -6, bottom: -6, width: 14, height: 14, background: '#38bdf8', border: '2px solid #ffffff', borderRadius: '3px', cursor: 'nesw-resize', zIndex: 15 }}
                 />
               </>

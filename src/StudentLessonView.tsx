@@ -28,7 +28,7 @@ import {
 import {
   defaultLassoFocusConfig,
   LassoFocusCanvasOverlay,
-  createFocusedPageBackground,
+  extractLassoImageAndBackground,
   type Point,
   type PolygonBounds
 } from './modules/lassoFocus';
@@ -1172,83 +1172,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // ==========================================================================
   const [isLassoProcessing, setIsLassoProcessing] = useState<boolean>(false);
 
-  const handleConfirmLassoFocus = async (
-    lassoPoints: Point[],
-    placement: 'top_center' | 'original',
-    scale: number = 1.2,
-    customBounds?: PolygonBounds
-  ) => {
-    if (!defaultLassoFocusConfig.enabled) return;
-    setIsLassoProcessing(true);
-    try {
-      showToast('⏳ 선택한 문제로 고해상도 집중 풀이 페이지를 생성하고 있습니다...');
-      const result = await createFocusedPageBackground({
-        fullPageBackground,
-        embeddedImages,
-        strokes,
-        textItems,
-        paperTheme,
-        lassoPoints,
-        A4_WIDTH,
-        A4_HEIGHT,
-        placement,
-        userScale: scale,
-        customBounds
-      });
-
-      // 1. 현재 작성 중인 페이지 상태를 메모리에 안전하게 동기화 (기존 필기 100% 보존)
-      const currentSavedPages = pages.map((p, idx) => {
-        if (idx === currentPageIndex) {
-          return {
-            ...p,
-            strokes,
-            textItems,
-            fullPageBackground,
-            images: embeddedImages
-          };
-        }
-        return p;
-      });
-
-      // 2. 새로운 집중 풀이 페이지 생성
-      const newPageId = `page_focus_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const newFocusPage: LessonPage = {
-        id: newPageId,
-        strokes: [],
-        textItems: [],
-        fullPageBackground: result.dataUrl,
-        images: []
-      };
-
-      // 3. 현재 페이지 바로 다음 쪽에 삽입!
-      const nextIndex = currentPageIndex + 1;
-      const updatedPages = [
-        ...currentSavedPages.slice(0, nextIndex),
-        newFocusPage,
-        ...currentSavedPages.slice(nextIndex)
-      ];
-
-      setPages(updatedPages);
-      setCurrentPageIndex(nextIndex);
-      setStrokes([]);
-      setTextItems([]);
-      setFullPageBackground(result.dataUrl);
-      setEmbeddedImages([]);
-      setSelectedImageId(null);
-      setUndoStack([]);
-      setRedoStack([]);
-      setActiveTextId(null);
-
-      // 4. 즉시 풀이를 시작할 수 있도록 펜 도구로 자동 전환!
+  // 임베드 이미지 선택 및 고정 핸들러 (빈 공간 클릭 시 고정 및 펜 모드 자동 복귀)
+  const handleSelectImage = useCallback((id: string | null) => {
+    setSelectedImageId(id);
+    if (id === null) {
       setTool('pen');
-      showToast(`✨ [집중 풀이] 문제가 상단에 배치된 ${nextIndex + 1}쪽 풀이장이 생성되었습니다! 바로 필기하세요.`);
-    } catch (err: any) {
-      console.error('올가미 집중 풀이 생성 오류:', err);
-      showToast(`❌ 집중 풀이 페이지 생성 실패: ${err.message || '오류 발생'}`);
-    } finally {
-      setIsLassoProcessing(false);
+      showToast('📌 문제 배치가 고정되었습니다. 자유롭게 필기하세요.');
+    } else {
+      setTool('image');
     }
-  };
+  }, []);
 
   // 이미지 직접 전체 배경 설정
   const handleSetImageAsBackground = (imageSrc: string) => {
@@ -1591,6 +1524,131 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [getFitScales, clampPanOffset]);
+
+  // ==========================================================================
+  // [모듈 플러그인]: 올가미 집중 풀이 - 새 페이지 삽입 및 편집 모드 전환
+  // ==========================================================================
+  const handleConfirmLassoFocus = async (
+    lassoPoints: Point[],
+    placement: 'top_center' | 'original',
+    scale: number = 1.0,
+    customBounds?: PolygonBounds
+  ) => {
+    if (!defaultLassoFocusConfig.enabled) return;
+    setIsLassoProcessing(true);
+    try {
+      showToast('⏳ 선택 영역의 최빈 배경색을 분석하여 새 페이지를 생성하고 있습니다...');
+      const result = await extractLassoImageAndBackground({
+        fullPageBackground,
+        embeddedImages,
+        strokes,
+        textItems,
+        paperTheme,
+        lassoPoints,
+        A4_WIDTH,
+        A4_HEIGHT,
+        placement,
+        userScale: scale,
+        customBounds
+      });
+
+      // 1. 현재 작성 중인 페이지 상태를 메모리에 안전하게 동기화 (기존 필기 100% 보존)
+      const currentSavedPages = pages.map((p, idx) => {
+        if (idx === currentPageIndex) {
+          return {
+            ...p,
+            strokes,
+            textItems,
+            fullPageBackground,
+            images: embeddedImages
+          };
+        }
+        return p;
+      });
+
+      // 2. 잘라낸 문제를 새 페이지의 독립 임베드 이미지 객체로 생성
+      const newImageId = `img_lasso_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newImageItem: EmbeddedImageItem = {
+        id: newImageId,
+        src: result.imageDataUrl,
+        originalSrc: result.imageDataUrl,
+        x: result.defaultPlacement.x,
+        y: result.defaultPlacement.y,
+        width: result.defaultPlacement.width,
+        height: result.defaultPlacement.height
+      };
+
+      // 3. 최빈 배경색으로 채워진 새 풀이 페이지 생성
+      const newPageId = `page_focus_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newFocusPage: LessonPage = {
+        id: newPageId,
+        strokes: [],
+        textItems: [],
+        fullPageBackground: result.bgCanvasDataUrl,
+        images: [newImageItem]
+      };
+
+      // 4. 현재 페이지 바로 다음 쪽에 삽입!
+      const nextIndex = currentPageIndex + 1;
+      const updatedPages = [
+        ...currentSavedPages.slice(0, nextIndex),
+        newFocusPage,
+        ...currentSavedPages.slice(nextIndex)
+      ];
+
+      setPages(updatedPages);
+      setCurrentPageIndex(nextIndex);
+      setStrokes([]);
+      setTextItems([]);
+      setFullPageBackground(result.bgCanvasDataUrl);
+      setEmbeddedImages([newImageItem]);
+      setUndoStack([]);
+      setRedoStack([]);
+      setActiveTextId(null);
+
+      // 5. 페이지 쪽 전체가 한눈에 다 보이는 상태(Fit to Page)로 뷰포트 맞춤
+      const { fitPageScale: targetScale } = getFitScales();
+      setZoomScale(targetScale);
+      setPanOffset({ x: 0, y: 0 });
+
+      // 6. 새 페이지에서 즉시 크기와 위치를 조절할 수 있도록 이미지 선택 활성화!
+      setSelectedImageId(newImageId);
+      setTool('image');
+
+      // 7. 스마트 펜 색상 자동 매칭 (추출된 배경색이 밝으면 검정 펜, 어두우면 흰색 펜)
+      const isBgLight = (() => {
+        const bg = result.detectedBgColor.toLowerCase();
+        if (bg.startsWith('#')) {
+          const hex = bg.replace('#', '');
+          const r = parseInt(hex.substring(0, 2), 16) || 255;
+          const g = parseInt(hex.substring(2, 4), 16) || 255;
+          const b = parseInt(hex.substring(4, 6), 16) || 255;
+          return (r * 299 + g * 587 + b * 114) / 1000 > 140;
+        }
+        const m = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (m) {
+          const r = parseInt(m[1]);
+          const g = parseInt(m[2]);
+          const b = parseInt(m[3]);
+          return (r * 299 + g * 587 + b * 114) / 1000 > 140;
+        }
+        return true;
+      })();
+
+      if (isBgLight && penColor === '#ffffff') {
+        setPenColor('#111827');
+      } else if (!isBgLight && penColor === '#111827') {
+        setPenColor('#ffffff');
+      }
+
+      showToast(`✨ [${nextIndex + 1}쪽] 문제가 삽입되었습니다. 위치/크기 조절 후 빈 공간을 클릭해 고정하세요.`);
+    } catch (err: any) {
+      console.error('올가미 집중 풀이 생성 오류:', err);
+      showToast(`❌ 집중 풀이 페이지 생성 실패: ${err.message || '오류 발생'}`);
+    } finally {
+      setIsLassoProcessing(false);
+    }
+  };
 
   // ==========================================================================
   // [휠 줌 및 스크롤 이벤트 핸들러 - 마우스 커서 위치 중심 줌]
@@ -4642,7 +4700,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           <EmbeddedImageLayer
             images={embeddedImages}
             selectedImageId={selectedImageId}
-            onSelectImage={setSelectedImageId}
+            onSelectImage={handleSelectImage}
             onUpdateImage={handleUpdateEmbeddedImage}
             onDeleteImage={handleDeleteEmbeddedImage}
             onEditCrop={handleEditCrop}

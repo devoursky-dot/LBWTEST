@@ -120,59 +120,84 @@ export function getPointDistance(p1: Point, p2: Point): number {
 }
 
 /**
- * 3. 지능형 배경색 자동 스포이드 추출
+ * 3. 지능형 배경색 자동 추출 (영역 내 가장 많은 색깔 - Dominant Color 알고리즘)
+ * - 사용자 피드백 반영: 선택 영역 내에서 가장 빈도수가 높은 최빈 색상(Mode Color)을 배경색으로 자동 지정
+ * - 글씨(검은색)나 그래프, 테두리 등 소수의 전경 픽셀에 오염되지 않고 순수 종이/문서 배경색을 100% 정확하게 추출
  */
 export function sampleBackgroundColor(
   ctx: CanvasRenderingContext2D,
-  points: Point[],
+  _points: Point[] = [],
   bounds: PolygonBounds,
   superSample = 1.0
 ): string {
   try {
-    const samplePoints: Point[] = [];
+    const sx = Math.max(0, Math.min(ctx.canvas.width - 1, Math.round(bounds.minX * superSample)));
+    const sy = Math.max(0, Math.min(ctx.canvas.height - 1, Math.round(bounds.minY * superSample)));
+    const sw = Math.max(1, Math.min(ctx.canvas.width - sx, Math.round(bounds.width * superSample)));
+    const sh = Math.max(1, Math.min(ctx.canvas.height - sy, Math.round(bounds.height * superSample)));
 
-    // 바운딩 박스 4개 모서리
-    samplePoints.push({ x: bounds.minX + 2, y: bounds.minY + 2 });
-    samplePoints.push({ x: bounds.maxX - 2, y: bounds.minY + 2 });
-    samplePoints.push({ x: bounds.minX + 2, y: bounds.maxY - 2 });
-    samplePoints.push({ x: bounds.maxX - 2, y: bounds.maxY - 2 });
+    const imgData = ctx.getImageData(sx, sy, sw, sh);
+    const data = imgData.data;
 
-    // 올가미 곡선 둘레에서 8~12개 균등 표본점
-    const step = Math.max(1, Math.floor(points.length / 8));
-    for (let i = 0; i < points.length; i += step) {
-      samplePoints.push(points[i]);
-    }
+    // 색상 양자화(Quantization) 히스토그램: 8단위 버킷
+    const colorBuckets = new Map<number, { count: number; sumR: number; sumG: number; sumB: number }>();
 
-    let totalR = 0;
-    let totalG = 0;
-    let totalB = 0;
-    let validSamples = 0;
+    // 표본 추출 스텝: 성능을 위해 약 5,000~10,000개 픽셀 수준으로 샘플링
+    const step = Math.max(1, Math.floor(Math.sqrt((sw * sh) / 10000)));
 
-    for (const sp of samplePoints) {
-      const px = Math.max(0, Math.min(ctx.canvas.width - 1, Math.round(sp.x * superSample)));
-      const py = Math.max(0, Math.min(ctx.canvas.height - 1, Math.round(sp.y * superSample)));
-      const pixel = ctx.getImageData(px, py, 1, 1).data;
-      if (pixel[3] > 100) {
-        totalR += pixel[0];
-        totalG += pixel[1];
-        totalB += pixel[2];
-        validSamples++;
+    for (let y = 0; y < sh; y += step) {
+      for (let x = 0; x < sw; x += step) {
+        const idx = (y * sw + x) * 4;
+        const a = data[idx + 3];
+        if (a < 128) continue; // 투명 픽셀 제외
+
+        const r = data[idx];
+        const g = data[idx + 1];
+        const b = data[idx + 2];
+
+        // 8단위 양자화
+        const qr = (r >> 3) << 3;
+        const qg = (g >> 3) << 3;
+        const qb = (b >> 3) << 3;
+        const key = (qr << 16) | (qg << 8) | qb;
+
+        const bucket = colorBuckets.get(key);
+        if (bucket) {
+          bucket.count++;
+          bucket.sumR += r;
+          bucket.sumG += g;
+          bucket.sumB += b;
+        } else {
+          colorBuckets.set(key, { count: 1, sumR: r, sumG: g, sumB: b });
+        }
       }
     }
 
-    if (validSamples === 0) return '#ffffff';
+    if (colorBuckets.size === 0) return '#ffffff';
 
-    const avgR = Math.round(totalR / validSamples);
-    const avgG = Math.round(totalG / validSamples);
-    const avgB = Math.round(totalB / validSamples);
+    // 가장 많은 빈도수(최빈색) 탐색
+    let maxCount = 0;
+    let dominantBucket = { count: 1, sumR: 255, sumG: 255, sumB: 255 };
 
+    for (const b of colorBuckets.values()) {
+      if (b.count > maxCount) {
+        maxCount = b.count;
+        dominantBucket = b;
+      }
+    }
+
+    const avgR = Math.round(dominantBucket.sumR / dominantBucket.count);
+    const avgG = Math.round(dominantBucket.sumG / dominantBucket.count);
+    const avgB = Math.round(dominantBucket.sumB / dominantBucket.count);
+
+    // 거의 백색(RGB >= 238)이면 순백색(#ffffff)으로 깔끔하게 매칭
     if (avgR >= 238 && avgG >= 238 && avgB >= 238) {
       return '#ffffff';
     }
 
     return `rgb(${avgR}, ${avgG}, ${avgB})`;
   } catch (err) {
-    console.warn('[LassoFocusService] 배경색 추출 실패, 기본 백색 적용:', err);
+    console.warn('[LassoFocusService] 최빈 배경색 추출 실패, 기본 백색 적용:', err);
     return '#ffffff';
   }
 }
@@ -443,4 +468,116 @@ function loadImageElement(src: string): Promise<HTMLImageElement> {
     img.onerror = (e) => reject(e);
     img.src = src;
   });
+}
+
+export interface ExtractedLassoItem {
+  /** 크롭된 고해상도(2x) 문제 이미지 DataURL (투명/클리핑) */
+  imageDataUrl: string;
+  /** 영역 내 가장 많은 최빈 배경색 */
+  detectedBgColor: string;
+  /** 배경색으로 칠해진 A4 전체 배경 이미지 DataURL */
+  bgCanvasDataUrl: string;
+  /** 원본 바운딩 박스 (A4 좌표계) */
+  bounds: PolygonBounds;
+  /** 새 페이지에 기본 배치될 권장 크기 및 위치 */
+  defaultPlacement: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+/**
+ * 6. 올가미 선택 영역을 독립 이미지 객체로 추출하고 최빈 배경색을 가진 새 페이지 캔버스 생성
+ * - 사용자 요청: 선택 즉시 새 페이지를 삽입하고, 거기에서 이미지 크기/위치를 자유롭게 조절
+ */
+export async function extractLassoImageAndBackground(
+  options: CreateFocusPageOptions
+): Promise<ExtractedLassoItem> {
+  const { lassoPoints, A4_WIDTH, A4_HEIGHT } = options;
+  const bounds = options.customBounds || getPolygonBounds(lassoPoints);
+
+  if (bounds.width < 10 || bounds.height < 10) {
+    throw new Error('선택된 영역이 너무 작습니다.');
+  }
+
+  // 1. 고해상도(2.0x) 원본 페이지 렌더링
+  const superSample = 2.0;
+  const sourceCanvas = await renderCurrentPageToCompositeCanvas(options, superSample);
+  const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!sourceCtx) throw new Error('Source context 실패');
+
+  // 2. 최빈 배경색 자동 감지 (가장 많은 색깔 알고리즘)
+  const detectedBgColor = sampleBackgroundColor(sourceCtx, lassoPoints, bounds, superSample);
+
+  // 3. 올가미 영역만 클리핑하여 2x 고해상도 투명 PNG 생성
+  const segmentCanvas = document.createElement('canvas');
+  segmentCanvas.width = Math.round(bounds.width * superSample);
+  segmentCanvas.height = Math.round(bounds.height * superSample);
+  const segCtx = segmentCanvas.getContext('2d');
+  if (!segCtx) throw new Error('Segment context 실패');
+
+  segCtx.imageSmoothingEnabled = true;
+  segCtx.imageSmoothingQuality = 'high';
+
+  segCtx.save();
+  segCtx.scale(superSample, superSample);
+  segCtx.beginPath();
+  const startP = lassoPoints[0];
+  segCtx.moveTo(startP.x - bounds.minX, startP.y - bounds.minY);
+  for (let i = 1; i < lassoPoints.length; i++) {
+    segCtx.lineTo(lassoPoints[i].x - bounds.minX, lassoPoints[i].y - bounds.minY);
+  }
+  segCtx.closePath();
+  segCtx.clip();
+
+  segCtx.drawImage(
+    sourceCanvas,
+    Math.round(bounds.minX * superSample),
+    Math.round(bounds.minY * superSample),
+    Math.round(bounds.width * superSample),
+    Math.round(bounds.height * superSample),
+    0,
+    0,
+    bounds.width,
+    bounds.height
+  );
+  segCtx.restore();
+
+  const croppedImageDataUrl = segmentCanvas.toDataURL('image/png');
+
+  // 4. 추출된 최빈 배경색으로 칠해진 A4 전체 배경 캔버스 생성
+  const bgCanvas = document.createElement('canvas');
+  bgCanvas.width = A4_WIDTH;
+  bgCanvas.height = A4_HEIGHT;
+  const bgCtx = bgCanvas.getContext('2d');
+  if (bgCtx) {
+    bgCtx.fillStyle = detectedBgColor;
+    bgCtx.fillRect(0, 0, A4_WIDTH, A4_HEIGHT);
+  }
+  const bgCanvasDataUrl = bgCanvas.toDataURL('image/png');
+
+  // 5. 새 페이지 상단 중앙 기본 권장 배치 좌표 계산
+  // 너비는 A4 너비의 80% 수준으로 시원하게 기본 배치
+  const maxW = Math.round(A4_WIDTH * 0.80);
+  const maxH = Math.round(A4_HEIGHT * 0.45);
+  const scale = Math.min(maxW / bounds.width, maxH / bounds.height, 1.8);
+  const defaultW = Math.round(bounds.width * Math.max(0.7, scale));
+  const defaultH = Math.round(bounds.height * Math.max(0.7, scale));
+  const defaultX = Math.round((A4_WIDTH - defaultW) / 2);
+  const defaultY = 60; // 상단 여백 60px
+
+  return {
+    imageDataUrl: croppedImageDataUrl,
+    detectedBgColor,
+    bgCanvasDataUrl,
+    bounds,
+    defaultPlacement: {
+      x: defaultX,
+      y: defaultY,
+      width: defaultW,
+      height: defaultH
+    }
+  };
 }
