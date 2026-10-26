@@ -11,7 +11,6 @@ import {
   generateLinePoints,
   generateCirclePoints,
   generateRotatedEllipsePoints,
-  generateSmoothBezierCurve,
   type RecognizedShape
 } from '../lib/shapeRecognizer';
 
@@ -391,9 +390,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             const opp = s.oppositePoint;
             const newMajor = Math.hypot(x - opp.x, y - opp.y);
             const newRx = Math.max(8, newMajor / 2);
-            // 기존 타원의 단축/장축 비율 유지
-            const ratio = (s.radiusX && s.radiusY) ? (s.radiusY / s.radiusX) : 0.35;
-            const newRy = Math.max(6, newRx * ratio);
+            // 단축/장축 비율 (최대 0.85로 제한하여 opp와 손끝을 잇는 축이 항상 큰 지름이 되도록 완벽 보장)
+            const ratio = (s.radiusX && s.radiusY) ? Math.min(0.85, s.radiusY / s.radiusX) : 0.35;
+            const newRy = Math.max(4, newRx * ratio);
             const newCx = (opp.x + x) / 2;
             const newCy = (opp.y + y) / 2;
             const angle = Math.atan2(y - opp.y, x - opp.x);
@@ -401,23 +400,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
             drawSingleStroke(ctx, currentStroke, false); // 도형은 정갈한 중간 굵기
           } else if (s.type === 'curve') {
-            // [베지에 곡선 실시간 텐션 조절]:
-            // 시작점은 고정된 채 마지막 점(멈춘 지점)이 손끝(x, y)으로 탄력 있게 늘어나며 스무스 스플라인 갱신!
-            const pts = currentStroke.points;
-            if (pts.length > 2 && s.endPoint) {
-              const updated = pts.map((pt, idx) => {
-                if (idx === pts.length - 1) return { x, y, pressure: 0.5 };
-                const t = idx / (pts.length - 1);
-                return {
-                  x: pt.x + (x - s.endPoint!.x) * t * 0.5,
-                  y: pt.y + (y - s.endPoint!.y) * t * 0.5,
-                  pressure: 0.5
-                };
-              });
-              currentStroke.points = generateSmoothBezierCurve(updated, 0.5);
-              renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-              drawSingleStroke(ctx, currentStroke, false); // 곡선은 정갈한 중간 굵기
-            }
+            // [사용자 요구사항]: 베지에 곡선은 멈춘 지점에 생성된 형태 그대로 완전 고정(Freeze)!
+            // 추가 변형 없이 스냅된 부드러운 곡선 유지
+            continue;
           }
           continue;
         }
