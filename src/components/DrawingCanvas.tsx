@@ -11,6 +11,9 @@ import {
   generateLinePoints,
   generateCirclePoints,
   generateSingleArcPoints,
+  generateTangentArcPoints,
+  updateCircularArcPoints,
+  updateBezierPoints,
   findNearestEndpoint,
   calculateUpdatedArcApex,
   drawMagneticAnchorRing,
@@ -99,7 +102,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const anchorHoldTimerRef = useRef<NodeJS.Timeout | null>(null);
   const anchorTouchStartPosRef = useRef<{ x: number; y: number } | null>(null);
   const candidateAnchorRef = useRef<EndpointMatch | null>(null);
-  const activeStartAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const activeStartAnchorRef = useRef<{ x: number; y: number; tangent?: { x: number; y: number } } | null>(null);
   const closingSnapRef = useRef<{ x: number; y: number } | null>(null);
 
   // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
@@ -295,7 +298,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           anchorHoldTimerRef.current = setTimeout(() => {
             if (!isDrawingRef.current) return;
             // 260ms 누르고 있었음 -> 자석 앵커 락 발동!
-            activeStartAnchorRef.current = { x: nearest.x, y: nearest.y };
+            activeStartAnchorRef.current = { x: nearest.x, y: nearest.y, tangent: nearest.tangent };
             if (typeof navigator !== 'undefined' && navigator.vibrate) {
               try { navigator.vibrate(25); } catch {}
             }
@@ -446,16 +449,19 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             closingSnapRef.current = null;
           }
 
-          const fixedStart = activeStartAnchorRef.current || shape.startPoint || currentStroke.points[0];
+          const fixedStart = activeStartAnchorRef.current
+            ? { x: activeStartAnchorRef.current.x, y: activeStartAnchorRef.current.y }
+            : (shape.startPoint || currentStroke.points[0]);
+
+          const tangent = activeStartAnchorRef.current?.tangent;
+          const dirX = targetEnd.x - fixedStart.x;
+          const dirY = targetEnd.y - fixedStart.y;
+          const dirLen = Math.hypot(dirX, dirY);
+          const dot = (tangent && dirLen > 0) ? (dirX * tangent.x + dirY * tangent.y) / dirLen : 0;
+          const isSmoothTangent = Boolean(tangent && dot >= 0.17); // 이전 선과의 각도 80도 이내 순방향 접선 연속 호
 
           if (shape.type === 'line') {
             currentStroke.points = generateLinePoints(fixedStart, targetEnd, 0.5);
-          } else if (shape.type === 'curve') {
-            const origStart = shape.startPoint || fixedStart;
-            const origEnd = shape.endPoint || targetEnd;
-            const origApex = shape.apexPoint || { x: (origStart.x + origEnd.x) / 2, y: (origStart.y + origEnd.y) / 2 };
-            const dynamicApex = calculateUpdatedArcApex(origStart, origEnd, origApex, fixedStart, targetEnd);
-            currentStroke.points = generateSingleArcPoints(fixedStart, targetEnd, dynamicApex, 0.5);
           } else if (shape.type === 'circle') {
             const pivot = shape.oppositePoint || fixedStart;
             const diam = Math.hypot(x - pivot.x, y - pivot.y);
@@ -463,6 +469,24 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             const cx = (pivot.x + x) / 2;
             const cy = (pivot.y + y) / 2;
             currentStroke.points = generateCirclePoints(cx, cy, radius, 0.5);
+          } else if (shape.type === 'circular_arc') {
+            if (isSmoothTangent && tangent) {
+              currentStroke.points = generateTangentArcPoints(fixedStart, tangent, targetEnd, 0.5);
+            } else {
+              currentStroke.points = updateCircularArcPoints(shape, fixedStart, targetEnd);
+            }
+          } else if (shape.type === 'elliptic_arc' || shape.type === 'curve') {
+            if (isSmoothTangent && tangent) {
+              currentStroke.points = generateTangentArcPoints(fixedStart, tangent, targetEnd, 0.5);
+            } else {
+              const origStart = shape.startPoint || fixedStart;
+              const origEnd = shape.endPoint || targetEnd;
+              const origApex = shape.apexPoint || { x: (origStart.x + origEnd.x) / 2, y: (origStart.y + origEnd.y) / 2 };
+              const dynamicApex = calculateUpdatedArcApex(origStart, origEnd, origApex, fixedStart, targetEnd);
+              currentStroke.points = generateSingleArcPoints(fixedStart, targetEnd, dynamicApex, 0.5);
+            }
+          } else if (shape.type === 'bezier') {
+            currentStroke.points = updateBezierPoints(shape.points, fixedStart, targetEnd);
           }
 
           // 화면 리렌더링
@@ -561,12 +585,34 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 isHoldSnappedRef.current = true;
                 snappedShapeRef.current = shape;
 
-                const fixedStart = activeStartAnchorRef.current || shape.startPoint || currentStrokeRef.current.points[0];
+                const fixedStart = activeStartAnchorRef.current
+                  ? { x: activeStartAnchorRef.current.x, y: activeStartAnchorRef.current.y }
+                  : (shape.startPoint || currentStrokeRef.current.points[0]);
+
+                const tangent = activeStartAnchorRef.current?.tangent;
 
                 if (shape.type === 'line' && shape.endPoint) {
                   currentStrokeRef.current.points = generateLinePoints(fixedStart, shape.endPoint, 0.5);
-                } else if (shape.type === 'curve' && shape.endPoint && shape.apexPoint) {
-                  currentStrokeRef.current.points = generateSingleArcPoints(fixedStart, shape.endPoint, shape.apexPoint, 0.5);
+                } else if (shape.type === 'circular_arc' && shape.endPoint) {
+                  const dirX = shape.endPoint.x - fixedStart.x;
+                  const dirY = shape.endPoint.y - fixedStart.y;
+                  const dirLen = Math.hypot(dirX, dirY);
+                  const dot = (tangent && dirLen > 0) ? (dirX * tangent.x + dirY * tangent.y) / dirLen : 0;
+                  if (tangent && dot >= 0.17) {
+                    currentStrokeRef.current.points = generateTangentArcPoints(fixedStart, tangent, shape.endPoint, 0.5);
+                  } else {
+                    currentStrokeRef.current.points = shape.points;
+                  }
+                } else if ((shape.type === 'elliptic_arc' || shape.type === 'curve') && shape.endPoint && shape.apexPoint) {
+                  const dirX = shape.endPoint.x - fixedStart.x;
+                  const dirY = shape.endPoint.y - fixedStart.y;
+                  const dirLen = Math.hypot(dirX, dirY);
+                  const dot = (tangent && dirLen > 0) ? (dirX * tangent.x + dirY * tangent.y) / dirLen : 0;
+                  if (tangent && dot >= 0.17) {
+                    currentStrokeRef.current.points = generateTangentArcPoints(fixedStart, tangent, shape.endPoint, 0.5);
+                  } else {
+                    currentStrokeRef.current.points = generateSingleArcPoints(fixedStart, shape.endPoint, shape.apexPoint, 0.5);
+                  }
                 } else {
                   currentStrokeRef.current.points = shape.points;
                 }

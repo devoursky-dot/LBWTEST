@@ -16,8 +16,21 @@
 
 import type { StrokePoint } from './drawingGeometry';
 
+export type RecognizedShapeType = 'line' | 'circle' | 'ellipse' | 'curve' | 'circular_arc' | 'elliptic_arc' | 'bezier';
+
+export interface CircularArcFit {
+  cx: number;
+  cy: number;
+  radius: number;
+  startAngle: number;
+  sweepAngle: number;
+  apex: { x: number; y: number };
+  errorRatio: number;
+  aspectRatio: number;
+}
+
 export interface RecognizedShape {
-  type: 'line' | 'circle' | 'ellipse' | 'curve';
+  type: RecognizedShapeType;
   points: StrokePoint[];
   center?: { x: number; y: number };
   radius?: number;
@@ -28,6 +41,7 @@ export interface RecognizedShape {
   endPoint?: { x: number; y: number };
   oppositePoint?: { x: number; y: number }; // 멈춘 지점의 반대편 지름 끝점 (접점 피벗)
   apexPoint?: { x: number; y: number }; // 호의 정점 (최대 편차점)
+  arcData?: CircularArcFit;
 }
 
 export interface EditableArcSegment {
@@ -374,12 +388,396 @@ export function generateStrokePointsFromEditableShape(shape: EditableShape): Str
 }
 
 /**
- * 획(StrokePoint 배열)을 분석하여 직선, 정원, 한번 휘어진 호로 자동 인식
+ * 3개 점(시작점, 정점, 끝점)을 정확히 지나는 외접 원호(Circumcircle Arc) 파라미터 계산
+ */
+export function fitCircularArcFrom3Points(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number }
+): { cx: number; cy: number; radius: number; startAngle: number; sweepAngle: number } | null {
+  const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
+  if (Math.abs(D) < 0.0001) return null;
+
+  const p1Sq = p1.x * p1.x + p1.y * p1.y;
+  const p2Sq = p2.x * p2.x + p2.y * p2.y;
+  const p3Sq = p3.x * p3.x + p3.y * p3.y;
+
+  const cx = (p1Sq * (p2.y - p3.y) + p2Sq * (p3.y - p1.y) + p3Sq * (p1.y - p2.y)) / D;
+  const cy = (p1Sq * (p3.x - p2.x) + p2Sq * (p1.x - p3.x) + p3Sq * (p2.x - p1.x)) / D;
+  const radius = Math.hypot(p1.x - cx, p1.y - cy);
+
+  if (radius < 1 || radius > 50000) return null;
+
+  const theta1 = Math.atan2(p1.y - cy, p1.x - cx);
+  const theta2 = Math.atan2(p2.y - cy, p2.x - cx);
+  const theta3 = Math.atan2(p3.y - cy, p3.x - cx);
+
+  // CCW sweep from theta1 to theta3
+  let sweepCCW = (theta3 - theta1) % (Math.PI * 2);
+  if (sweepCCW <= 0) sweepCCW += Math.PI * 2;
+
+  // CCW position of p2
+  let sweepApex = (theta2 - theta1) % (Math.PI * 2);
+  if (sweepApex <= 0) sweepApex += Math.PI * 2;
+
+  let sweepAngle = sweepCCW;
+  if (sweepApex > 0 && sweepApex < sweepCCW) {
+    sweepAngle = sweepCCW;
+  } else {
+    sweepAngle = -(Math.PI * 2 - sweepCCW);
+  }
+
+  return { cx, cy, radius, startAngle: theta1, sweepAngle };
+}
+
+/**
+ * 가상 중심(cx, cy), 반지름, 시작각, 회전각(sweepAngle) 기반의 원호(Circular Arc) 점 배열 생성
+ * - 항아리 모양(스윕 180° ~ 330°의 열린 원형 호), 말굽, C자형 곡선을 찌그러짐 없이 완벽히 지원!
+ */
+export function generateCircularArcPoints(
+  cx: number,
+  cy: number,
+  radius: number,
+  startAngle: number,
+  sweepAngle: number,
+  pressure: number = 0.5,
+  steps?: number
+): StrokePoint[] {
+  const actualSteps = steps || Math.max(16, Math.min(64, Math.round(48 * Math.abs(sweepAngle) / Math.PI)));
+  const pts: StrokePoint[] = [];
+
+  for (let i = 0; i <= actualSteps; i++) {
+    const t = i / actualSteps;
+    const angle = startAngle + t * sweepAngle;
+    pts.push({
+      x: cx + radius * Math.cos(angle),
+      y: cy + radius * Math.sin(angle),
+      pressure
+    });
+  }
+
+  return pts;
+}
+
+/**
+ * 시작점에서의 접선(Tangent) 방향을 100% 만족하는 완벽한 $C^1$ 연속 접선 원호(Tangent Arc) 점 생성
+ * - 이전 호/선의 진행 접선 벡터 Tin을 상속받아 꺾임 없이 부드러운 연결 호 생성
+ */
+export function generateTangentArcPoints(
+  startPt: { x: number; y: number },
+  tangent: { x: number; y: number },
+  endPt: { x: number; y: number },
+  pressure: number = 0.5
+): StrokePoint[] {
+  const tLen = Math.hypot(tangent.x, tangent.y);
+  if (tLen < 0.001) {
+    return generateLinePoints(startPt, endPt, pressure);
+  }
+  const tx = tangent.x / tLen;
+  const ty = tangent.y / tLen;
+
+  const vx = endPt.x - startPt.x;
+  const vy = endPt.y - startPt.y;
+  const vDistSq = vx * vx + vy * vy;
+  const vDist = Math.sqrt(vDistSq);
+
+  if (vDist < 4) {
+    return [
+      { x: startPt.x, y: startPt.y, pressure },
+      { x: endPt.x, y: endPt.y, pressure }
+    ];
+  }
+
+  // 접선에 수직인 법선 단위벡터 (좌측 법선: N = (-ty, tx))
+  const nx = -ty;
+  const ny = tx;
+
+  // vDotN = V . N
+  const vDotN = vx * nx + vy * ny;
+
+  // 드래그 방향이 접선 방향과 거의 일치하면 곡률 0인 직선으로 부드럽게 전개
+  if (Math.abs(vDotN) < 0.8) {
+    return generateLinePoints(startPt, endPt, pressure);
+  }
+
+  // 중심 C = startPt + r * N, 여기서 r = |V|^2 / (2 * (V . N))
+  const r = vDistSq / (2 * vDotN);
+  const cx = startPt.x + r * nx;
+  const cy = startPt.y + r * ny;
+  const radius = Math.abs(r);
+
+  if (radius > 10000 || radius < 2) {
+    return generateLinePoints(startPt, endPt, pressure);
+  }
+
+  const theta0 = Math.atan2(startPt.y - cy, startPt.x - cx);
+  const theta1 = Math.atan2(endPt.y - cy, endPt.x - cx);
+
+  // r > 0이면 startPt에서 CCW, r < 0이면 CW
+  let sweepAngle = 0;
+  if (r > 0) {
+    let dTheta = (theta1 - theta0) % (Math.PI * 2);
+    if (dTheta <= 0) dTheta += Math.PI * 2;
+    sweepAngle = dTheta;
+  } else {
+    let dTheta = (theta0 - theta1) % (Math.PI * 2);
+    if (dTheta <= 0) dTheta += Math.PI * 2;
+    sweepAngle = -dTheta;
+  }
+
+  const arcPts = generateCircularArcPoints(cx, cy, radius, theta0, sweepAngle, pressure);
+  if (arcPts.length > 0) {
+    arcPts[0].x = startPt.x;
+    arcPts[0].y = startPt.y;
+    arcPts[arcPts.length - 1].x = endPt.x;
+    arcPts[arcPts.length - 1].y = endPt.y;
+  }
+
+  return arcPts;
+}
+
+/**
+ * 궤적 점들을 일정한 경로 간격으로 균등 리샘플링
+ */
+function resamplePoints(points: StrokePoint[], targetCount: number): { x: number; y: number }[] {
+  if (points.length <= targetCount) {
+    return points.map(p => ({ x: p.x, y: p.y }));
+  }
+  const totalLen = calculatePathLength(points);
+  if (totalLen <= 0) {
+    return points.slice(0, targetCount).map(p => ({ x: p.x, y: p.y }));
+  }
+
+  const result: { x: number; y: number }[] = [{ x: points[0].x, y: points[0].y }];
+  const stepDist = totalLen / (targetCount - 1);
+  let currentDist = 0;
+  let targetDist = stepDist;
+
+  for (let i = 1; i < points.length; i++) {
+    const pPrev = points[i - 1];
+    const pCurr = points[i];
+    const segLen = Math.hypot(pCurr.x - pPrev.x, pCurr.y - pPrev.y);
+    if (segLen === 0) continue;
+
+    while (currentDist + segLen >= targetDist && result.length < targetCount - 1) {
+      const ratio = (targetDist - currentDist) / segLen;
+      result.push({
+        x: pPrev.x + (pCurr.x - pPrev.x) * ratio,
+        y: pPrev.y + (pCurr.y - pPrev.y) * ratio
+      });
+      targetDist += stepDist;
+    }
+    currentDist += segLen;
+  }
+
+  while (result.length < targetCount - 1) {
+    result.push({ x: points[points.length - 1].x, y: points[points.length - 1].y });
+  }
+  result.push({ x: points[points.length - 1].x, y: points[points.length - 1].y });
+  return result;
+}
+
+/**
+ * 궤적 내에 2D 외적 부호 반전(Inflection Point, 변곡점)이 존재하는지 강건하게 검사
+ * - S자 곡선, 물결선 등은 변곡점이 존재하므로 베지에 스플라인으로 처리
+ */
+export function hasInflectionPoints(points: StrokePoint[]): boolean {
+  if (points.length < 8) return false;
+
+  const totalLen = calculatePathLength(points);
+  if (totalLen < 30) return false;
+
+  // 손떨림 오차를 배제하기 위해 전체 길이에 따라 16개 점으로 균등 다운샘플링
+  const samples = resamplePoints(points, 16);
+
+  let posTurns = 0;
+  let negTurns = 0;
+  let signChanges = 0;
+  let lastSign = 0;
+
+  for (let i = 1; i < samples.length - 1; i++) {
+    const v1x = samples[i].x - samples[i - 1].x;
+    const v1y = samples[i].y - samples[i - 1].y;
+    const v2x = samples[i + 1].x - samples[i].x;
+    const v2y = samples[i + 1].y - samples[i].y;
+
+    const cross = v1x * v2y - v1y * v2x;
+    const dot = v1x * v2x + v1y * v2y;
+    const angle = Math.atan2(cross, dot);
+
+    // 9도(~0.15 rad) 이상의 유의미한 회전각만 분석
+    if (Math.abs(angle) > 0.15) {
+      const sign = angle > 0 ? 1 : -1;
+      if (sign > 0) posTurns += angle;
+      else negTurns += Math.abs(angle);
+
+      if (lastSign !== 0 && sign !== lastSign) {
+        signChanges++;
+      }
+      lastSign = sign;
+    }
+  }
+
+  // 양방향으로 각각 20도(0.35 rad) 이상 뚜렷한 굴곡이 있고 부호 반전이 발생한 경우만 S자 곡선으로 판정
+  return signChanges >= 1 && posTurns > 0.35 && negTurns > 0.35;
+}
+
+/**
+ * 궤적 점들을 분석하여 원호(Circular Arc) 피팅 및 상대오차, 종횡비 계산
+ */
+export function fitCircularArc(points: StrokePoint[]): CircularArcFit | null {
+  if (points.length < 6) return null;
+
+  const start = points[0];
+  const end = points[points.length - 1];
+  const chordDist = Math.hypot(end.x - start.x, end.y - start.y);
+  if (chordDist < 10) return null;
+
+  // 시작점-끝점 현에서 가장 멀리 솟아오른 정점(Apex) 탐색
+  let maxPerp = 0;
+  let apex = points[Math.floor(points.length / 2)];
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const dev = perpendicularDistance(points[i], start, end);
+    if (dev > maxPerp) {
+      maxPerp = dev;
+      apex = points[i];
+    }
+  }
+
+  if (maxPerp < 5) return null;
+
+  const arcFit = fitCircularArcFrom3Points(start, apex, end);
+  if (!arcFit) return null;
+
+  // 반지름 대비 표준 편차(RMSE) 계산
+  let sumSqErr = 0;
+  const sampleStep = Math.max(1, Math.floor(points.length / 20));
+  let count = 0;
+
+  let minX = points[0].x, maxX = points[0].x;
+  let minY = points[0].y, maxY = points[0].y;
+
+  for (let i = 0; i < points.length; i += sampleStep) {
+    const pt = points[i];
+    const distToCenter = Math.hypot(pt.x - arcFit.cx, pt.y - arcFit.cy);
+    const err = distToCenter - arcFit.radius;
+    sumSqErr += err * err;
+    count++;
+
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+
+  const rmse = Math.sqrt(sumSqErr / Math.max(1, count));
+  const errorRatio = rmse / arcFit.radius;
+
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const aspectRatio = Math.min(width, height) / Math.max(width, height);
+
+  return {
+    cx: arcFit.cx,
+    cy: arcFit.cy,
+    radius: arcFit.radius,
+    startAngle: arcFit.startAngle,
+    sweepAngle: arcFit.sweepAngle,
+    apex: { x: apex.x, y: apex.y },
+    errorRatio,
+    aspectRatio
+  };
+}
+
+/**
+ * 원호 드래그 시 고정 시작점과 이동 끝점에 맞춰 원호 점 재계산
+ */
+export function updateCircularArcPoints(
+  shape: RecognizedShape,
+  fixedStart: { x: number; y: number },
+  targetEnd: { x: number; y: number }
+): StrokePoint[] {
+  const origStart = shape.startPoint || fixedStart;
+  const origEnd = shape.endPoint || targetEnd;
+  const origApex = shape.apexPoint || { x: (origStart.x + origEnd.x) / 2, y: (origStart.y + origEnd.y) / 2 };
+  const dynamicApex = calculateUpdatedArcApex(origStart, origEnd, origApex, fixedStart, targetEnd);
+
+  const arcFit = fitCircularArcFrom3Points(fixedStart, dynamicApex, targetEnd);
+  if (arcFit) {
+    const pts = generateCircularArcPoints(arcFit.cx, arcFit.cy, arcFit.radius, arcFit.startAngle, arcFit.sweepAngle, 0.5);
+    if (pts.length > 0) {
+      pts[0].x = fixedStart.x;
+      pts[0].y = fixedStart.y;
+      pts[pts.length - 1].x = targetEnd.x;
+      pts[pts.length - 1].y = targetEnd.y;
+    }
+    return pts;
+  }
+  return generateSingleArcPoints(fixedStart, targetEnd, dynamicApex, 0.5);
+}
+
+/**
+ * 베지에 곡선 드래그 시 고정 시작점과 이동 끝점에 맞춰 비례 아핀 변환
+ */
+export function updateBezierPoints(
+  origPoints: StrokePoint[],
+  fixedStart: { x: number; y: number },
+  targetEnd: { x: number; y: number }
+): StrokePoint[] {
+  if (origPoints.length < 2) {
+    return generateLinePoints(fixedStart, targetEnd, 0.5);
+  }
+
+  const origStart = origPoints[0];
+  const origEnd = origPoints[origPoints.length - 1];
+
+  const origDx = origEnd.x - origStart.x;
+  const origDy = origEnd.y - origStart.y;
+  const origLen = Math.hypot(origDx, origDy);
+
+  const newDx = targetEnd.x - fixedStart.x;
+  const newDy = targetEnd.y - fixedStart.y;
+  const newLen = Math.hypot(newDx, newDy);
+
+  if (origLen < 1 || newLen < 1) {
+    return generateLinePoints(fixedStart, targetEnd, 0.5);
+  }
+
+  const origAngle = Math.atan2(origDy, origDx);
+  const newAngle = Math.atan2(newDy, newDx);
+  const deltaAngle = newAngle - origAngle;
+  const scale = newLen / origLen;
+
+  const cosA = Math.cos(deltaAngle);
+  const sinA = Math.sin(deltaAngle);
+
+  return origPoints.map((pt, idx) => {
+    if (idx === 0) return { x: fixedStart.x, y: fixedStart.y, pressure: 0.5 };
+    if (idx === origPoints.length - 1) return { x: targetEnd.x, y: targetEnd.y, pressure: 0.5 };
+
+    const lx = pt.x - origStart.x;
+    const ly = pt.y - origStart.y;
+
+    const rotX = (lx * cosA - ly * sinA) * scale;
+    const rotY = (lx * sinA + ly * cosA) * scale;
+
+    return {
+      x: fixedStart.x + rotX,
+      y: fixedStart.y + rotY,
+      pressure: 0.5
+    };
+  });
+}
+
+/**
+ * 획(StrokePoint 배열)을 분석하여 직선, 정원, 베지에, 원호, 타원호로 지능형 5단계 자동 인식
  * ============================================================================
- * [사용자 정의 3대 직관 규칙]
- * 1. 직선: 오차 7.5% 미만, 직선 비율 90% 이상 -> 직선으로 즉각 스냅 및 드래그 조절 ("직선 인식 확률 상향")
- * 2. 원: 시작점과 끝점의 거리가 펜 크기의 5배 이내인 폐곡선 -> 정원(Circle)으로 스냅 ("시작점과 끝점의 거리가 펜 크기의 5배 이내이면 곡선을 원으로")
- * 3. 곡선: 열린 곡선 -> 시작점과 끝점을 잇는 단일 곡률의 '한 번 휘어진 호(Single Curved Arc)'로 표시 ("곡선은 한번 휘어진 호로 표시를 하고")
+ * 1. 직선(Line): 오차 7.5% 미만, 직선 비율 90% 이상
+ * 2. 원(Circle): 시작점과 끝점이 28px 이내로 닫힌 폐곡선
+ * 3. 베지에 곡선(Bezier): 변곡점이 있는 S자 곡선, 물결선
+ * 4. 원호(Circular Arc): 항아리 모양(열린 원), 말굽, 둥근 호 (오차 14% 이내 & 종횡비 0.70 이상)
+ * 5. 타원호(Elliptic Arc): 변곡점이 없는 단일 볼록 호이나 납작하거나 길쭉한 형태
  * ============================================================================
  */
 export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): RecognizedShape | null {
@@ -390,14 +788,11 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
   const directDistance = Math.hypot(end.x - start.x, end.y - start.y);
   const totalPathLength = calculatePathLength(points);
 
-  if (totalPathLength < 16) return null; // 너무 작은 점은 무시
+  if (totalPathLength < 16) return null;
 
   const uniformPressure = 0.5;
 
-  // --------------------------------------------------------------------------
-  // 1. 직선(Line) 판별: 오차 7.5% 미만, 직선 비율 90% 이상 (자연스러운 손필기 직선 즉각 인식)
-  // [사용자 요청: 직선으로 인식할 확률 상향!]
-  // --------------------------------------------------------------------------
+  // 1. 직선(Line) 판별: 오차 7.5% 미만, 직선 비율 90% 이상
   if (directDistance > 25) {
     let maxDeviation = 0;
     for (let i = 1; i < points.length - 1; i++) {
@@ -416,19 +811,13 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
     }
   }
 
-  // --------------------------------------------------------------------------
-  // 2. 원(Circle) 판별: 시작점과 끝점이 28px 이내로 충분히 가깝게 닫힌 경우만 원으로 인식
-  // [사용자 요구: 처음 점과 거리가 떨어져 있으면 원으로 인식하지 말고, 가까이 닫혔을 때만 원으로 변환]
-  // - 28px(화면상 약 5~6mm) 이내로 확실히 근접하고, 전체 둘레 대비 간격이 14% 이하일 때만 진정한 원으로 판별
-  // - 간격이 28px보다 큰 곡선/호는 원으로 둔갑하지 않고 자연스러운 '호(Arc)'로 변환
-  // --------------------------------------------------------------------------
-  const maxClosureGap = 28; // 최대 허용 간격 28px
+  // 2. 완전한 닫힌 원(Circle) 판별: 시작점과 끝점이 28px 이내로 닫힌 경우만 원으로 인식
+  const maxClosureGap = 28;
   const isClosedLoop = directDistance <= maxClosureGap &&
                        (directDistance / totalPathLength <= 0.14) &&
                        totalPathLength >= 45;
 
   if (isClosedLoop) {
-    // 멈춘 지점(end)에서 궤적 상 가장 거리가 먼 반대편 점(oppositePoint) 탐색
     let maxDistFromEnd = 0;
     let oppositePoint = start;
 
@@ -456,12 +845,49 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
     }
   }
 
-  // --------------------------------------------------------------------------
-  // 3. 곡선(Curve / Arc): 한번 휘어진 호로 표시
-  // "곡선은 한번 휘어진 호로 표시를 하고"
-  // --------------------------------------------------------------------------
+  // 3. 베지에 곡선(Bezier): 변곡점(Inflection Point)이 있는 S자 곡선, 물결선
+  if (hasInflectionPoints(points)) {
+    return {
+      type: 'bezier',
+      startPoint: { x: start.x, y: start.y },
+      endPoint: { x: end.x, y: end.y },
+      points: generateSmoothBezierCurve(points, uniformPressure)
+    };
+  }
+
+  // 4. 원호(Circular Arc): 항아리 모양(열린 원), 말굽, 둥근 호
+  // - 입구는 열려있으나 원 피팅 오차가 14% 이내이고 종횡비가 0.70 이상인 경우
+  // - 180도를 넘는 항아리 모양도 원 둘레를 온전히 유지하며 완벽하게 인식!
+  const arcFit = fitCircularArc(points);
+  if (arcFit && arcFit.errorRatio <= 0.14 && arcFit.aspectRatio >= 0.70 && Math.abs(arcFit.sweepAngle) >= 0.35) {
+    const circularArcPoints = generateCircularArcPoints(
+      arcFit.cx,
+      arcFit.cy,
+      arcFit.radius,
+      arcFit.startAngle,
+      arcFit.sweepAngle,
+      uniformPressure
+    );
+
+    if (circularArcPoints.length > 0) {
+      circularArcPoints[0].x = start.x;
+      circularArcPoints[0].y = start.y;
+      circularArcPoints[circularArcPoints.length - 1].x = end.x;
+      circularArcPoints[circularArcPoints.length - 1].y = end.y;
+    }
+
+    return {
+      type: 'circular_arc',
+      startPoint: { x: start.x, y: start.y },
+      endPoint: { x: end.x, y: end.y },
+      apexPoint: arcFit.apex,
+      arcData: arcFit,
+      points: circularArcPoints
+    };
+  }
+
+  // 5. 타원호(Elliptic Arc): 변곡점이 없는 단일 볼록 호이나 납작하거나 길쭉한 형태
   if (points.length >= 6 && totalPathLength > 18) {
-    // 시작점과 끝점을 잇는 직선에서 가장 멀리 솟아오른 정점(Apex) 탐색
     let maxPerp = 0;
     let apex = points[Math.floor(points.length / 2)];
 
@@ -475,7 +901,7 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
 
     const arcPoints = generateSingleArcPoints(start, end, apex, uniformPressure);
     return {
-      type: 'curve',
+      type: 'elliptic_arc',
       startPoint: { x: start.x, y: start.y },
       endPoint: { x: end.x, y: end.y },
       apexPoint: { x: apex.x, y: apex.y },
@@ -492,10 +918,46 @@ export interface EndpointMatch {
   strokeId: string;
   isStart: boolean;
   dist: number;
+  tangent?: { x: number; y: number };
 }
 
 /**
- * 기존 스트로크들에서 (targetX, targetY)에 가장 가까운 시작점/끝점 탐색
+ * 스트로크 시작점/끝점에서의 진행 접선 단위벡터 계산
+ */
+function computeStrokeEndTangent(points: StrokePoint[], fromEnd: boolean): { x: number; y: number } | undefined {
+  if (!points || points.length < 2) return undefined;
+
+  if (fromEnd) {
+    const endPt = points[points.length - 1];
+    let targetIdx = points.length - 2;
+    for (let i = points.length - 2; i >= 0; i--) {
+      const d = Math.hypot(endPt.x - points[i].x, endPt.y - points[i].y);
+      targetIdx = i;
+      if (d >= 16) break;
+    }
+    const dx = endPt.x - points[targetIdx].x;
+    const dy = endPt.y - points[targetIdx].y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) return undefined;
+    return { x: dx / len, y: dy / len };
+  } else {
+    const startPt = points[0];
+    let targetIdx = 1;
+    for (let i = 1; i < points.length; i++) {
+      const d = Math.hypot(points[i].x - startPt.x, points[i].y - startPt.y);
+      targetIdx = i;
+      if (d >= 16) break;
+    }
+    const dx = startPt.x - points[targetIdx].x;
+    const dy = startPt.y - points[targetIdx].y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) return undefined;
+    return { x: dx / len, y: dy / len };
+  }
+}
+
+/**
+ * 기존 스트로크들에서 (targetX, targetY)에 가장 가까운 시작점/끝점 탐색 및 접선 방향 추출
  */
 export function findNearestEndpoint(
   strokes: Array<{ id: string; points: StrokePoint[]; tool?: string }>,
@@ -517,13 +979,15 @@ export function findNearestEndpoint(
     const distStart = Math.hypot(targetX - startPt.x, targetY - startPt.y);
     if (distStart <= minDist) {
       minDist = distStart;
-      nearest = { x: startPt.x, y: startPt.y, strokeId: s.id, isStart: true, dist: distStart };
+      const tangent = computeStrokeEndTangent(s.points, false);
+      nearest = { x: startPt.x, y: startPt.y, strokeId: s.id, isStart: true, dist: distStart, tangent };
     }
 
     const distEnd = Math.hypot(targetX - endPt.x, targetY - endPt.y);
     if (distEnd <= minDist) {
       minDist = distEnd;
-      nearest = { x: endPt.x, y: endPt.y, strokeId: s.id, isStart: false, dist: distEnd };
+      const tangent = computeStrokeEndTangent(s.points, true);
+      nearest = { x: endPt.x, y: endPt.y, strokeId: s.id, isStart: false, dist: distEnd, tangent };
     }
   }
 
@@ -548,14 +1012,19 @@ export function calculateUpdatedArcApex(
     return { x: (newStart.x + newEnd.x) / 2, y: (newStart.y + newEnd.y) / 2 };
   }
 
-  const origMidX = (origStart.x + origEnd.x) / 2;
-  const origMidY = (origStart.y + origEnd.y) / 2;
+  // 현(Chord) 상의 투영 비율 t0를 보존하여 비대칭/기울어진 호 곡률 유지
+  const t0 = ((origApex.x - origStart.x) * origDx + (origApex.y - origStart.y) * origDy) / (origLen * origLen);
+  const clampedT0 = Math.max(0.05, Math.min(0.95, t0));
+
+  const origProjX = origStart.x + clampedT0 * origDx;
+  const origProjY = origStart.y + clampedT0 * origDy;
 
   const origNormX = -origDy / origLen;
   const origNormY = origDx / origLen;
 
-  const origHeight = (origApex.x - origMidX) * origNormX + (origApex.y - origMidY) * origNormY;
-  const curvatureRatio = Math.max(-1.0, Math.min(1.0, origHeight / origLen));
+  const origHeight = (origApex.x - origProjX) * origNormX + (origApex.y - origProjY) * origNormY;
+  // 항아리 형태(180도 초과)의 깊은 호도 찌그러짐 없이 보존되도록 클램프 범위를 4.0으로 대폭 확장
+  const curvatureRatio = Math.max(-4.0, Math.min(4.0, origHeight / origLen));
 
   const newDx = newEnd.x - newStart.x;
   const newDy = newEnd.y - newStart.y;
@@ -565,15 +1034,15 @@ export function calculateUpdatedArcApex(
     return { x: newStart.x, y: newStart.y };
   }
 
-  const newMidX = (newStart.x + newEnd.x) / 2;
-  const newMidY = (newStart.y + newEnd.y) / 2;
+  const newProjX = newStart.x + clampedT0 * newDx;
+  const newProjY = newStart.y + clampedT0 * newDy;
   const newNormX = -newDy / newLen;
   const newNormY = newDx / newLen;
 
   const newHeight = curvatureRatio * newLen;
   return {
-    x: newMidX + newHeight * newNormX,
-    y: newMidY + newHeight * newNormY
+    x: newProjX + newHeight * newNormX,
+    y: newProjY + newHeight * newNormY
   };
 }
 
