@@ -300,6 +300,27 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       return false;
     }
   }); // false: 터치 모드, true: 펜 모드 (팜리젝션 & 1손가락 이동)
+
+  // 스타일러스(S펜 / 애플펜슬) W3C 가변 필압 감도 ON/OFF (기본값 true)
+  const [penPressureEnabled, setPenPressureEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('lbw_pen_pressure');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  // 선 끝 유지(0.46초) 시 직선/원/타원 자동 스냅 퀵셰이프 ON/OFF (기본값 true)
+  const [quickShapeEnabled, setQuickShapeEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('lbw_quick_shape');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
   const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | 'image' | 'menu' | null>(null);
 
   // --- 4-1. 페이지별 전체 배경 & 임베드 이미지(스티커) 상태 ---
@@ -3571,6 +3592,104 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 </label>
               </div>
             </div>
+
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
+
+            {/* 필압 감도 및 도형 자동 보정(퀵셰이프) 스마트 필기 옵션 */}
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '8px', fontWeight: 600 }}>
+                스마트 필기 편의 기능
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* 1. 필압 감도 (S펜 / 애플펜슬) */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'rgba(255,255,255,0.04)',
+                    padding: '8px 10px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.08)'
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#ffffff' }}>
+                      ✍️ 펜 필압 감도
+                    </span>
+                    <span style={{ fontSize: '10px', color: '#94a3b8' }}>
+                      누르는 힘에 따라 선 굵기 조절 (S펜/애플펜슬)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !penPressureEnabled;
+                      setPenPressureEnabled(next);
+                      try { localStorage.setItem('lbw_pen_pressure', String(next)); } catch {}
+                      showToast(next ? '✍️ 펜 필압 감도 활성화 (가변 굵기)' : '✍️ 펜 고정 두께 모드');
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '14px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: penPressureEnabled ? '#3b82f6' : 'rgba(255,255,255,0.15)',
+                      color: '#ffffff',
+                      transition: 'background 0.2s'
+                    }}
+                  >
+                    {penPressureEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+
+                {/* 2. 도형 자동 보정 (퀵셰이프) */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'rgba(255,255,255,0.04)',
+                    padding: '8px 10px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255,255,255,0.08)'
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#ffffff' }}>
+                      📐 도형 자동 보정 (퀵셰이프)
+                    </span>
+                    <span style={{ fontSize: '10px', color: '#94a3b8' }}>
+                      선 끝을 0.5초 누르면 직선·원·타원으로 스냅
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !quickShapeEnabled;
+                      setQuickShapeEnabled(next);
+                      try { localStorage.setItem('lbw_quick_shape', String(next)); } catch {}
+                      showToast(next ? '📐 도형 자동 보정 활성화' : '📐 도형 자동 보정 비활성화');
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '14px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      border: 'none',
+                      cursor: 'pointer',
+                      background: quickShapeEnabled ? '#10b981' : 'rgba(255,255,255,0.15)',
+                      color: '#ffffff',
+                      transition: 'background 0.2s'
+                    }}
+                  >
+                    {quickShapeEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -4180,6 +4299,43 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
             <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
 
+            {/* 필압 감도 & 도형 자동 보정 (퀵셰이프) 빠른 설정 */}
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600 }}>
+                ✍️ 스마트 필기 기능
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${penPressureEnabled ? 'active' : ''}`}
+                  onClick={() => {
+                    const next = !penPressureEnabled;
+                    setPenPressureEnabled(next);
+                    try { localStorage.setItem('lbw_pen_pressure', String(next)); } catch {}
+                    showToast(next ? '✍️ 필압 감도 ON' : '✍️ 고정 두께');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11px', padding: '6px 4px' }}
+                >
+                  {penPressureEnabled ? '✍️ 필압 ON' : '✍️ 필압 OFF'}
+                </button>
+                <button
+                  type="button"
+                  className={`student-tool-btn ${quickShapeEnabled ? 'active' : ''}`}
+                  onClick={() => {
+                    const next = !quickShapeEnabled;
+                    setQuickShapeEnabled(next);
+                    try { localStorage.setItem('lbw_quick_shape', String(next)); } catch {}
+                    showToast(next ? '📐 퀵셰이프 ON' : '📐 퀵셰이프 OFF');
+                  }}
+                  style={{ justifyContent: 'center', fontSize: '11px', padding: '6px 4px' }}
+                >
+                  {quickShapeEnabled ? '📐 퀵셰이프 ON' : '📐 퀵셰이프 OFF'}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
+
             {/* 화면 줌 조절 */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px', fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
@@ -4509,6 +4665,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             eraserSize={eraserSize}
             eraserMode={eraserMode}
             penOnlyMode={penOnlyMode}
+            enablePressure={penPressureEnabled}
+            enableQuickShape={quickShapeEnabled}
             onAutoPenModeDetected={() => {
               if (!penOnlyMode) {
                 setPenOnlyMode(true);

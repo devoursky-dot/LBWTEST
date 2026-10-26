@@ -67,8 +67,13 @@ export function isStrokeHit(
 
 /**
  * 단일 스트로크를 2D 캔버스 컨텍스트에 고품질로 렌더링
+ * (갤럭시 S펜 & 아이패드 애플펜슬 가변 필압 지원)
  */
-export function drawSingleStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
+export function drawSingleStroke(
+  ctx: CanvasRenderingContext2D,
+  stroke: Stroke,
+  enablePressure: boolean = true
+): void {
   if (!stroke.points || stroke.points.length === 0) return;
 
   ctx.save();
@@ -91,26 +96,45 @@ export function drawSingleStroke(ctx: CanvasRenderingContext2D, stroke: Stroke):
     ctx.lineWidth = stroke.size;
   }
 
-  if (stroke.points.length === 1) {
+  const pts = stroke.points;
+  const isPenWithPressure = stroke.tool === 'pen' && enablePressure && pts.some(p => p.pressure !== 0.5 && p.pressure > 0);
+
+  if (pts.length === 1) {
+    const p = pts[0];
+    const r = (isPenWithPressure ? stroke.size * (0.35 + 1.15 * (p.pressure || 0.5)) : stroke.size) / 2;
     ctx.beginPath();
-    ctx.arc(stroke.points[0].x, stroke.points[0].y, stroke.size / 2, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, Math.max(0.5, r), 0, Math.PI * 2);
     ctx.fillStyle = stroke.color;
     ctx.fill();
-  } else if (stroke.points.length === 2) {
+  } else if (isPenWithPressure && pts.length > 2) {
+    // 🖊️ 필압(Pressure) 지원 가변 두께 렌더링 (Galaxy S Pen & iPad Apple Pencil)
+    for (let i = 1; i < pts.length; i++) {
+      const p1 = pts[i - 1];
+      const p2 = pts[i];
+      const avgPressure = ((p1.pressure || 0.5) + (p2.pressure || 0.5)) / 2;
+      const segWidth = Math.max(1, stroke.size * (0.35 + 1.15 * avgPressure));
+
+      ctx.lineWidth = segWidth;
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.stroke();
+    }
+  } else if (pts.length === 2) {
     ctx.beginPath();
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-    ctx.lineTo(stroke.points[1].x, stroke.points[1].y);
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[1].x, pts[1].y);
     ctx.stroke();
   } else {
     ctx.beginPath();
-    ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+    ctx.moveTo(pts[0].x, pts[0].y);
 
-    for (let i = 1; i < stroke.points.length - 1; i++) {
-      const midX = (stroke.points[i].x + stroke.points[i + 1].x) / 2;
-      const midY = (stroke.points[i].y + stroke.points[i + 1].y) / 2;
-      ctx.quadraticCurveTo(stroke.points[i].x, stroke.points[i].y, midX, midY);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const midX = (pts[i].x + pts[i + 1].x) / 2;
+      const midY = (pts[i].y + pts[i + 1].y) / 2;
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
     }
-    const last = stroke.points[stroke.points.length - 1];
+    const last = pts[pts.length - 1];
     ctx.lineTo(last.x, last.y);
     ctx.stroke();
   }
@@ -124,7 +148,8 @@ export function renderCanvasGridAndStrokes(
   canvas: HTMLCanvasElement,
   strokes: Stroke[],
   fullPageBackground: string | null,
-  paperTheme: 'white' | 'dark' | 'ivory' = 'white'
+  paperTheme: 'white' | 'dark' | 'ivory' = 'white',
+  enablePressure: boolean = true
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -161,6 +186,6 @@ export function renderCanvasGridAndStrokes(
 
   // 완료된 모든 스트로크 렌더링
   for (const stroke of strokes) {
-    drawSingleStroke(ctx, stroke);
+    drawSingleStroke(ctx, stroke, enablePressure);
   }
 }

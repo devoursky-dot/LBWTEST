@@ -5,6 +5,7 @@ import {
   drawSingleStroke,
   renderCanvasGridAndStrokes
 } from '../lib/drawingGeometry';
+import { recognizeShape } from '../lib/shapeRecognizer';
 
 export interface DrawingCanvasProps {
   strokes: Stroke[];
@@ -29,6 +30,8 @@ export interface DrawingCanvasProps {
   onCanvasPointerDown?: () => void;
   onTogglePenEraser?: () => void;
   paperTheme?: 'white' | 'dark' | 'ivory';
+  enablePressure?: boolean;
+  enableQuickShape?: boolean;
 }
 
 /**
@@ -60,7 +63,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   onFingerPanEnd,
   onCanvasPointerDown,
   onTogglePenEraser,
-  paperTheme = 'white'
+  paperTheme = 'white',
+  enablePressure = true,
+  enableQuickShape = true
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -71,6 +76,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const currentStrokeRef = useRef<Stroke | null>(null);
   const isInternalStrokeAddRef = useRef(false);
   const didEraseInGestureRef = useRef(false);
+
+  // 퀵셰이프(QuickShape) 선 유지 시 도형 자동 변환 레퍼런스
+  const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isHoldSnappedRef = useRef<boolean>(false);
+  const lastMoveCoordRef = useRef<{ x: number; y: number } | null>(null);
 
   // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
   const lastFingerTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
@@ -98,7 +108,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onFingerPanEnd,
     onCanvasPointerDown,
     onTogglePenEraser,
-    strokes
+    strokes,
+    enablePressure,
+    enableQuickShape
   });
 
   propsRef.current = {
@@ -118,7 +130,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onFingerPanEnd,
     onCanvasPointerDown,
     onTogglePenEraser,
-    strokes
+    strokes,
+    enablePressure,
+    enableQuickShape
   };
 
   // 캔버스 크기(해상도) 초기화 및 동기화
@@ -136,15 +150,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // 방금 로컬에서 직접 그린 획에 의해 strokes가 업데이트된 경우:
-    // 이미 캔버스에 실시간으로 그려져 있으므로 전체 지우기(clearRect) 및 재렌더링을 완전히 생략! (0ms)
     if (isInternalStrokeAddRef.current) {
       isInternalStrokeAddRef.current = false;
       return;
     }
 
-    renderCanvasGridAndStrokes(canvas, strokes, fullPageBackground, paperTheme);
-  }, [strokes, fullPageBackground, A4_WIDTH, A4_HEIGHT, paperTheme]);
+    renderCanvasGridAndStrokes(canvas, strokes, fullPageBackground, paperTheme, enablePressure);
+  }, [strokes, fullPageBackground, A4_WIDTH, A4_HEIGHT, paperTheme, enablePressure]);
 
   // ==========================================================================
   // [네이티브 하드웨어 직결 포인터 이벤트 리스너 (iOS Safari 완벽 방어)]
@@ -237,6 +249,14 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const { x, y } = getCanvasCoords(e.clientX, e.clientY);
       const pressure = e.pressure > 0 ? e.pressure : 0.5;
 
+      // 퀵셰이프 상태 초기화
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      isHoldSnappedRef.current = false;
+      lastMoveCoordRef.current = { x, y };
+
       // [5. 획 단위 지우개 모드]:
       if (p.tool === 'eraser' && p.eraserMode === 'stroke') {
         didEraseInGestureRef.current = false;
@@ -252,7 +272,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       }
 
       // [6. 일반 필기 / 형광펜 / 픽셀 지우개 시작]:
-      // 필기 시작 시점에 Undo 스냅샷 생성
       p.onUndoSnapshot();
 
       const currentSize = p.tool === 'pen' ? p.penSize : p.tool === 'highlighter' ? p.highlighterSize : p.eraserSize;
@@ -270,7 +289,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        drawSingleStroke(ctx, newStroke);
+        drawSingleStroke(ctx, newStroke, p.enablePressure);
       }
     };
 
@@ -338,6 +357,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
 
+          // 🖊️ 필압(Pressure) 지원 가변 두께 (Galaxy S Pen & iPad Apple Pencil)
+          const isPen = currentStroke.tool === 'pen';
+          const usePressure = isPen && p.enablePressure && (ev.pointerType === 'pen' || pressure !== 0.5);
+          const segWidth = usePressure
+            ? Math.max(1, currentStroke.size * (0.35 + 1.15 * pressure))
+            : currentStroke.size;
+
           if (currentStroke.tool === 'highlighter') {
             ctx.globalAlpha = 0.35;
             ctx.strokeStyle = currentStroke.color;
@@ -348,7 +374,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           } else {
             ctx.globalAlpha = 1.0;
             ctx.strokeStyle = currentStroke.color;
-            ctx.lineWidth = currentStroke.size;
+            ctx.lineWidth = segWidth;
           }
 
           ctx.beginPath();
@@ -358,10 +384,50 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.restore();
         }
       }
+
+      // ----------------------------------------------------------------------
+      // [📐 퀵셰이프 (QuickShape) 홀드 감지]:
+      // 펜/형광펜으로 선을 그리고 화면 끝에서 0.46초간 멈추면 직선, 정원, 타원으로 스냅
+      // ----------------------------------------------------------------------
+      if (p.enableQuickShape && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter')) {
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current);
+          holdTimerRef.current = null;
+        }
+
+        const pts = currentStroke.points;
+        if (!isHoldSnappedRef.current && pts.length >= 7) {
+          holdTimerRef.current = setTimeout(() => {
+            if (!isDrawingRef.current || !currentStrokeRef.current) return;
+            const shape = recognizeShape(currentStrokeRef.current.points);
+            if (shape) {
+              // 손맛 햅틱 진동 피드백
+              if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                try { navigator.vibrate(15); } catch {}
+              }
+
+              isHoldSnappedRef.current = true;
+              currentStrokeRef.current.points = shape.points;
+
+              // 캔버스 배경 및 기존 획 다시 그리기 후 보정된 도형 반영
+              renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+              drawSingleStroke(ctx, currentStrokeRef.current, p.enablePressure);
+            }
+          }, 460);
+        }
+      }
     };
 
     const handleNativePointerUp = (e: PointerEvent) => {
       const p = propsRef.current;
+
+      // 퀵셰이프 홀드 타이머 리셋
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      isHoldSnappedRef.current = false;
+      lastMoveCoordRef.current = null;
 
       // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지:
       // 손가락으로 화면을 이동(Pan)한 것이 아니라, 제자리에서 가볍게 탭(< 280ms, 이동거리 < 14px)한 경우만 엄격 판별!
@@ -389,7 +455,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             lastFingerTapRef.current = { time: now, x: e.clientX, y: e.clientY };
           }
         } else {
-          // 손가락으로 화면을 이동(Pan)시킨 경우에는 직전 탭 기록 리셋 (화면 이동과의 간섭 100% 차단)
           lastFingerTapRef.current = null;
         }
         fingerTouchStartRef.current = null;
@@ -422,7 +487,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
         const finishedStroke = currentStrokeRef.current;
         if (finishedStroke && finishedStroke.points.length > 0) {
-          // 플래그를 켜서 불필요한 전체 캔버스 clearRect를 방지
           isInternalStrokeAddRef.current = true;
           p.onStrokeComplete({ ...finishedStroke, points: [...finishedStroke.points] });
         }
