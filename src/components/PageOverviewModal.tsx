@@ -207,6 +207,7 @@ export const PageOverviewModal: React.FC<PageOverviewModalProps> = ({
         </div>
 
         {/* 메인 페이지 카드 그리드 (완벽한 반응형 및 세로 스크롤 방어) */}
+        {/* 메인 페이지 카드 그리드 (물리적 높이 보장으로 어떤 브라우저에서도 절대 겹치지 않는 반응형 바둑판) */}
         <div
           style={{
             flex: 1,
@@ -215,9 +216,8 @@ export const PageOverviewModal: React.FC<PageOverviewModalProps> = ({
             padding: '20px',
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
-            gridAutoRows: 'max-content',
             gap: '16px',
-            alignContent: 'start'
+            alignItems: 'start'
           }}
         >
           {pages.map((p, idx) => {
@@ -235,153 +235,159 @@ export const PageOverviewModal: React.FC<PageOverviewModalProps> = ({
                 style={{
                   position: 'relative',
                   width: '100%',
-                  aspectRatio: '1 / 1.414',
                   minWidth: 0,
-                  minHeight: 0,
-                  boxSizing: 'border-box',
-                  background: hasBackground ? '#ffffff' : '#181b24',
-                  border: isCurrent ? '2.5px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
-                  borderRadius: '12px',
-                  overflow: 'hidden',
                   cursor: 'pointer',
-                  userSelect: 'none',
-                  transition: 'transform 0.12s ease, box-shadow 0.12s ease',
-                  boxShadow: isCurrent
-                    ? '0 0 20px rgba(59, 130, 246, 0.5), 0 8px 16px rgba(0, 0, 0, 0.5)'
-                    : '0 4px 12px rgba(0, 0, 0, 0.35)'
+                  userSelect: 'none'
                 }}
                 title={`${idx + 1}쪽으로 이동`}
               >
-                {/* 썸네일 내용 레이어 (절대좌표로 카드 내부에 100% 핏) */}
+                {/* 1:1.4142 A4 물리적 높이 보장 래퍼 (그리드 행 붕괴 및 겹침 100% 원천 차단) */}
                 <div
                   style={{
-                    position: 'absolute',
-                    inset: 0,
+                    position: 'relative',
                     width: '100%',
-                    height: '100%',
+                    paddingTop: '141.42%', // 표준 A4 1:1.4142 높이 강제 점유
+                    background: hasBackground ? '#ffffff' : '#181b24',
+                    border: isCurrent ? '2.5px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '12px',
                     overflow: 'hidden',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: hasBackground ? '#ffffff' : '#181b24'
+                    boxShadow: isCurrent
+                      ? '0 0 20px rgba(59, 130, 246, 0.5), 0 8px 16px rgba(0, 0, 0, 0.5)'
+                      : '0 4px 12px rgba(0, 0, 0, 0.35)',
+                    transition: 'transform 0.12s ease, box-shadow 0.12s ease'
                   }}
                 >
-                  {hasBackground && (
-                    <img
-                      src={p.fullPageBackground!}
-                      alt={`${idx + 1}쪽`}
-                      style={{
-                        position: 'absolute',
-                        inset: 0,
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'contain',
-                        display: 'block',
-                        background: '#ffffff',
-                        zIndex: 1
-                      }}
-                    />
-                  )}
+                  {/* 카드 내부 실제 내용물 레이어 (절대좌표 100% 핏) */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      overflow: 'hidden',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: hasBackground ? '#ffffff' : '#181b24'
+                    }}
+                  >
+                    {hasBackground && (
+                      <img
+                        src={p.fullPageBackground!}
+                        alt={`${idx + 1}쪽`}
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'contain',
+                          display: 'block',
+                          background: '#ffffff',
+                          zIndex: 1
+                        }}
+                      />
+                    )}
 
-                  {strokeCount > 0 && (
-                    <PageStrokeThumbnail
-                      strokes={p.strokes}
-                      fullPageBackground={p.fullPageBackground}
-                    />
-                  )}
+                    {strokeCount > 0 && (
+                      <PageStrokeThumbnail
+                        strokes={p.strokes}
+                        fullPageBackground={p.fullPageBackground}
+                      />
+                    )}
 
-                  {!hasBackground && strokeCount === 0 && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#64748b'
-                      }}
-                    >
-                      <span style={{ fontSize: '28px', opacity: 0.6 }}>📝</span>
-                      <span style={{ fontSize: '11px', marginTop: '4px', fontWeight: 600 }}>
-                        빈 쪽
-                      </span>
-                    </div>
-                  )}
-                </div>
+                    {!hasBackground && strokeCount === 0 && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#64748b'
+                        }}
+                      >
+                        <span style={{ fontSize: '28px', opacity: 0.6 }}>📝</span>
+                        <span style={{ fontSize: '11px', marginTop: '4px', fontWeight: 600 }}>
+                          빈 쪽
+                        </span>
+                      </div>
+                    )}
+                  </div>
 
-                {/* 쪽수 배지 (좌측 상단) */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: '6px',
-                    left: '6px',
-                    background: 'rgba(15, 23, 42, 0.88)',
-                    backdropFilter: 'blur(4px)',
-                    color: isCurrent ? '#38bdf8' : '#ffffff',
-                    padding: '2px 7px',
-                    borderRadius: '6px',
-                    fontSize: '11px',
-                    fontWeight: 800,
-                    border: isCurrent ? '1px solid rgba(56, 189, 248, 0.6)' : '1px solid rgba(255, 255, 255, 0.2)',
-                    boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
-                    zIndex: 10
-                  }}
-                >
-                  {idx + 1}쪽
-                </div>
-
-                {/* 현재 보는 쪽 배지 (우측 상단) */}
-                {isCurrent && (
+                  {/* 쪽수 배지 (좌측 상단) */}
                   <div
                     style={{
                       position: 'absolute',
                       top: '6px',
-                      right: '6px',
-                      background: '#2563eb',
-                      color: '#ffffff',
-                      padding: '2px 6px',
-                      borderRadius: '5px',
-                      fontSize: '10px',
+                      left: '6px',
+                      background: 'rgba(15, 23, 42, 0.88)',
+                      backdropFilter: 'blur(4px)',
+                      color: isCurrent ? '#38bdf8' : '#ffffff',
+                      padding: '2px 7px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
                       fontWeight: 800,
-                      boxShadow: '0 2px 6px rgba(37, 99, 235, 0.5)',
+                      border: isCurrent ? '1px solid rgba(56, 189, 248, 0.6)' : '1px solid rgba(255, 255, 255, 0.2)',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
                       zIndex: 10
                     }}
                   >
-                    현재 쪽
+                    {idx + 1}쪽
                   </div>
-                )}
 
-                {/* 하단 쪽 삭제 버튼 (2쪽 이상일 때만 표시, 카드 우측 하단 컴팩트 배치) */}
-                {pages.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeletePage(idx);
-                    }}
-                    style={{
-                      position: 'absolute',
-                      bottom: '6px',
-                      right: '6px',
-                      background: 'rgba(239, 68, 68, 0.9)',
-                      color: '#ffffff',
-                      border: 'none',
-                      borderRadius: '6px',
-                      padding: '3px 6px',
-                      fontSize: '10.5px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      zIndex: 10,
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '2px'
-                    }}
-                    title={`${idx + 1}쪽 삭제`}
-                  >
-                    <span>🗑️</span>
-                    <span>삭제</span>
-                  </button>
-                )}
+                  {/* 현재 보는 쪽 배지 (우측 상단) */}
+                  {isCurrent && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '6px',
+                        right: '6px',
+                        background: '#2563eb',
+                        color: '#ffffff',
+                        padding: '2px 6px',
+                        borderRadius: '5px',
+                        fontSize: '10px',
+                        fontWeight: 800,
+                        boxShadow: '0 2px 6px rgba(37, 99, 235, 0.5)',
+                        zIndex: 10
+                      }}
+                    >
+                      현재 쪽
+                    </div>
+                  )}
+
+                  {/* 하단 쪽 삭제 버튼 (2쪽 이상일 때만 표시, 카드 우측 하단 컴팩트 배치) */}
+                  {pages.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeletePage(idx);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        bottom: '6px',
+                        right: '6px',
+                        background: 'rgba(239, 68, 68, 0.9)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        padding: '3px 6px',
+                        fontSize: '10.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        zIndex: 10,
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '2px'
+                      }}
+                      title={`${idx + 1}쪽 삭제`}
+                    >
+                      <span>🗑️</span>
+                      <span>삭제</span>
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}

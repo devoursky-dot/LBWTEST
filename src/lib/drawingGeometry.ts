@@ -66,6 +66,16 @@ export function isStrokeHit(
 }
 
 /**
+ * 압력 수치를 기반으로 한 자연스럽고 뚜렷한 가변 선 두께 계산
+ * (살살 그으면 원래의 0.25배, 중간 1.0배, 꾹 누르면 최대 2.4배)
+ */
+export function calculateDynamicStrokeWidth(baseSize: number, pressure: number = 0.5): number {
+  const p = Math.max(0.02, Math.min(1.0, pressure));
+  const factor = 0.25 + 2.15 * Math.pow(p, 1.15);
+  return Math.max(1, baseSize * factor);
+}
+
+/**
  * 단일 스트로크를 2D 캔버스 컨텍스트에 고품질로 렌더링
  * (갤럭시 S펜 & 아이패드 애플펜슬 가변 필압 지원)
  */
@@ -97,11 +107,11 @@ export function drawSingleStroke(
   }
 
   const pts = stroke.points;
-  const isPenWithPressure = stroke.tool === 'pen' && enablePressure && pts.some(p => p.pressure !== 0.5 && p.pressure > 0);
+  const isPenWithPressure = stroke.tool === 'pen' && enablePressure;
 
   if (pts.length === 1) {
     const p = pts[0];
-    const r = (isPenWithPressure ? stroke.size * (0.35 + 1.15 * (p.pressure || 0.5)) : stroke.size) / 2;
+    const r = (isPenWithPressure ? calculateDynamicStrokeWidth(stroke.size, p.pressure) : stroke.size) / 2;
     ctx.beginPath();
     ctx.arc(p.x, p.y, Math.max(0.5, r), 0, Math.PI * 2);
     ctx.fillStyle = stroke.color;
@@ -112,7 +122,7 @@ export function drawSingleStroke(
       const p1 = pts[i - 1];
       const p2 = pts[i];
       const avgPressure = ((p1.pressure || 0.5) + (p2.pressure || 0.5)) / 2;
-      const segWidth = Math.max(1, stroke.size * (0.35 + 1.15 * avgPressure));
+      const segWidth = calculateDynamicStrokeWidth(stroke.size, avgPressure);
 
       ctx.lineWidth = segWidth;
       ctx.beginPath();

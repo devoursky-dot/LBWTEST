@@ -51,117 +51,137 @@ const PdfPageCard: React.FC<PageCardProps> = React.memo(({
       onClick={() => onCardClick(pageNumber)}
       style={{
         position: 'relative',
-        aspectRatio: '1 / 1.414', // A4 비율
-        background: isHighlighted ? '#f0fdf4' : '#ffffff',
-        border: isHighlighted ? '3px solid #3b82f6' : '1.5px solid #cbd5e1',
-        borderRadius: '12px',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
+        width: '100%',
+        minWidth: 0,
         cursor: 'pointer',
-        userSelect: 'none',
-        transition: 'transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease',
-        boxShadow: isHighlighted
-          ? '0 0 18px rgba(59, 130, 246, 0.5), 0 6px 14px rgba(0, 0, 0, 0.4)'
-          : '0 2px 8px rgba(0, 0, 0, 0.15)'
+        userSelect: 'none'
       }}
       title={`${pageNumber}쪽 (터치하여 크게 보기)`}
     >
-      {/* 종이 상단 가상 헤더 라인 장식 */}
+      {/* 1:1.4142 물리적 높이 보장 래퍼 (그리드 행 겹침 100% 방지) */}
       <div
         style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: '6px',
-          background: isHighlighted ? '#3b82f6' : '#e2e8f0'
-        }}
-      />
-
-      {/* 중앙: 문서 아이콘 및 큼직한 페이지 번호 */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-        <span style={{ fontSize: '32px', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.15))' }}>📄</span>
-        <span style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginTop: '6px', letterSpacing: '-0.3px' }}>
-          {pageNumber}쪽
-        </span>
-        {!isSelectionMode && (
-          <span style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', fontWeight: 600 }}>
-            터치하여 보기 🔍
-          </span>
-        )}
-      </div>
-
-      {/* 쪽수 배지 (좌측 상단) */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '10px',
-          left: '8px',
-          background: 'rgba(15, 23, 42, 0.85)',
-          backdropFilter: 'blur(4px)',
-          color: '#38bdf8',
-          padding: '2px 7px',
-          borderRadius: '5px',
-          fontSize: '11px',
-          fontWeight: 800,
-          border: '1px solid rgba(56, 189, 248, 0.4)',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-          zIndex: 3
+          position: 'relative',
+          width: '100%',
+          paddingTop: '141.42%', // A4 물리적 높이 점유
+          background: isHighlighted ? '#f0fdf4' : '#ffffff',
+          border: isHighlighted ? '3px solid #3b82f6' : '1.5px solid #cbd5e1',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          transition: 'transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease',
+          boxShadow: isHighlighted
+            ? '0 0 18px rgba(59, 130, 246, 0.5), 0 6px 14px rgba(0, 0, 0, 0.4)'
+            : '0 2px 8px rgba(0, 0, 0, 0.15)'
         }}
       >
-        {pageNumber}
-      </div>
-
-      {/* 다중 선택 모드 체크박스 */}
-      {isSelectionMode && (
+        {/* 종이 상단 가상 헤더 라인 장식 */}
         <div
           style={{
             position: 'absolute',
-            top: '8px',
-            right: '8px',
-            width: '24px',
-            height: '24px',
-            borderRadius: '6px',
-            background: isChecked ? '#3b82f6' : 'rgba(0, 0, 0, 0.4)',
-            border: '2px solid #ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '14px',
-            color: '#ffffff',
-            fontWeight: 900,
-            zIndex: 3,
-            boxShadow: '0 2px 6px rgba(0,0,0,0.4)'
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '6px',
+            background: isHighlighted ? '#3b82f6' : '#e2e8f0',
+            zIndex: 2
           }}
-        >
-          {isChecked ? '✓' : ''}
-        </div>
-      )}
+        />
 
-      {/* 처리 중 로딩 오버레이 */}
-      {isProcessing && (
+        {/* 카드 내부 컨텐츠 레이어 (중앙 정렬) */}
         <div
           style={{
             position: 'absolute',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(2px)',
+            width: '100%',
+            height: '100%',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 6
+            padding: '8px'
           }}
         >
-          <span style={{ fontSize: '26px' }}>⏳</span>
-          <span style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700, marginTop: '4px' }}>
-            준비 중...
+          {/* 중앙: 문서 아이콘 및 큼직한 페이지 번호 */}
+          <span style={{ fontSize: '32px', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.15))' }}>📄</span>
+          <span style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a', marginTop: '6px', letterSpacing: '-0.3px' }}>
+            {pageNumber}쪽
           </span>
+          {!isSelectionMode && (
+            <span style={{ fontSize: '11px', color: '#64748b', marginTop: '4px', fontWeight: 600 }}>
+              터치하여 보기 🔍
+            </span>
+          )}
         </div>
-      )}
+
+        {/* 쪽수 배지 (좌측 상단) */}
+        <div
+          style={{
+            position: 'absolute',
+            top: '10px',
+            left: '8px',
+            background: 'rgba(15, 23, 42, 0.85)',
+            backdropFilter: 'blur(4px)',
+            color: '#38bdf8',
+            padding: '2px 7px',
+            borderRadius: '5px',
+            fontSize: '11px',
+            fontWeight: 800,
+            border: '1px solid rgba(56, 189, 248, 0.4)',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+            zIndex: 3
+          }}
+        >
+          {pageNumber}
+        </div>
+
+        {/* 다중 선택 모드 체크박스 */}
+        {isSelectionMode && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '8px',
+              right: '8px',
+              width: '24px',
+              height: '24px',
+              borderRadius: '6px',
+              background: isChecked ? '#3b82f6' : 'rgba(0, 0, 0, 0.4)',
+              border: '2px solid #ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '14px',
+              color: '#ffffff',
+              fontWeight: 900,
+              zIndex: 3,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.4)'
+            }}
+          >
+            {isChecked ? '✓' : ''}
+          </div>
+        )}
+
+        {/* 처리 중 로딩 오버레이 */}
+        {isProcessing && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.75)',
+              backdropFilter: 'blur(2px)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 6
+            }}
+          >
+            <span style={{ fontSize: '26px' }}>⏳</span>
+            <span style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700, marginTop: '4px' }}>
+              준비 중...
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 });

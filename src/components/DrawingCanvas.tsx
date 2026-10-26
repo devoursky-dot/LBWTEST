@@ -3,9 +3,16 @@ import {
   type Stroke,
   isStrokeHit,
   drawSingleStroke,
-  renderCanvasGridAndStrokes
+  renderCanvasGridAndStrokes,
+  calculateDynamicStrokeWidth
 } from '../lib/drawingGeometry';
-import { recognizeShape } from '../lib/shapeRecognizer';
+import {
+  recognizeShape,
+  generateLinePoints,
+  generateCirclePoints,
+  generateEllipsePoints,
+  type RecognizedShape
+} from '../lib/shapeRecognizer';
 
 export interface DrawingCanvasProps {
   strokes: Stroke[];
@@ -80,7 +87,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   // 퀵셰이프(QuickShape) 선 유지 시 도형 자동 변환 레퍼런스
   const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isHoldSnappedRef = useRef<boolean>(false);
-  const lastMoveCoordRef = useRef<{ x: number; y: number } | null>(null);
+  const holdAnchorCoordRef = useRef<{ x: number; y: number } | null>(null);
+  const snappedShapeRef = useRef<RecognizedShape | null>(null);
+  const lastPointTimeRef = useRef<number>(Date.now());
 
   // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
   const lastFingerTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
@@ -247,7 +256,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       activeDrawPointerTypeRef.current = e.pointerType;
 
       const { x, y } = getCanvasCoords(e.clientX, e.clientY);
-      const pressure = e.pressure > 0 ? e.pressure : 0.5;
+      const initialPressure = e.pressure > 0 ? e.pressure : 0.5;
+      lastPointTimeRef.current = Date.now();
 
       // 퀵셰이프 상태 초기화
       if (holdTimerRef.current) {
@@ -255,7 +265,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         holdTimerRef.current = null;
       }
       isHoldSnappedRef.current = false;
-      lastMoveCoordRef.current = { x, y };
+      snappedShapeRef.current = null;
+      holdAnchorCoordRef.current = { x, y };
 
       // [5. 획 단위 지우개 모드]:
       if (p.tool === 'eraser' && p.eraserMode === 'stroke') {
@@ -282,7 +293,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         tool: p.tool as 'pen' | 'highlighter' | 'eraser',
         color: currentColor,
         size: currentSize,
-        points: [{ x, y, pressure }]
+        points: [{ x, y, pressure: initialPressure }]
       };
 
       currentStrokeRef.current = newStroke;
@@ -339,6 +350,10 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
+      const now = Date.now();
+      const dt = Math.max(1, now - lastPointTimeRef.current);
+      lastPointTimeRef.current = now;
+
       // iPad 120Hz/240Hz 애플펜슬 서브프레임 정밀도를 위한 Coalesced Events 처리
       const coalesced = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e];
       const eventsToProcess = coalesced.length > 0 ? coalesced : [e];
@@ -346,22 +361,55 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       for (let i = 0; i < eventsToProcess.length; i++) {
         const ev = eventsToProcess[i];
         const { x, y } = getCanvasCoords(ev.clientX, ev.clientY);
-        const pressure = ev.pressure > 0 ? ev.pressure : 0.5;
 
+        // 1) 이미 도형으로 스냅된 경우: 점을 추가하지 않고 손끝을 따라 도형 크기/각도 실시간 피벗
+        if (isHoldSnappedRef.current && snappedShapeRef.current) {
+          const s = snappedShapeRef.current;
+          if (s.type === 'line' && s.startPoint) {
+            currentStroke.points = generateLinePoints(
+              { x: s.startPoint.x, y: s.startPoint.y, pressure: 0.5 },
+              { x, y, pressure: 0.5 }
+            );
+            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+            drawSingleStroke(ctx, currentStroke, p.enablePressure);
+          } else if (s.type === 'circle' && s.center) {
+            const currentR = Math.hypot(x - s.center.x, y - s.center.y);
+            currentStroke.points = generateCirclePoints(s.center.x, s.center.y, Math.max(10, currentR), 0.5);
+            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+            drawSingleStroke(ctx, currentStroke, p.enablePressure);
+          } else if (s.type === 'ellipse' && s.center) {
+            const currentRx = Math.max(10, Math.abs(x - s.center.x));
+            const currentRy = Math.max(10, Math.abs(y - s.center.y));
+            currentStroke.points = generateEllipsePoints(s.center.x, s.center.y, currentRx, currentRy, 0.5);
+            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+            drawSingleStroke(ctx, currentStroke, p.enablePressure);
+          }
+          continue;
+        }
+
+        // 2) 일반 필기 중: 다이나믹 가변 필압 계산 (갤럭시 S펜 & 아이패드 애플펜슬 + 속도 보조)
         const pts = currentStroke.points;
         const prevPt = pts[pts.length - 1];
-        pts.push({ x, y, pressure });
+
+        let effectivePressure = ev.pressure > 0 ? ev.pressure : 0.5;
+        // 하드웨어 압력이 0.5 고정(마우스/일반터치)인 경우 속도 기반 가상 압력 보조
+        if (effectivePressure === 0.5 && prevPt) {
+          const dist = Math.hypot(x - prevPt.x, y - prevPt.y);
+          const speed = dist / dt; // px/ms
+          effectivePressure = Math.max(0.15, Math.min(0.95, 0.95 - speed * 0.18));
+        }
+
+        pts.push({ x, y, pressure: effectivePressure });
 
         if (prevPt) {
           ctx.save();
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
 
-          // 🖊️ 필압(Pressure) 지원 가변 두께 (Galaxy S Pen & iPad Apple Pencil)
+          // 🖊️ 가변 두께 (S펜 / 애플펜슬 W3C 센서 또는 속도 다이나믹스)
           const isPen = currentStroke.tool === 'pen';
-          const usePressure = isPen && p.enablePressure && (ev.pointerType === 'pen' || pressure !== 0.5);
-          const segWidth = usePressure
-            ? Math.max(1, currentStroke.size * (0.35 + 1.15 * pressure))
+          const segWidth = (isPen && p.enablePressure)
+            ? calculateDynamicStrokeWidth(currentStroke.size, effectivePressure)
             : currentStroke.size;
 
           if (currentStroke.tool === 'highlighter') {
@@ -387,33 +435,44 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
       // ----------------------------------------------------------------------
       // [📐 퀵셰이프 (QuickShape) 홀드 감지]:
-      // 펜/형광펜으로 선을 그리고 화면 끝에서 0.46초간 멈추면 직선, 정원, 타원으로 스냅
+      // 펜/형광펜으로 선을 그리고 화면 끝에서 0.38초간 멈추면 직선, 정원, 타원으로 스냅!
+      // (반경 22px 이내의 미세 지터/손떨림은 타이머를 취소하지 않고 계속 유지하여 100% 발동)
       // ----------------------------------------------------------------------
-      if (p.enableQuickShape && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter')) {
-        if (holdTimerRef.current) {
-          clearTimeout(holdTimerRef.current);
-          holdTimerRef.current = null;
-        }
-
+      if (p.enableQuickShape && !isHoldSnappedRef.current && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter')) {
         const pts = currentStroke.points;
-        if (!isHoldSnappedRef.current && pts.length >= 7) {
-          holdTimerRef.current = setTimeout(() => {
-            if (!isDrawingRef.current || !currentStrokeRef.current) return;
-            const shape = recognizeShape(currentStrokeRef.current.points);
-            if (shape) {
-              // 손맛 햅틱 진동 피드백
-              if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                try { navigator.vibrate(15); } catch {}
+        const lastPt = pts[pts.length - 1];
+
+        const anchor = holdAnchorCoordRef.current;
+        const distFromAnchor = anchor ? Math.hypot(lastPt.x - anchor.x, lastPt.y - anchor.y) : 999;
+
+        // 22px 이상 크게 이동했을 때만 기준점을 갱신하고 타이머를 새로 시작 (지터 방어)
+        if (distFromAnchor > 22 || !holdTimerRef.current) {
+          holdAnchorCoordRef.current = { x: lastPt.x, y: lastPt.y };
+          if (holdTimerRef.current) {
+            clearTimeout(holdTimerRef.current);
+            holdTimerRef.current = null;
+          }
+
+          if (pts.length >= 6) {
+            holdTimerRef.current = setTimeout(() => {
+              if (!isDrawingRef.current || !currentStrokeRef.current) return;
+              const shape = recognizeShape(currentStrokeRef.current.points);
+              if (shape) {
+                // 손끝 햅틱 진동 피드백
+                if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                  try { navigator.vibrate(20); } catch {}
+                }
+
+                isHoldSnappedRef.current = true;
+                snappedShapeRef.current = shape;
+                currentStrokeRef.current.points = shape.points;
+
+                // 캔버스 배경 및 기존 획 다시 그리기 후 보정된 도형 깔끔 반영
+                renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+                drawSingleStroke(ctx, currentStrokeRef.current, p.enablePressure);
               }
-
-              isHoldSnappedRef.current = true;
-              currentStrokeRef.current.points = shape.points;
-
-              // 캔버스 배경 및 기존 획 다시 그리기 후 보정된 도형 반영
-              renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-              drawSingleStroke(ctx, currentStrokeRef.current, p.enablePressure);
-            }
-          }, 460);
+            }, 380); // 380ms 홀드 감지
+          }
         }
       }
     };
@@ -427,7 +486,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         holdTimerRef.current = null;
       }
       isHoldSnappedRef.current = false;
-      lastMoveCoordRef.current = null;
+      snappedShapeRef.current = null;
+      holdAnchorCoordRef.current = null;
 
       // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지:
       // 손가락으로 화면을 이동(Pan)한 것이 아니라, 제자리에서 가볍게 탭(< 280ms, 이동거리 < 14px)한 경우만 엄격 판별!
