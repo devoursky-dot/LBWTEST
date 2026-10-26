@@ -382,7 +382,7 @@ export function generateStrokePointsFromEditableShape(shape: EditableShape): Str
  * 3. 곡선: 열린 곡선 -> 시작점과 끝점을 잇는 단일 곡률의 '한 번 휘어진 호(Single Curved Arc)'로 표시 ("곡선은 한번 휘어진 호로 표시를 하고")
  * ============================================================================
  */
-export function recognizeShape(points: StrokePoint[], strokeSize: number = 3): RecognizedShape | null {
+export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): RecognizedShape | null {
   if (!points || points.length < 5) return null;
 
   const start = points[0];
@@ -417,12 +417,15 @@ export function recognizeShape(points: StrokePoint[], strokeSize: number = 3): R
   }
 
   // --------------------------------------------------------------------------
-  // 2. 원(Circle) 판별: 시작점과 끝점의 거리가 펜 크기의 5배 이내인 경우
-  // "시작점과 끝점의 거리가 펜 크기의 5배 이내이면 곡선을 원으로"
+  // 2. 원(Circle) 판별: 시작점과 끝점이 28px 이내로 충분히 가깝게 닫힌 경우만 원으로 인식
+  // [사용자 요구: 처음 점과 거리가 떨어져 있으면 원으로 인식하지 말고, 가까이 닫혔을 때만 원으로 변환]
+  // - 28px(화면상 약 5~6mm) 이내로 확실히 근접하고, 전체 둘레 대비 간격이 14% 이하일 때만 진정한 원으로 판별
+  // - 간격이 28px보다 큰 곡선/호는 원으로 둔갑하지 않고 자연스러운 '호(Arc)'로 변환
   // --------------------------------------------------------------------------
-  const maxClosureGap = Math.max(25, (strokeSize || 3) * 5);
-  // 시작점과 끝점 간격이 펜 크기의 5배 이내이거나, 닫힌 루프 형태(패스 길이의 22% 이내)인 경우
-  const isClosedLoop = (directDistance <= maxClosureGap || (directDistance / totalPathLength < 0.22)) && totalPathLength > 28;
+  const maxClosureGap = 28; // 최대 허용 간격 28px
+  const isClosedLoop = directDistance <= maxClosureGap &&
+                       (directDistance / totalPathLength <= 0.14) &&
+                       totalPathLength >= 45;
 
   if (isClosedLoop) {
     // 멈춘 지점(end)에서 궤적 상 가장 거리가 먼 반대편 점(oppositePoint) 탐색
