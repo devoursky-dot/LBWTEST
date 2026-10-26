@@ -10,7 +10,8 @@ import {
   recognizeShape,
   generateLinePoints,
   generateCirclePoints,
-  generateEllipsePoints,
+  generateRotatedEllipsePoints,
+  generateSmoothBezierCurve,
   type RecognizedShape
 } from '../lib/shapeRecognizer';
 
@@ -385,15 +386,38 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
             drawSingleStroke(ctx, currentStroke, false); // 도형은 정갈한 중간 굵기
           } else if (s.type === 'ellipse' && s.oppositePoint) {
+            // [회전 타원 큰 지름 밀착 방식]:
+            // 멈춘 지점과 반대편 점 opp를 잇는 축이 100% 큰 지름(장축)이 되도록 회전각 적용!
             const opp = s.oppositePoint;
             const newMajor = Math.hypot(x - opp.x, y - opp.y);
             const newRx = Math.max(8, newMajor / 2);
-            const newRy = Math.max(6, (s.radiusY || newRx * 0.45));
+            // 기존 타원의 단축/장축 비율 유지
+            const ratio = (s.radiusX && s.radiusY) ? (s.radiusY / s.radiusX) : 0.35;
+            const newRy = Math.max(6, newRx * ratio);
             const newCx = (opp.x + x) / 2;
             const newCy = (opp.y + y) / 2;
-            currentStroke.points = generateEllipsePoints(newCx, newCy, newRx, newRy, 0.5);
+            const angle = Math.atan2(y - opp.y, x - opp.x);
+            currentStroke.points = generateRotatedEllipsePoints(newCx, newCy, newRx, newRy, angle, 0.5);
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
             drawSingleStroke(ctx, currentStroke, false); // 도형은 정갈한 중간 굵기
+          } else if (s.type === 'curve') {
+            // [베지에 곡선 실시간 텐션 조절]:
+            // 시작점은 고정된 채 마지막 점(멈춘 지점)이 손끝(x, y)으로 탄력 있게 늘어나며 스무스 스플라인 갱신!
+            const pts = currentStroke.points;
+            if (pts.length > 2 && s.endPoint) {
+              const updated = pts.map((pt, idx) => {
+                if (idx === pts.length - 1) return { x, y, pressure: 0.5 };
+                const t = idx / (pts.length - 1);
+                return {
+                  x: pt.x + (x - s.endPoint!.x) * t * 0.5,
+                  y: pt.y + (y - s.endPoint!.y) * t * 0.5,
+                  pressure: 0.5
+                };
+              });
+              currentStroke.points = generateSmoothBezierCurve(updated, 0.5);
+              renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+              drawSingleStroke(ctx, currentStroke, false); // 곡선은 정갈한 중간 굵기
+            }
           }
           continue;
         }
