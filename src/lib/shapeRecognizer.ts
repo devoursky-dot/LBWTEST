@@ -151,8 +151,8 @@ export function generateEllipsePoints(
  * 직선(Line) 보정 점 배열 생성
  */
 export function generateLinePoints(
-  start: StrokePoint,
-  end: StrokePoint,
+  start: { x: number; y: number; pressure?: number },
+  end: { x: number; y: number; pressure?: number },
   pressure: number = 0.5
 ): StrokePoint[] {
   const pts: StrokePoint[] = [];
@@ -233,9 +233,9 @@ export function generateSmoothBezierCurve(
  * - 불필요한 다중 굴곡이나 S자 왜곡 없이, 사용자가 그린 궤적의 휨 정도를 그대로 반영하는 단일 2차 베지에 호
  */
 export function generateSingleArcPoints(
-  start: StrokePoint,
-  end: StrokePoint,
-  apex: StrokePoint,
+  start: { x: number; y: number; pressure?: number },
+  end: { x: number; y: number; pressure?: number },
+  apex: { x: number; y: number; pressure?: number },
   pressure: number = 0.5,
   steps: number = 36
 ): StrokePoint[] {
@@ -481,4 +481,124 @@ export function recognizeShape(points: StrokePoint[], strokeSize: number = 3): R
   }
 
   return null;
+}
+
+export interface EndpointMatch {
+  x: number;
+  y: number;
+  strokeId: string;
+  isStart: boolean;
+  dist: number;
+}
+
+/**
+ * 기존 스트로크들에서 (targetX, targetY)에 가장 가까운 시작점/끝점 탐색
+ */
+export function findNearestEndpoint(
+  strokes: Array<{ id: string; points: StrokePoint[]; tool?: string }>,
+  targetX: number,
+  targetY: number,
+  maxRadius: number = 24
+): EndpointMatch | null {
+  let nearest: EndpointMatch | null = null;
+  let minDist = maxRadius;
+
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const s = strokes[i];
+    if (!s.points || s.points.length === 0) continue;
+    if (s.tool === 'eraser') continue;
+
+    const startPt = s.points[0];
+    const endPt = s.points[s.points.length - 1];
+
+    const distStart = Math.hypot(targetX - startPt.x, targetY - startPt.y);
+    if (distStart <= minDist) {
+      minDist = distStart;
+      nearest = { x: startPt.x, y: startPt.y, strokeId: s.id, isStart: true, dist: distStart };
+    }
+
+    const distEnd = Math.hypot(targetX - endPt.x, targetY - endPt.y);
+    if (distEnd <= minDist) {
+      minDist = distEnd;
+      nearest = { x: endPt.x, y: endPt.y, strokeId: s.id, isStart: false, dist: distEnd };
+    }
+  }
+
+  return nearest;
+}
+
+/**
+ * 2차 베지에 호의 끝점 이동 시 기존 곡률 비율을 유지하여 새 apex 계산
+ */
+export function calculateUpdatedArcApex(
+  origStart: { x: number; y: number },
+  origEnd: { x: number; y: number },
+  origApex: { x: number; y: number },
+  newStart: { x: number; y: number },
+  newEnd: { x: number; y: number }
+): { x: number; y: number } {
+  const origDx = origEnd.x - origStart.x;
+  const origDy = origEnd.y - origStart.y;
+  const origLen = Math.hypot(origDx, origDy);
+
+  if (origLen < 1) {
+    return { x: (newStart.x + newEnd.x) / 2, y: (newStart.y + newEnd.y) / 2 };
+  }
+
+  const origMidX = (origStart.x + origEnd.x) / 2;
+  const origMidY = (origStart.y + origEnd.y) / 2;
+
+  const origNormX = -origDy / origLen;
+  const origNormY = origDx / origLen;
+
+  const origHeight = (origApex.x - origMidX) * origNormX + (origApex.y - origMidY) * origNormY;
+  const curvatureRatio = Math.max(-1.0, Math.min(1.0, origHeight / origLen));
+
+  const newDx = newEnd.x - newStart.x;
+  const newDy = newEnd.y - newStart.y;
+  const newLen = Math.hypot(newDx, newDy);
+
+  if (newLen < 1) {
+    return { x: newStart.x, y: newStart.y };
+  }
+
+  const newMidX = (newStart.x + newEnd.x) / 2;
+  const newMidY = (newStart.y + newEnd.y) / 2;
+  const newNormX = -newDy / newLen;
+  const newNormY = newDx / newLen;
+
+  const newHeight = curvatureRatio * newLen;
+  return {
+    x: newMidX + newHeight * newNormX,
+    y: newMidY + newHeight * newNormY
+  };
+}
+
+/**
+ * 캔버스에 청록색/에메랄드빛 자석 스냅 앵커 링 렌더링
+ */
+export function drawMagneticAnchorRing(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  color: string = '#06b6d4'
+): void {
+  ctx.save();
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 10;
+
+  // 외곽 원형 링
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(x, y, 9, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 내부 앵커 코어
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
 }

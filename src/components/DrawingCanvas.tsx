@@ -8,12 +8,14 @@ import {
 } from '../lib/drawingGeometry';
 import {
   recognizeShape,
+  generateLinePoints,
   generateCirclePoints,
-  getArcControlPoint,
-  calculateTangentArcApex,
-  generateStrokePointsFromEditableShape,
+  generateSingleArcPoints,
+  findNearestEndpoint,
+  calculateUpdatedArcApex,
+  drawMagneticAnchorRing,
   type RecognizedShape,
-  type EditableArcSegment
+  type EndpointMatch
 } from '../lib/shapeRecognizer';
 
 export interface DrawingCanvasProps {
@@ -93,17 +95,12 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const snappedShapeRef = useRef<RecognizedShape | null>(null);
   const lastPointTimeRef = useRef<number>(Date.now());
 
-  // [📐 연속 체이닝 레퍼런스 (유격 데드존 & 마우스 떼면 즉시 고정)]
-  const chainShapeTypeRef = useRef<'line' | 'arc' | 'circle' | null>(null);
-  const chainVerticesRef = useRef<{ x: number; y: number }[]>([]);
-  const chainArcSegmentsRef = useRef<EditableArcSegment[]>([]);
-  const chainCircleDataRef = useRef<{ cx: number; cy: number; radius: number; pivotX: number; pivotY: number } | null>(null);
-
-  // 유격(Deadzone) 및 연장선 제어
-  const chainAnchorPointRef = useRef<{ x: number; y: number } | null>(null);
-  const isChainingExtendingRef = useRef<boolean>(false);
-  const chainNextHoldTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const chainNextAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  // [🧲 끝점 자석 스냅 & 연결 레퍼런스 (260ms 홀드 시 자석 연결)]
+  const anchorHoldTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const anchorTouchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const candidateAnchorRef = useRef<EndpointMatch | null>(null);
+  const activeStartAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const closingSnapRef = useRef<{ x: number; y: number } | null>(null);
 
   // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
   const lastFingerTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
@@ -273,25 +270,55 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const initialPressure = e.pressure > 0 ? e.pressure : 0.5;
       lastPointTimeRef.current = Date.now();
 
-      // 퀵셰이프 및 연속 체이닝 상태 초기화
+      // 퀵셰이프 및 자석 스냅 상태 초기화
       if (holdTimerRef.current) {
         clearTimeout(holdTimerRef.current);
         holdTimerRef.current = null;
       }
-      if (chainNextHoldTimerRef.current) {
-        clearTimeout(chainNextHoldTimerRef.current);
-        chainNextHoldTimerRef.current = null;
+      if (anchorHoldTimerRef.current) {
+        clearTimeout(anchorHoldTimerRef.current);
+        anchorHoldTimerRef.current = null;
       }
       isHoldSnappedRef.current = false;
       snappedShapeRef.current = null;
-      chainShapeTypeRef.current = null;
-      chainVerticesRef.current = [];
-      chainArcSegmentsRef.current = [];
-      chainCircleDataRef.current = null;
-      chainAnchorPointRef.current = null;
-      isChainingExtendingRef.current = false;
-      chainNextAnchorRef.current = null;
+      activeStartAnchorRef.current = null;
+      closingSnapRef.current = null;
       holdAnchorCoordRef.current = { x, y };
+
+      // [🧲 끝점 자석 감지 타이머 시작: 끝점 근처(24px)에서 260ms 동안 머무르면 자석 앵커 활성화]
+      if (p.tool === 'pen' || p.tool === 'highlighter') {
+        const nearest = findNearestEndpoint(p.strokes, x, y, 24);
+        if (nearest) {
+          candidateAnchorRef.current = nearest;
+          anchorTouchStartPosRef.current = { x, y };
+
+          anchorHoldTimerRef.current = setTimeout(() => {
+            if (!isDrawingRef.current) return;
+            // 260ms 누르고 있었음 -> 자석 앵커 락 발동!
+            activeStartAnchorRef.current = { x: nearest.x, y: nearest.y };
+            if (typeof navigator !== 'undefined' && navigator.vibrate) {
+              try { navigator.vibrate(25); } catch {}
+            }
+            // 스트로크의 첫 번째 점을 정확한 끝점 좌표로 고정
+            if (currentStrokeRef.current && currentStrokeRef.current.points.length > 0) {
+              currentStrokeRef.current.points[0].x = nearest.x;
+              currentStrokeRef.current.points[0].y = nearest.y;
+            }
+            // 청록색 자석 스냅 링 표시
+            const cCtx = canvas.getContext('2d');
+            if (cCtx) {
+              renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+              if (currentStrokeRef.current) {
+                drawSingleStroke(cCtx, currentStrokeRef.current, p.enablePressure);
+              }
+              drawMagneticAnchorRing(cCtx, nearest.x, nearest.y, '#06b6d4');
+            }
+          }, 260);
+        } else {
+          candidateAnchorRef.current = null;
+          anchorTouchStartPosRef.current = null;
+        }
+      }
 
       // [5. 획 단위 지우개 모드]:
       if (p.tool === 'eraser' && p.eraserMode === 'stroke') {
@@ -388,145 +415,82 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const { x, y } = getCanvasCoords(ev.clientX, ev.clientY);
 
         // --------------------------------------------------------------------
-        // 1) 퀵셰이프로 스냅된 후 손을 떼지 않고 조절 & 연속 체이닝
-        // [사용자 요구: 유격(Deadzone) 내에서는 제자리 멈춤 유지, 멀리 움직일 때만 연결선 연장]
+        // [1] 끝점 자석 홀드 타이머 체크: 아직 260ms 전인데 12px 이상 움직였다면?
+        // -> 일반 글씨 쓰기 / 빠른 드로잉이므로 자석 스냅 즉시 취소!
         // --------------------------------------------------------------------
-        if (isHoldSnappedRef.current) {
-          const anchor = chainAnchorPointRef.current;
-          const distFromAnchor = anchor ? Math.hypot(x - anchor.x, y - anchor.y) : 999;
+        if (anchorHoldTimerRef.current && anchorTouchStartPosRef.current) {
+          const moveDist = Math.hypot(x - anchorTouchStartPosRef.current.x, y - anchorTouchStartPosRef.current.y);
+          if (moveDist > 12) {
+            clearTimeout(anchorHoldTimerRef.current);
+            anchorHoldTimerRef.current = null;
+            candidateAnchorRef.current = null;
+          }
+        }
 
-          // (A) 직선 체이닝 (Line Chaining)
-          if (chainShapeTypeRef.current === 'line' && chainVerticesRef.current.length >= 2) {
-            const verts = chainVerticesRef.current;
+        // --------------------------------------------------------------------
+        // [2] 퀵셰이프 스냅 완료 상태: 드래그하여 끝점 위치 및 각도 실시간 조절
+        // --------------------------------------------------------------------
+        if (isHoldSnappedRef.current && snappedShapeRef.current) {
+          const shape = snappedShapeRef.current;
 
-            // 1. 유격(Deadzone): 마지막 고정점 부근 35px 이내의 미세 움직임은 완전히 멈춘 것으로 무시!
-            if (!isChainingExtendingRef.current && distFromAnchor < 35) {
-              continue;
-            }
+          // 도형 닫기(Close Loop) 자석 감지: 현재 끝점이 다른 꼭짓점(22px 이내)에 접근했는지 확인
+          const closeMatch = findNearestEndpoint(p.strokes, x, y, 22);
+          const isSameAsStart = activeStartAnchorRef.current && closeMatch &&
+            Math.hypot(closeMatch.x - activeStartAnchorRef.current.x, closeMatch.y - activeStartAnchorRef.current.y) < 6;
 
-            // 2. 35px 이상 확실히 멀리 이동했을 때만 연장선 그리기 시작!
-            isChainingExtendingRef.current = true;
-
-            const currentVerts = [...verts, { x, y }];
-            const pts = generateStrokePointsFromEditableShape({
-              type: 'line',
-              vertices: currentVerts,
-              strokeProps: { color: currentStroke.color, size: currentStroke.size, tool: currentStroke.tool as any }
-            });
-            currentStroke.points = pts;
-            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-            drawSingleStroke(ctx, currentStroke, false);
-
-            // 3. 연장선 끝에서 새로운 멈춤(Hold)이 발생할 때만 다음 꼭짓점으로 확정
-            const nextAnchor = chainNextAnchorRef.current;
-            const distFromNext = nextAnchor ? Math.hypot(x - nextAnchor.x, y - nextAnchor.y) : 999;
-
-            if (distFromNext > 25 || !chainNextHoldTimerRef.current) {
-              chainNextAnchorRef.current = { x, y };
-              if (chainNextHoldTimerRef.current) {
-                clearTimeout(chainNextHoldTimerRef.current);
-                chainNextHoldTimerRef.current = null;
-              }
-              chainNextHoldTimerRef.current = setTimeout(() => {
-                if (!isDrawingRef.current || !isHoldSnappedRef.current) return;
-                if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                  try { navigator.vibrate(25); } catch {}
-                }
-                // 새로운 위치를 정식 꼭짓점으로 확정
-                chainVerticesRef.current.push({ x, y });
-                chainAnchorPointRef.current = { x, y };
-                isChainingExtendingRef.current = false; // 다시 유격 모드로 복귀
-                chainNextAnchorRef.current = null;
-              }, 420);
-            }
-            continue;
+          let targetEnd = { x, y };
+          if (closeMatch && !isSameAsStart) {
+            targetEnd = { x: closeMatch.x, y: closeMatch.y };
+            closingSnapRef.current = targetEnd;
+          } else {
+            closingSnapRef.current = null;
           }
 
-          // (B) 곡선(호) 체이닝 및 접선 연속성 ($C^1$ Continuity)
-          if (chainShapeTypeRef.current === 'arc' && chainArcSegmentsRef.current.length > 0) {
-            const segs = chainArcSegmentsRef.current;
-            const lastFixedSeg = segs[segs.length - 1];
+          const fixedStart = activeStartAnchorRef.current || shape.startPoint || currentStroke.points[0];
 
-            // 1. 유격(Deadzone): 마지막 호 끝점 부근 35px 이내의 미세 움직임은 무시!
-            if (!isChainingExtendingRef.current && distFromAnchor < 35) {
-              continue;
-            }
-
-            // 2. 35px 이상 이동 시 접선을 유지하는 다음 호 연장 시작
-            isChainingExtendingRef.current = true;
-
-            const prevCtrl = getArcControlPoint(lastFixedSeg.start, lastFixedSeg.end, lastFixedSeg.apex);
-            const extendingApex = calculateTangentArcApex(prevCtrl, lastFixedSeg.end, { x, y });
-
-            const extendingSeg: EditableArcSegment = {
-              start: { ...lastFixedSeg.end },
-              apex: extendingApex,
-              end: { x, y }
-            };
-
-            const currentSegs = [...segs, extendingSeg];
-            const pts = generateStrokePointsFromEditableShape({
-              type: 'arc',
-              arcSegments: currentSegs,
-              strokeProps: { color: currentStroke.color, size: currentStroke.size, tool: currentStroke.tool as any }
-            });
-            currentStroke.points = pts;
-            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-            drawSingleStroke(ctx, currentStroke, false);
-
-            // 3. 연장선 끝에서 새로운 멈춤(Hold)이 발생할 때만 다음 호로 확정
-            const nextAnchor = chainNextAnchorRef.current;
-            const distFromNext = nextAnchor ? Math.hypot(x - nextAnchor.x, y - nextAnchor.y) : 999;
-
-            if (distFromNext > 25 || !chainNextHoldTimerRef.current) {
-              chainNextAnchorRef.current = { x, y };
-              if (chainNextHoldTimerRef.current) {
-                clearTimeout(chainNextHoldTimerRef.current);
-                chainNextHoldTimerRef.current = null;
-              }
-              chainNextHoldTimerRef.current = setTimeout(() => {
-                if (!isDrawingRef.current || !isHoldSnappedRef.current) return;
-                if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                  try { navigator.vibrate(25); } catch {}
-                }
-                chainArcSegmentsRef.current.push(extendingSeg);
-                chainAnchorPointRef.current = { x, y };
-                isChainingExtendingRef.current = false;
-                chainNextAnchorRef.current = null;
-              }, 420);
-            }
-            continue;
-          }
-
-          // (C) 원 크기 조절 (Circle Sizing)
-          if (chainShapeTypeRef.current === 'circle' && chainCircleDataRef.current) {
-            const c = chainCircleDataRef.current;
-            const diam = Math.hypot(x - c.pivotX, y - c.pivotY);
+          if (shape.type === 'line') {
+            currentStroke.points = generateLinePoints(fixedStart, targetEnd, 0.5);
+          } else if (shape.type === 'curve') {
+            const origStart = shape.startPoint || fixedStart;
+            const origEnd = shape.endPoint || targetEnd;
+            const origApex = shape.apexPoint || { x: (origStart.x + origEnd.x) / 2, y: (origStart.y + origEnd.y) / 2 };
+            const dynamicApex = calculateUpdatedArcApex(origStart, origEnd, origApex, fixedStart, targetEnd);
+            currentStroke.points = generateSingleArcPoints(fixedStart, targetEnd, dynamicApex, 0.5);
+          } else if (shape.type === 'circle') {
+            const pivot = shape.oppositePoint || fixedStart;
+            const diam = Math.hypot(x - pivot.x, y - pivot.y);
             const radius = Math.max(8, diam / 2);
-            const cx = (c.pivotX + x) / 2;
-            const cy = (c.pivotY + y) / 2;
-            c.cx = cx;
-            c.cy = cy;
-            c.radius = radius;
-
+            const cx = (pivot.x + x) / 2;
+            const cy = (pivot.y + y) / 2;
             currentStroke.points = generateCirclePoints(cx, cy, radius, 0.5);
-            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-            drawSingleStroke(ctx, currentStroke, false);
-            continue;
+          }
+
+          // 화면 리렌더링
+          renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+          drawSingleStroke(ctx, currentStroke, false);
+
+          // 시작 앵커 링 (청록색)
+          if (activeStartAnchorRef.current) {
+            drawMagneticAnchorRing(ctx, activeStartAnchorRef.current.x, activeStartAnchorRef.current.y, '#06b6d4');
+          }
+          // 끝점 도형 닫기 링 (에메랄드 녹색)
+          if (closingSnapRef.current) {
+            drawMagneticAnchorRing(ctx, closingSnapRef.current.x, closingSnapRef.current.y, '#10b981');
           }
 
           continue;
         }
 
-        // 2) 일반 필기 중: 다이나믹 가변 필압 계산 (갤럭시 S펜 & 아이패드 애플펜슬 + 속도 보조)
+        // --------------------------------------------------------------------
+        // [3] 일반 필기/드로잉 (손을 뗀 채 자유롭게 그리는 단계)
+        // --------------------------------------------------------------------
         const pts = currentStroke.points;
         const prevPt = pts[pts.length - 1];
 
         let effectivePressure = ev.pressure > 0 ? ev.pressure : 0.5;
-        // 하드웨어 압력이 0.5 고정(마우스/일반터치)인 경우 속도 기반 가상 압력 보조
         if (effectivePressure === 0.5 && prevPt) {
           const dist = Math.hypot(x - prevPt.x, y - prevPt.y);
-          const speed = dist / dt; // px/ms
+          const speed = dist / dt;
           effectivePressure = Math.max(0.15, Math.min(0.95, 0.95 - speed * 0.18));
         }
 
@@ -537,7 +501,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
 
-          // 🖊️ 가변 두께 (S펜 / 애플펜슬 W3C 센서 또는 속도 다이나믹스)
           const isPen = currentStroke.tool === 'pen';
           const segWidth = (isPen && p.enablePressure)
             ? calculateDynamicStrokeWidth(currentStroke.size, effectivePressure)
@@ -560,15 +523,17 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           ctx.moveTo(prevPt.x, prevPt.y);
           ctx.lineTo(x, y);
           ctx.stroke();
+
+          // 시작 앵커가 활성화된 상태라면 시작점에 자석 링 유지
+          if (activeStartAnchorRef.current) {
+            drawMagneticAnchorRing(ctx, activeStartAnchorRef.current.x, activeStartAnchorRef.current.y, '#06b6d4');
+          }
+
           ctx.restore();
         }
       }
 
-      // ----------------------------------------------------------------------
-      // [📐 퀵셰이프 (QuickShape) 홀드 감지]:
-      // 펜/형광펜으로 선을 그리고 화면 끝에서 0.38초간 멈추면 직선, 호, 원으로 스냅!
-      // (반경 22px 이내의 미세 지터/손떨림은 타이머를 취소하지 않고 계속 유지하여 100% 발동)
-      // ----------------------------------------------------------------------
+      // [4] 퀵셰이프 홀드 감지 (선을 긋고 끝에서 멈추면 직선/호/원으로 스냅)
       if (p.enableQuickShape && !isHoldSnappedRef.current && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter')) {
         const pts = currentStroke.points;
         const lastPt = pts[pts.length - 1];
@@ -576,7 +541,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const anchor = holdAnchorCoordRef.current;
         const distFromAnchor = anchor ? Math.hypot(lastPt.x - anchor.x, lastPt.y - anchor.y) : 999;
 
-        // 22px 이상 크게 이동했을 때만 기준점을 갱신하고 타이머를 새로 시작 (지터 방어)
         if (distFromAnchor > 22 || !holdTimerRef.current) {
           holdAnchorCoordRef.current = { x: lastPt.x, y: lastPt.y };
           if (holdTimerRef.current) {
@@ -590,7 +554,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
               const strokeSize = currentStrokeRef.current.size || 3;
               const shape = recognizeShape(currentStrokeRef.current.points, strokeSize);
               if (shape) {
-                // 손끝 햅틱 진동 피드백
                 if (typeof navigator !== 'undefined' && navigator.vibrate) {
                   try { navigator.vibrate(20); } catch {}
                 }
@@ -598,46 +561,24 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 isHoldSnappedRef.current = true;
                 snappedShapeRef.current = shape;
 
-                if (shape.type === 'line' && shape.startPoint && shape.endPoint) {
-                  chainShapeTypeRef.current = 'line';
-                  chainVerticesRef.current = [{ ...shape.startPoint }, { ...shape.endPoint }];
-                  chainAnchorPointRef.current = { ...shape.endPoint };
-                  isChainingExtendingRef.current = false;
-                  currentStrokeRef.current.points = generateStrokePointsFromEditableShape({
-                    type: 'line',
-                    vertices: chainVerticesRef.current,
-                    strokeProps: { color: currentStrokeRef.current.color, size: currentStrokeRef.current.size, tool: currentStrokeRef.current.tool as any }
-                  });
-                } else if (shape.type === 'circle' && shape.center && shape.oppositePoint) {
-                  chainShapeTypeRef.current = 'circle';
-                  chainCircleDataRef.current = {
-                    cx: shape.center.x,
-                    cy: shape.center.y,
-                    radius: shape.radius || 10,
-                    pivotX: shape.oppositePoint.x,
-                    pivotY: shape.oppositePoint.y
-                  };
-                  chainAnchorPointRef.current = { ...(shape.endPoint || shape.oppositePoint) };
-                  currentStrokeRef.current.points = shape.points;
-                } else if (shape.type === 'curve' && shape.startPoint && shape.apexPoint && shape.endPoint) {
-                  chainShapeTypeRef.current = 'arc';
-                  chainArcSegmentsRef.current = [{
-                    start: { ...shape.startPoint },
-                    apex: { ...shape.apexPoint },
-                    end: { ...shape.endPoint }
-                  }];
-                  chainAnchorPointRef.current = { ...shape.endPoint };
-                  isChainingExtendingRef.current = false;
-                  currentStrokeRef.current.points = shape.points;
+                const fixedStart = activeStartAnchorRef.current || shape.startPoint || currentStrokeRef.current.points[0];
+
+                if (shape.type === 'line' && shape.endPoint) {
+                  currentStrokeRef.current.points = generateLinePoints(fixedStart, shape.endPoint, 0.5);
+                } else if (shape.type === 'curve' && shape.endPoint && shape.apexPoint) {
+                  currentStrokeRef.current.points = generateSingleArcPoints(fixedStart, shape.endPoint, shape.apexPoint, 0.5);
                 } else {
                   currentStrokeRef.current.points = shape.points;
                 }
 
-                // 캔버스 배경 및 기존 획 다시 그리기 후 보정된 도형 깔끔 반영 (정갈한 중간 굵기)
                 renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
                 drawSingleStroke(ctx, currentStrokeRef.current, false);
+
+                if (activeStartAnchorRef.current) {
+                  drawMagneticAnchorRing(ctx, activeStartAnchorRef.current.x, activeStartAnchorRef.current.y, '#06b6d4');
+                }
               }
-            }, 380); // 380ms 홀드 감지
+            }, 360);
           }
         }
       }
@@ -646,24 +587,24 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     const handleNativePointerUp = (e: PointerEvent) => {
       const p = propsRef.current;
 
-      // 퀵셰이프 및 체이닝 홀드 타이머 리셋
+      // 퀵셰이프 및 자석 스냅 타이머 리셋
       if (holdTimerRef.current) {
         clearTimeout(holdTimerRef.current);
         holdTimerRef.current = null;
       }
-      if (chainNextHoldTimerRef.current) {
-        clearTimeout(chainNextHoldTimerRef.current);
-        chainNextHoldTimerRef.current = null;
+      if (anchorHoldTimerRef.current) {
+        clearTimeout(anchorHoldTimerRef.current);
+        anchorHoldTimerRef.current = null;
       }
       holdAnchorCoordRef.current = null;
-      chainAnchorPointRef.current = null;
-      chainNextAnchorRef.current = null;
-      isChainingExtendingRef.current = false;
+      anchorTouchStartPosRef.current = null;
+      candidateAnchorRef.current = null;
 
-      // [사용자 요구: 마우스를 떼면 바로 고정!]
-      if (isHoldSnappedRef.current) {
-        isHoldSnappedRef.current = false;
-      }
+      // [마우스를 떼면 즉시 고정!]
+      isHoldSnappedRef.current = false;
+      snappedShapeRef.current = null;
+      activeStartAnchorRef.current = null;
+      closingSnapRef.current = null;
 
       // 포인터 캡처 안전 해제
       if (canvas.hasPointerCapture(e.pointerId)) {
