@@ -27,6 +27,7 @@ export interface RecognizedShape {
   startPoint?: { x: number; y: number };
   endPoint?: { x: number; y: number };
   oppositePoint?: { x: number; y: number }; // 멈춘 지점의 반대편 지름 끝점 (접점 피벗)
+  apexPoint?: { x: number; y: number }; // 호의 정점 (최대 편차점)
 }
 
 /**
@@ -204,9 +205,52 @@ export function generateSmoothBezierCurve(
 }
 
 /**
- * 획(StrokePoint 배열)을 분석하여 직선, 정원, 타원, 스무스 베지에 곡선 중 최적의 도형으로 자동 인식
+ * 시작점, 끝점, 정점(Apex)을 지나는 '한 번 휘어진 호(Single Curved Arc)' 보정 점 배열 생성
+ * - 불필요한 다중 굴곡이나 S자 왜곡 없이, 사용자가 그린 궤적의 휨 정도를 그대로 반영하는 단일 2차 베지에 호
  */
-export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
+export function generateSingleArcPoints(
+  start: StrokePoint,
+  end: StrokePoint,
+  apex: StrokePoint,
+  pressure: number = 0.5,
+  steps: number = 36
+): StrokePoint[] {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lenSq = dx * dx + dy * dy;
+
+  let t0 = 0.5;
+  if (lenSq > 0) {
+    t0 = ((apex.x - start.x) * dx + (apex.y - start.y) * dy) / lenSq;
+    t0 = Math.max(0.15, Math.min(0.85, t0));
+  }
+
+  const denom = 2 * t0 * (1 - t0);
+  const pcX = (apex.x - (1 - t0) * (1 - t0) * start.x - t0 * t0 * end.x) / denom;
+  const pcY = (apex.y - (1 - t0) * (1 - t0) * start.y - t0 * t0 * end.y) / denom;
+
+  const pts: StrokePoint[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const invT = 1 - t;
+    const x = invT * invT * start.x + 2 * invT * t * pcX + t * t * end.x;
+    const y = invT * invT * start.y + 2 * invT * t * pcY + t * t * end.y;
+    pts.push({ x, y, pressure });
+  }
+
+  return pts;
+}
+
+/**
+ * 획(StrokePoint 배열)을 분석하여 직선, 정원, 한번 휘어진 호로 자동 인식
+ * ============================================================================
+ * [사용자 정의 3대 직관 규칙]
+ * 1. 직선: 오차 4.5% 미만, 직선 비율 95% 이상 -> 직선으로 스냅 및 드래그 조절 ("직선은 그대로 진행하고")
+ * 2. 원: 시작점과 끝점의 거리가 펜 크기의 5배 이내인 폐곡선 -> 정원(Circle)으로 스냅 ("시작점과 끝점의 거리가 펜 크기의 5배 이내이면 곡선을 원으로")
+ * 3. 곡선: 열린 곡선 -> 시작점과 끝점을 잇는 단일 곡률의 '한 번 휘어진 호(Single Curved Arc)'로 표시 ("곡선은 한번 휘어진 호로 표시를 하고")
+ * ============================================================================
+ */
+export function recognizeShape(points: StrokePoint[], strokeSize: number = 3): RecognizedShape | null {
   if (!points || points.length < 5) return null;
 
   const start = points[0];
@@ -219,10 +263,10 @@ export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
   const uniformPressure = 0.5;
 
   // --------------------------------------------------------------------------
-  // 1. 직선(Line) 판별 (오차 4.5% 미만, 직선 비율 96% 이상의 명확한 직선만 인식)
-  // [사용자 피드백 반영: 완만한 곡선이나 휜 선이 억지로 직선으로 둔갑하는 현상 원천 차단]
+  // 1. 직선(Line) 판별: 오차 4.5% 미만, 직선 비율 95% 이상의 명확한 직선
+  // "직선은 그대로 진행하고"
   // --------------------------------------------------------------------------
-  if (directDistance > 28) {
+  if (directDistance > 25) {
     let maxDeviation = 0;
     for (let i = 1; i < points.length - 1; i++) {
       const dev = perpendicularDistance(points[i], start, end);
@@ -230,7 +274,7 @@ export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
     }
 
     const deviationRatio = maxDeviation / directDistance;
-    if (deviationRatio < 0.045 && (directDistance / totalPathLength) > 0.96) {
+    if (deviationRatio < 0.045 && (directDistance / totalPathLength) > 0.95) {
       return {
         type: 'line',
         startPoint: { x: start.x, y: start.y },
@@ -241,112 +285,66 @@ export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
   }
 
   // --------------------------------------------------------------------------
-  // 2. 원(Circle) & 회전 타원(Ellipse) 판별
-  // [사용자 피드백 반영: 대충 그려도 99% 정원으로 인식 & 타원은 접점-반대점 축으로 큰 지름 형성]
+  // 2. 원(Circle) 판별: 시작점과 끝점의 거리가 펜 크기의 5배 이내인 경우
+  // "시작점과 끝점의 거리가 펜 크기의 5배 이내이면 곡선을 원으로"
   // --------------------------------------------------------------------------
-  const closureRatio = directDistance / totalPathLength;
+  const maxClosureGap = Math.max(25, (strokeSize || 3) * 5);
+  // 시작점과 끝점 간격이 펜 크기의 5배 이내이거나, 닫힌 루프 형태(패스 길이의 22% 이내)인 경우
+  const isClosedLoop = (directDistance <= maxClosureGap || (directDistance / totalPathLength < 0.22)) && totalPathLength > 28;
 
-  // 바운딩 박스 계산
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const p of points) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-  }
-  const boxWidth = maxX - minX;
-  const boxHeight = maxY - minY;
-  const boxRatio = Math.min(boxWidth, boxHeight) / Math.max(boxWidth, boxHeight, 1);
-
-  if (points.length >= 7 && totalPathLength > 28) {
+  if (isClosedLoop) {
     // 멈춘 지점(end)에서 궤적 상 가장 거리가 먼 반대편 점(oppositePoint) 탐색
     let maxDistFromEnd = 0;
     let oppositePoint = start;
-    let oppIndex = 0;
 
     for (let i = 0; i < points.length; i++) {
       const d = Math.hypot(points[i].x - end.x, points[i].y - end.y);
       if (d > maxDistFromEnd) {
         maxDistFromEnd = d;
         oppositePoint = points[i];
-        oppIndex = i;
       }
     }
 
-    // [원형/타원 궤적 성립 조건]:
-    // 시작점-끝점 간격이 패스 길이의 72% 이하이고, 반대편 점이 궤적 안쪽에 존재하는 루프 형태
-    const isLoopLike = closureRatio < 0.72 && oppIndex >= 1 && oppIndex <= points.length - 2;
-
-    if (isLoopLike && maxDistFromEnd > 18) {
-      const majorDiameter = maxDistFromEnd;
-      // 주요 큰 지름 축의 각도 (라디안)
-      const axisAngle = Math.atan2(end.y - oppositePoint.y, end.x - oppositePoint.x);
-
-      // 큰 지름 축(oppositePoint <-> end)에 대한 중간 점들의 최대 수직 편차(단축 반경) 계산
-      let maxPerpDist = 0;
-      for (const p of points) {
-        const perp = Math.abs(
-          -(p.x - oppositePoint.x) * (end.y - oppositePoint.y) +
-          (p.y - oppositePoint.y) * (end.x - oppositePoint.x)
-        ) / majorDiameter;
-        if (perp > maxPerpDist) maxPerpDist = perp;
-      }
-
-      const diameterRatio = (2 * maxPerpDist) / majorDiameter;
-
-      // [원 vs 타원 판별 혁신]:
-      // 사람이 손으로 그린 둥근 궤적은 95% 정원(Circle)을 의도한 것입니다.
-      // diameterRatio >= 0.40 또는 boxRatio >= 0.45이면 무조건 [완벽한 정원(Circle)]으로 강력 스냅!
-      const isCircle = diameterRatio >= 0.40 || boxRatio >= 0.45;
-
-      if (isCircle) {
-        // [멈춘 지점(end)을 원주 접점으로 하고 반대편 점(oppositePoint)을 지름의 반대쪽 끝으로 하는 정원]
-        const cx = (end.x + oppositePoint.x) / 2;
-        const cy = (end.y + oppositePoint.y) / 2;
-        const radius = majorDiameter / 2;
-
-        return {
-          type: 'circle',
-          center: { x: cx, y: cy },
-          radius,
-          oppositePoint: { x: oppositePoint.x, y: oppositePoint.y },
-          endPoint: { x: end.x, y: end.y },
-          points: generateCirclePoints(cx, cy, radius, uniformPressure)
-        };
-      }
-
-      // 확연하게 납작하고 길쭉하게 의도된 타원인 경우 [회전 타원(Ellipse)]으로 생성
-      // 멈춘 지점(end)과 반대편 점(oppositePoint)을 잇는 축이 100% 큰 지름(장축)이 됨
+    if (maxDistFromEnd > 14) {
+      const radius = maxDistFromEnd / 2;
       const cx = (end.x + oppositePoint.x) / 2;
       const cy = (end.y + oppositePoint.y) / 2;
-      const rx = majorDiameter / 2;
-      // 단축 반경 ry는 장축 rx보다 항상 작도록 보장 (최대 0.85 * rx)
-      const ry = Math.max(6, Math.min(rx * 0.85, maxPerpDist));
 
       return {
-        type: 'ellipse',
+        type: 'circle',
         center: { x: cx, y: cy },
-        radiusX: rx,
-        radiusY: ry,
-        angle: axisAngle, // 큰 지름 축의 회전각 적용
+        radius,
         oppositePoint: { x: oppositePoint.x, y: oppositePoint.y },
         endPoint: { x: end.x, y: end.y },
-        points: generateRotatedEllipsePoints(cx, cy, rx, ry, axisAngle, uniformPressure)
+        points: generateCirclePoints(cx, cy, radius, uniformPressure)
       };
     }
   }
 
   // --------------------------------------------------------------------------
-  // 3. 일반 곡선 -> 매끄러운 3차 베지에 곡선(Smooth Bezier)으로 스무딩!
-  // [사용자 피드백 반영: 멈춘 지점에 그대로 고정(Freeze)]
+  // 3. 곡선(Curve / Arc): 한번 휘어진 호로 표시
+  // "곡선은 한번 휘어진 호로 표시를 하고"
   // --------------------------------------------------------------------------
-  if (points.length >= 6 && totalPathLength > 20) {
-    const smoothPoints = generateSmoothBezierCurve(points, uniformPressure);
+  if (points.length >= 6 && totalPathLength > 18) {
+    // 시작점과 끝점을 잇는 직선에서 가장 멀리 솟아오른 정점(Apex) 탐색
+    let maxPerp = 0;
+    let apex = points[Math.floor(points.length / 2)];
+
+    for (let i = 1; i < points.length - 1; i++) {
+      const dev = perpendicularDistance(points[i], start, end);
+      if (dev > maxPerp) {
+        maxPerp = dev;
+        apex = points[i];
+      }
+    }
+
+    const arcPoints = generateSingleArcPoints(start, end, apex, uniformPressure);
     return {
       type: 'curve',
       startPoint: { x: start.x, y: start.y },
       endPoint: { x: end.x, y: end.y },
-      points: smoothPoints
+      apexPoint: { x: apex.x, y: apex.y },
+      points: arcPoints
     };
   }
 

@@ -476,7 +476,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           if (pts.length >= 6) {
             holdTimerRef.current = setTimeout(() => {
               if (!isDrawingRef.current || !currentStrokeRef.current) return;
-              const shape = recognizeShape(currentStrokeRef.current.points);
+              const strokeSize = currentStrokeRef.current.size || 3;
+              const shape = recognizeShape(currentStrokeRef.current.points, strokeSize);
               if (shape) {
                 // 손끝 햅틱 진동 피드백
                 if (typeof navigator !== 'undefined' && navigator.vibrate) {
