@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useHorizontalToolbarScroll } from './lib/scrollModule';
-import {
-  useFullscreenManager,
-  useAppConfirm,
-  FullscreenReentryModal
-} from './lib/fullscreenModule';
+import { useAppConfirm } from './lib/fullscreenModule';
+import { useFullscreen } from './modules/fullscreen';
+import { PwaInstallButton } from './modules/pwa';
+import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
 import {
   loadPdfDocument,
@@ -361,32 +360,30 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isLessonPdfPromptOpen, setIsLessonPdfPromptOpen] = useState<boolean>(false);
   const [isDownloadingLessonPdf, setIsDownloadingLessonPdf] = useState<boolean>(false);
 
-  // 모달 및 피커가 활성화된 상태 (전체화면 프롬프트 억제 플래그)
-  const isPickerModalActive = Boolean(pdfPickerOpen || cropModalOpen || isLessonPdfPromptOpen);
-
-  // 📺 모듈화된 전체화면 관리 엔진 (이벤트 기반 자동 이탈 감지 및 무소음 복구 루틴)
+  // 📺 표준 모듈화된 전체화면 관리 (강제 복구 편법 인터셉터 제거)
   const {
     isFullscreen,
-    showReentryPrompt,
+    toggleFullscreen,
     enterFullscreen: requestFullscreenSafe,
-    exitFullscreen: exitFullscreenSafe,
-    dismissPrompt: dismissReentryPrompt
-  } = useFullscreenManager({
-    enabled: true,
-    suspended: isPickerModalActive
+    exitFullscreen: exitFullscreenSafe
+  } = useFullscreen();
+  const dismissReentryPrompt = useCallback(() => {}, []);
+
+  // 📷 카메라 QR코드 스캐너 모달 상태 및 처리 액션
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
+  const { handleScannedResult } = useQrScannerAction({
+    onEnterLesson: (scannedLessonId, scannedTitle) => {
+      setIsQrScannerOpen(false);
+      showToast(`🚀 '${scannedTitle || '새 수업'}'에 입장합니다...`);
+      const targetUrl = new URL(window.location.href);
+      targetUrl.searchParams.set('lessonId', scannedLessonId);
+      if (scannedTitle) targetUrl.searchParams.set('title', scannedTitle);
+      window.location.href = targetUrl.toString();
+    }
   });
 
   // 💬 전체화면을 파괴하는 window.confirm을 100% 대체하는 인앱 다이얼로그 시스템
   const { confirm, confirmModalElement } = useAppConfirm();
-
-  // 전체화면 토글
-  const toggleFullscreen = useCallback(() => {
-    if (isFullscreen) {
-      exitFullscreenSafe();
-    } else {
-      requestFullscreenSafe();
-    }
-  }, [isFullscreen, exitFullscreenSafe, requestFullscreenSafe]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -2615,6 +2612,36 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           {/* [오프라인 모듈]: 네트워크 상태 및 동기화 대기열 배지 */}
           <OfflineStatusBadge style={{ marginLeft: '4px', flexShrink: 0 }} />
 
+          {/* [PWA 모듈]: 브라우저 접속 시 홈 화면 앱 설치 배지 (설치 시 자동 숨김) */}
+          <PwaInstallButton style={{ marginLeft: '4px', flexShrink: 0 }} />
+
+          {/* [QR 스캐너 모듈]: 카메라로 전자칠판 QR코드 즉시 스캔 버튼 */}
+          <button
+            type="button"
+            onClick={() => setIsQrScannerOpen(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '3px 8px',
+              borderRadius: '14px',
+              border: '1px solid rgba(168, 85, 247, 0.45)',
+              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(139, 92, 246, 0.25) 100%)',
+              color: '#c084fc',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              marginLeft: '4px',
+              flexShrink: 0,
+              userSelect: 'none',
+              backdropFilter: 'blur(4px)'
+            }}
+            title="카메라로 전자칠판의 수업 QR코드를 찍어서 바로 입장"
+          >
+            <span>📷</span>
+            <span>QR 찍기</span>
+          </button>
+
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
 
           {/* 3. [/ 펜] */}
@@ -3260,6 +3287,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               ⚙️ 환경 설정
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  setIsQrScannerOpen(true);
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', background: 'rgba(168, 85, 247, 0.18)', color: '#d8b4fe' }}
+              >
+                📷 수업 QR 스캔
+              </button>
               <button
                 type="button"
                 className="student-tool-btn"
@@ -5288,45 +5326,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         )}
       </ModularModal>
 
-      {/* 5-2. 모듈화된 전체화면 자동 복구 오버레이 (FullscreenReentryModal) */}
-      <FullscreenReentryModal
-        isOpen={showReentryPrompt && !isPickerModalActive}
-        onReenter={requestFullscreenSafe}
-        onDismiss={dismissReentryPrompt}
+      {/* 5-2. 카메라 기반 전자칠판 QR코드 스캐너 모달 */}
+      <QrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        onScanSuccess={handleScannedResult}
       />
 
       {/* 5-3. 전체화면을 파괴하지 않는 모듈화 인앱 확인 다이얼로그 (AppConfirmModal) */}
       {confirmModalElement}
-
-      {/* 전체화면 복귀 상단 플로팅 칩 (보조 상시 안전망) */}
-      {!isFullscreen && isConnectedToBoard && !showReentryPrompt && !isPickerModalActive && (
-        <button
-          type="button"
-          onClick={requestFullscreenSafe}
-          style={{
-            position: 'fixed',
-            top: 'max(14px, env(safe-area-inset-top, 14px))',
-            right: '16px',
-            zIndex: 1060,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '7px 14px',
-            borderRadius: '20px',
-            background: 'rgba(234, 179, 8, 0.95)',
-            color: '#1e293b',
-            fontWeight: 700,
-            fontSize: '12px',
-            border: 'none',
-            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.4)',
-            cursor: 'pointer'
-          }}
-          title="클릭하여 주소창을 숨기고 넓은 전체화면으로 필기합니다."
-        >
-          <span>📺</span>
-          <span>전체화면 켜기</span>
-        </button>
-      )}
 
       {/* 6. 이미지/문제 영역 자르기(Crop) 모달 */}
       <ImageCropModal

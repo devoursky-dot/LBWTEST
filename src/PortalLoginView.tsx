@@ -17,6 +17,8 @@ import {
 } from './lib/auth';
 import { saveSavedStudentInfo } from './lib/studentSessionManager';
 import { bindDirectTouchScroll, ensureInputVisible } from './lib/scrollModule';
+import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
+import { PwaInstallButton } from './modules/pwa';
 
 interface PortalLoginViewProps {
   driveTeacherFolders: string[]; // 구글 드라이브에서 가져온 선생님 폴더 목록
@@ -26,6 +28,10 @@ interface PortalLoginViewProps {
 export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalLoginViewProps) {
   const [activeTab, setActiveTab] = useState<UserRole>('whiteboard');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // 📷 카메라 QR코드 스캐너 모달 상태
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
+  const { handleScannedResult } = useQrScannerAction();
 
   // 태블릿/스마트폰 터치 제스처 스크롤 및 휠 스크롤 100% 보장
   useEffect(() => {
@@ -420,6 +426,9 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
           <span>💎</span>
           <span>2. 리니어 (슬레이트 글래스)</span>
         </button>
+
+        {/* PWA 앱 설치 버튼 (설치 완료 시 자동 숨김) */}
+        <PwaInstallButton style={{ marginLeft: '4px' }} />
       </div>
 
       <div
@@ -821,6 +830,38 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
         {/* 탭 3: 학생 로그인 (1101 ~ 3830, 초기 비번: 1234) */}
         {activeTab === 'student' && (
           <form onSubmit={handleStudentLogin} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {/* 📷 원터치 전자칠판 QR코드 스캔 즉시 입장 버튼 */}
+            <button
+              type="button"
+              onClick={() => setIsQrScannerOpen(true)}
+              style={{
+                width: '100%',
+                padding: '13px',
+                borderRadius: '14px',
+                border: '1.5px solid #a855f7',
+                background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
+                color: '#e9d5ff',
+                fontSize: '14px',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 16px rgba(168, 85, 247, 0.35)',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <span style={{ fontSize: '18px' }}>📷</span>
+              <span>전자칠판 QR코드 찍고 바로 입장하기</span>
+            </button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '2px 0' }}>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+              <span style={{ fontSize: '11px', color: '#94a3b8' }}>또는 학번으로 로그인</span>
+              <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+            </div>
+
             <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '10px 14px', borderRadius: '12px', fontSize: '12px', color: '#93c5fd', lineHeight: 1.5 }}>
               🎒 <strong>학생 계정:</strong> 1101(1학년 1반 1번)부터 3830(3학년 8반 30번)까지 4자리 학번을 입력합니다. (초기 비밀번호: <code>1234</code>)
             </div>
@@ -1068,6 +1109,13 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
           </form>
         )}
       </div>
+
+      {/* 📷 카메라 QR코드 스캐너 모달 */}
+      <QrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        onScanSuccess={handleScannedResult}
+      />
     </div>
   );
 }

@@ -1,0 +1,26 @@
+{
+  "name": "LBW 전자칠판 학생필기앱",
+  "short_name": "학생필기앱",
+  "description": "스마트 전자칠판과 실시간으로 연동되는 태블릿 전용 학생 인터랙티브 필기앱",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

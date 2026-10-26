@@ -9,6 +9,8 @@ import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRec
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
 import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studentSessionManager';
+import { PwaInstallButton } from './modules/pwa';
+import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import './index.css';
 
 // ============================================================================
@@ -135,6 +137,10 @@ export default function App() {
     }
     return null;
   });
+
+  // 📷 카메라 QR 스캐너 모달 상태 및 처리 액션
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
+  const { handleScannedResult } = useQrScannerAction();
 
   // --- 드라이브 설정 상태 ---
   const [rootFolderId, setRootFolderId] = useState<string>(() => {
@@ -1151,6 +1157,34 @@ export default function App() {
 
         {/* 헤더 우측 메뉴 */}
         <div className="gdrive-header-actions" onClick={(e) => e.stopPropagation()}>
+          {/* PWA 앱 설치 버튼 (이미 설치된 경우 자동 숨김) */}
+          <PwaInstallButton style={{ marginRight: '6px' }} />
+
+          {/* 칠판 QR코드 스캐너 버튼 */}
+          <button
+            type="button"
+            className="g-btn"
+            onClick={() => setIsQrScannerOpen(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              border: '1.5px solid #a855f7',
+              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.25) 0%, rgba(139, 92, 246, 0.3) 100%)',
+              color: '#d8b4fe',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              marginRight: '6px'
+            }}
+            title="카메라로 전자칠판 수업 QR코드를 스캔하여 바로 입장"
+          >
+            <span>📷</span>
+            <span>수업 QR 찍기</span>
+          </button>
+
           <button 
             className="gdrive-icon-btn" 
             title="새로고침"
@@ -2527,6 +2561,13 @@ export default function App() {
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {/* 카메라 QR코드 스캐너 모달 */}
+      <QrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        onScanSuccess={handleScannedResult}
+      />
 
       {/* 구형 전자칠판 내장브라우저 전용 백그라운드 다운로드 숨김 iframe (화면 이탈 및 먹통 100% 방지) */}
       <iframe 
