@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useLayoutEffect } from 'react';
+import React, { useRef, useEffect, useLayoutEffect } from 'react';
 import {
   type Stroke,
   isStrokeHit,
@@ -13,7 +13,6 @@ import {
   calculateTangentArcApex,
   generateStrokePointsFromEditableShape,
   type RecognizedShape,
-  type EditableShape,
   type EditableArcSegment
 } from '../lib/shapeRecognizer';
 
@@ -94,26 +93,17 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const snappedShapeRef = useRef<RecognizedShape | null>(null);
   const lastPointTimeRef = useRef<number>(Date.now());
 
-  // [📐 연속 체이닝 & 편집 모드 상태 및 레퍼런스]
-  const [editingShape, setEditingShape] = useState<EditableShape | null>(null);
-  const editingShapeRef = useRef<EditableShape | null>(null);
-  editingShapeRef.current = editingShape;
-
+  // [📐 연속 체이닝 레퍼런스 (유격 데드존 & 마우스 떼면 즉시 고정)]
   const chainShapeTypeRef = useRef<'line' | 'arc' | 'circle' | null>(null);
-  const polylineVerticesRef = useRef<{ x: number; y: number }[]>([]);
-  const arcSegmentsRef = useRef<EditableArcSegment[]>([]);
-  const circleDataRef = useRef<{ cx: number; cy: number; radius: number; pivotX: number; pivotY: number } | null>(null);
-  const chainHoldTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const chainAnchorRef = useRef<{ x: number; y: number } | null>(null);
-  const isTapToCompleteRef = useRef<boolean>(false);
+  const chainVerticesRef = useRef<{ x: number; y: number }[]>([]);
+  const chainArcSegmentsRef = useRef<EditableArcSegment[]>([]);
+  const chainCircleDataRef = useRef<{ cx: number; cy: number; radius: number; pivotX: number; pivotY: number } | null>(null);
 
-  // 편집 모드 핸들 조절 중인 정보
-  const draggingHandleRef = useRef<{
-    type: 'vertex' | 'arc_point' | 'arc_apex' | 'circle_center' | 'circle_radius';
-    index?: number;
-    subIndex?: number;
-    startCoord: { x: number; y: number };
-  } | null>(null);
+  // 유격(Deadzone) 및 연장선 제어
+  const chainAnchorPointRef = useRef<{ x: number; y: number } | null>(null);
+  const isChainingExtendingRef = useRef<boolean>(false);
+  const chainNextHoldTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const chainNextAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
   // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
   const lastFingerTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
@@ -191,43 +181,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     renderCanvasGridAndStrokes(canvas, strokes, fullPageBackground, paperTheme, enablePressure);
   }, [strokes, fullPageBackground, A4_WIDTH, A4_HEIGHT, paperTheme, enablePressure]);
 
-  // [도형 편집 완료 및 커밋]
-  const commitEditingShape = () => {
-    const shape = editingShapeRef.current;
-    if (!shape) return;
-
-    const finalPoints = generateStrokePointsFromEditableShape(shape);
-    if (finalPoints.length > 0) {
-      const finalStroke: Stroke = {
-        id: `stroke_${Date.now()}_${Math.random()}`,
-        tool: shape.strokeProps.tool,
-        color: shape.strokeProps.color,
-        size: shape.strokeProps.size,
-        points: finalPoints
-      };
-      isInternalStrokeAddRef.current = true;
-      propsRef.current.onStrokeComplete(finalStroke);
-    }
-
-    setEditingShape(null);
-    editingShapeRef.current = null;
-
-    const canvas = canvasRef.current;
-    if (canvas) {
-      renderCanvasGridAndStrokes(canvas, propsRef.current.strokes, fullPageBackground, paperTheme, enablePressure);
-    }
-  };
-
-  // [도형 편집 취소]
-  const cancelEditingShape = () => {
-    setEditingShape(null);
-    editingShapeRef.current = null;
-    const canvas = canvasRef.current;
-    if (canvas) {
-      renderCanvasGridAndStrokes(canvas, propsRef.current.strokes, fullPageBackground, paperTheme, enablePressure);
-    }
-  };
-
   // ==========================================================================
   // [네이티브 하드웨어 직결 포인터 이벤트 리스너 (iOS Safari 완벽 방어)]
   // ==========================================================================
@@ -247,13 +200,6 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
     const handleNativePointerDown = (e: PointerEvent) => {
       const p = propsRef.current;
-
-      // [📐 도형 편집 모드 중 다른 곳 클릭 시 즉각 도형 완성 및 모드 해제]
-      if (editingShapeRef.current) {
-        commitEditingShape();
-        isTapToCompleteRef.current = true;
-        return;
-      }
 
       // 캔버스 터치 즉시 상단 열려있는 도구 팝오버 메뉴 즉시 닫기
       if (p.onCanvasPointerDown) {
@@ -332,18 +278,19 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         clearTimeout(holdTimerRef.current);
         holdTimerRef.current = null;
       }
-      if (chainHoldTimerRef.current) {
-        clearTimeout(chainHoldTimerRef.current);
-        chainHoldTimerRef.current = null;
+      if (chainNextHoldTimerRef.current) {
+        clearTimeout(chainNextHoldTimerRef.current);
+        chainNextHoldTimerRef.current = null;
       }
       isHoldSnappedRef.current = false;
       snappedShapeRef.current = null;
       chainShapeTypeRef.current = null;
-      polylineVerticesRef.current = [];
-      arcSegmentsRef.current = [];
-      circleDataRef.current = null;
-      chainAnchorRef.current = null;
-      isTapToCompleteRef.current = false;
+      chainVerticesRef.current = [];
+      chainArcSegmentsRef.current = [];
+      chainCircleDataRef.current = null;
+      chainAnchorPointRef.current = null;
+      isChainingExtendingRef.current = false;
+      chainNextAnchorRef.current = null;
       holdAnchorCoordRef.current = { x, y };
 
       // [5. 획 단위 지우개 모드]:
@@ -442,110 +389,118 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
         // --------------------------------------------------------------------
         // 1) 퀵셰이프로 스냅된 후 손을 떼지 않고 조절 & 연속 체이닝
+        // [사용자 요구: 유격(Deadzone) 내에서는 제자리 멈춤 유지, 멀리 움직일 때만 연결선 연장]
         // --------------------------------------------------------------------
         if (isHoldSnappedRef.current) {
-          // (A) 직선 체이닝 (Line Chaining)
-          if (chainShapeTypeRef.current === 'line' && polylineVerticesRef.current.length >= 2) {
-            const verts = polylineVerticesRef.current;
-            verts[verts.length - 1] = { x, y };
+          const anchor = chainAnchorPointRef.current;
+          const distFromAnchor = anchor ? Math.hypot(x - anchor.x, y - anchor.y) : 999;
 
+          // (A) 직선 체이닝 (Line Chaining)
+          if (chainShapeTypeRef.current === 'line' && chainVerticesRef.current.length >= 2) {
+            const verts = chainVerticesRef.current;
+
+            // 1. 유격(Deadzone): 마지막 고정점 부근 35px 이내의 미세 움직임은 완전히 멈춘 것으로 무시!
+            if (!isChainingExtendingRef.current && distFromAnchor < 35) {
+              continue;
+            }
+
+            // 2. 35px 이상 확실히 멀리 이동했을 때만 연장선 그리기 시작!
+            isChainingExtendingRef.current = true;
+
+            const currentVerts = [...verts, { x, y }];
             const pts = generateStrokePointsFromEditableShape({
               type: 'line',
-              vertices: verts,
+              vertices: currentVerts,
               strokeProps: { color: currentStroke.color, size: currentStroke.size, tool: currentStroke.tool as any }
             });
             currentStroke.points = pts;
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
             drawSingleStroke(ctx, currentStroke, false);
 
-            // [직선으로 바뀌고 드래그하다 멈추면 연결된 다음 직선이 계속 그려짐]
-            const anchor = chainAnchorRef.current;
-            const dist = anchor ? Math.hypot(x - anchor.x, y - anchor.y) : 999;
-            if (dist > 22 || !chainHoldTimerRef.current) {
-              chainAnchorRef.current = { x, y };
-              if (chainHoldTimerRef.current) {
-                clearTimeout(chainHoldTimerRef.current);
-                chainHoldTimerRef.current = null;
+            // 3. 연장선 끝에서 새로운 멈춤(Hold)이 발생할 때만 다음 꼭짓점으로 확정
+            const nextAnchor = chainNextAnchorRef.current;
+            const distFromNext = nextAnchor ? Math.hypot(x - nextAnchor.x, y - nextAnchor.y) : 999;
+
+            if (distFromNext > 25 || !chainNextHoldTimerRef.current) {
+              chainNextAnchorRef.current = { x, y };
+              if (chainNextHoldTimerRef.current) {
+                clearTimeout(chainNextHoldTimerRef.current);
+                chainNextHoldTimerRef.current = null;
               }
-              chainHoldTimerRef.current = setTimeout(() => {
+              chainNextHoldTimerRef.current = setTimeout(() => {
                 if (!isDrawingRef.current || !isHoldSnappedRef.current) return;
                 if (typeof navigator !== 'undefined' && navigator.vibrate) {
                   try { navigator.vibrate(25); } catch {}
                 }
-                // 손끝 위치를 고정 꼭짓점으로 굳히고, 다음 연결 직선 꼭짓점 추가!
-                polylineVerticesRef.current.push({ x, y });
-                chainAnchorRef.current = { x, y };
-              }, 380);
+                // 새로운 위치를 정식 꼭짓점으로 확정
+                chainVerticesRef.current.push({ x, y });
+                chainAnchorPointRef.current = { x, y };
+                isChainingExtendingRef.current = false; // 다시 유격 모드로 복귀
+                chainNextAnchorRef.current = null;
+              }, 420);
             }
             continue;
           }
 
           // (B) 곡선(호) 체이닝 및 접선 연속성 ($C^1$ Continuity)
-          if (chainShapeTypeRef.current === 'arc' && arcSegmentsRef.current.length > 0) {
-            const segs = arcSegmentsRef.current;
-            const currIdx = segs.length - 1;
-            const currSeg = segs[currIdx];
+          if (chainShapeTypeRef.current === 'arc' && chainArcSegmentsRef.current.length > 0) {
+            const segs = chainArcSegmentsRef.current;
+            const lastFixedSeg = segs[segs.length - 1];
 
-            currSeg.end = { x, y };
-
-            if (currIdx === 0) {
-              const midX = (currSeg.start.x + x) / 2;
-              const midY = (currSeg.start.y + y) / 2;
-              const baseApex = snappedShapeRef.current?.apexPoint;
-              if (baseApex && snappedShapeRef.current?.startPoint && snappedShapeRef.current?.endPoint) {
-                const origMidX = (snappedShapeRef.current.startPoint.x + snappedShapeRef.current.endPoint.x) / 2;
-                const origMidY = (snappedShapeRef.current.startPoint.y + snappedShapeRef.current.endPoint.y) / 2;
-                const offX = baseApex.x - origMidX;
-                const offY = baseApex.y - origMidY;
-                currSeg.apex = { x: midX + offX, y: midY + offY };
-              } else {
-                currSeg.apex = { x: midX, y: midY };
-              }
-            } else {
-              // 이전 호의 끝점 접선 방향을 그대로 계승하여 매끄럽게 연결 ($C^1$ 연속성)
-              const prevSeg = segs[currIdx - 1];
-              const prevCtrl = getArcControlPoint(prevSeg.start, prevSeg.end, prevSeg.apex);
-              currSeg.apex = calculateTangentArcApex(prevCtrl, currSeg.start, { x, y });
+            // 1. 유격(Deadzone): 마지막 호 끝점 부근 35px 이내의 미세 움직임은 무시!
+            if (!isChainingExtendingRef.current && distFromAnchor < 35) {
+              continue;
             }
 
+            // 2. 35px 이상 이동 시 접선을 유지하는 다음 호 연장 시작
+            isChainingExtendingRef.current = true;
+
+            const prevCtrl = getArcControlPoint(lastFixedSeg.start, lastFixedSeg.end, lastFixedSeg.apex);
+            const extendingApex = calculateTangentArcApex(prevCtrl, lastFixedSeg.end, { x, y });
+
+            const extendingSeg: EditableArcSegment = {
+              start: { ...lastFixedSeg.end },
+              apex: extendingApex,
+              end: { x, y }
+            };
+
+            const currentSegs = [...segs, extendingSeg];
             const pts = generateStrokePointsFromEditableShape({
               type: 'arc',
-              arcSegments: segs,
+              arcSegments: currentSegs,
               strokeProps: { color: currentStroke.color, size: currentStroke.size, tool: currentStroke.tool as any }
             });
             currentStroke.points = pts;
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
             drawSingleStroke(ctx, currentStroke, false);
 
-            // [곡선을 호로 바꾸고 계속 드래그하다 멈추면 연결된 다음 호가 생성]
-            const anchor = chainAnchorRef.current;
-            const dist = anchor ? Math.hypot(x - anchor.x, y - anchor.y) : 999;
-            if (dist > 22 || !chainHoldTimerRef.current) {
-              chainAnchorRef.current = { x, y };
-              if (chainHoldTimerRef.current) {
-                clearTimeout(chainHoldTimerRef.current);
-                chainHoldTimerRef.current = null;
+            // 3. 연장선 끝에서 새로운 멈춤(Hold)이 발생할 때만 다음 호로 확정
+            const nextAnchor = chainNextAnchorRef.current;
+            const distFromNext = nextAnchor ? Math.hypot(x - nextAnchor.x, y - nextAnchor.y) : 999;
+
+            if (distFromNext > 25 || !chainNextHoldTimerRef.current) {
+              chainNextAnchorRef.current = { x, y };
+              if (chainNextHoldTimerRef.current) {
+                clearTimeout(chainNextHoldTimerRef.current);
+                chainNextHoldTimerRef.current = null;
               }
-              chainHoldTimerRef.current = setTimeout(() => {
+              chainNextHoldTimerRef.current = setTimeout(() => {
                 if (!isDrawingRef.current || !isHoldSnappedRef.current) return;
                 if (typeof navigator !== 'undefined' && navigator.vibrate) {
                   try { navigator.vibrate(25); } catch {}
                 }
-                // 이전 끝점을 시작점으로 하여 다음 연결 호 추가
-                arcSegmentsRef.current.push({
-                  start: { x, y },
-                  apex: { x: x + 1, y: y + 1 },
-                  end: { x, y }
-                });
-                chainAnchorRef.current = { x, y };
-              }, 380);
+                chainArcSegmentsRef.current.push(extendingSeg);
+                chainAnchorPointRef.current = { x, y };
+                isChainingExtendingRef.current = false;
+                chainNextAnchorRef.current = null;
+              }, 420);
             }
             continue;
           }
 
           // (C) 원 크기 조절 (Circle Sizing)
-          if (chainShapeTypeRef.current === 'circle' && circleDataRef.current) {
-            const c = circleDataRef.current;
+          if (chainShapeTypeRef.current === 'circle' && chainCircleDataRef.current) {
+            const c = chainCircleDataRef.current;
             const diam = Math.hypot(x - c.pivotX, y - c.pivotY);
             const radius = Math.max(8, diam / 2);
             const cx = (c.pivotX + x) / 2;
@@ -645,32 +600,34 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
                 if (shape.type === 'line' && shape.startPoint && shape.endPoint) {
                   chainShapeTypeRef.current = 'line';
-                  polylineVerticesRef.current = [{ ...shape.startPoint }, { ...shape.endPoint }];
-                  chainAnchorRef.current = { ...shape.endPoint };
+                  chainVerticesRef.current = [{ ...shape.startPoint }, { ...shape.endPoint }];
+                  chainAnchorPointRef.current = { ...shape.endPoint };
+                  isChainingExtendingRef.current = false;
                   currentStrokeRef.current.points = generateStrokePointsFromEditableShape({
                     type: 'line',
-                    vertices: polylineVerticesRef.current,
+                    vertices: chainVerticesRef.current,
                     strokeProps: { color: currentStrokeRef.current.color, size: currentStrokeRef.current.size, tool: currentStrokeRef.current.tool as any }
                   });
                 } else if (shape.type === 'circle' && shape.center && shape.oppositePoint) {
                   chainShapeTypeRef.current = 'circle';
-                  circleDataRef.current = {
+                  chainCircleDataRef.current = {
                     cx: shape.center.x,
                     cy: shape.center.y,
                     radius: shape.radius || 10,
                     pivotX: shape.oppositePoint.x,
                     pivotY: shape.oppositePoint.y
                   };
-                  chainAnchorRef.current = { ...(shape.endPoint || shape.oppositePoint) };
+                  chainAnchorPointRef.current = { ...(shape.endPoint || shape.oppositePoint) };
                   currentStrokeRef.current.points = shape.points;
                 } else if (shape.type === 'curve' && shape.startPoint && shape.apexPoint && shape.endPoint) {
                   chainShapeTypeRef.current = 'arc';
-                  arcSegmentsRef.current = [{
+                  chainArcSegmentsRef.current = [{
                     start: { ...shape.startPoint },
                     apex: { ...shape.apexPoint },
                     end: { ...shape.endPoint }
                   }];
-                  chainAnchorRef.current = { ...shape.endPoint };
+                  chainAnchorPointRef.current = { ...shape.endPoint };
+                  isChainingExtendingRef.current = false;
                   currentStrokeRef.current.points = shape.points;
                 } else {
                   currentStrokeRef.current.points = shape.points;
@@ -694,70 +651,25 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         clearTimeout(holdTimerRef.current);
         holdTimerRef.current = null;
       }
-      if (chainHoldTimerRef.current) {
-        clearTimeout(chainHoldTimerRef.current);
-        chainHoldTimerRef.current = null;
+      if (chainNextHoldTimerRef.current) {
+        clearTimeout(chainNextHoldTimerRef.current);
+        chainNextHoldTimerRef.current = null;
       }
       holdAnchorCoordRef.current = null;
-      chainAnchorRef.current = null;
+      chainAnchorPointRef.current = null;
+      chainNextAnchorRef.current = null;
+      isChainingExtendingRef.current = false;
 
-      // [📐 마우스를 떼면 점의 위치를 조절할 수 있는 편집모드로 진입]
+      // [사용자 요구: 마우스를 떼면 바로 고정!]
       if (isHoldSnappedRef.current) {
         isHoldSnappedRef.current = false;
-        isDrawingRef.current = false;
-        activeDrawPointerIdRef.current = null;
-        activeDrawPointerTypeRef.current = null;
-
-        const color = currentStrokeRef.current?.color || p.penColor;
-        const size = currentStrokeRef.current?.size || p.penSize;
-        const tool = (currentStrokeRef.current?.tool || 'pen') as 'pen' | 'highlighter';
-
-        let shapeToEdit: EditableShape | null = null;
-
-        if (chainShapeTypeRef.current === 'line' && polylineVerticesRef.current.length >= 2) {
-          shapeToEdit = {
-            type: 'line',
-            vertices: [...polylineVerticesRef.current],
-            strokeProps: { color, size, tool }
-          };
-        } else if (chainShapeTypeRef.current === 'arc' && arcSegmentsRef.current.length > 0) {
-          shapeToEdit = {
-            type: 'arc',
-            arcSegments: [...arcSegmentsRef.current],
-            strokeProps: { color, size, tool }
-          };
-        } else if (chainShapeTypeRef.current === 'circle' && circleDataRef.current) {
-          shapeToEdit = {
-            type: 'circle',
-            circle: { ...circleDataRef.current },
-            strokeProps: { color, size, tool }
-          };
-        }
-
-        currentStrokeRef.current = null;
-
-        if (shapeToEdit) {
-          setEditingShape(shapeToEdit);
-          editingShapeRef.current = shapeToEdit;
-        }
-
-        if (canvas.hasPointerCapture(e.pointerId)) {
-          try { canvas.releasePointerCapture(e.pointerId); } catch {}
-        }
-        return;
       }
 
-      // 다른 곳 탭하여 도형을 완성한 경우 점 스트로크 생성 방어
-      if (isTapToCompleteRef.current) {
-        isTapToCompleteRef.current = false;
-        currentStrokeRef.current = null;
-        isDrawingRef.current = false;
-        activeDrawPointerIdRef.current = null;
-        activeDrawPointerTypeRef.current = null;
-        if (canvas.hasPointerCapture(e.pointerId)) {
-          try { canvas.releasePointerCapture(e.pointerId); } catch {}
-        }
-        return;
+      // 포인터 캡처 안전 해제
+      if (canvas.hasPointerCapture(e.pointerId)) {
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch {}
       }
 
       // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지:
@@ -872,357 +784,25 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     };
   }, []);
 
-  // --------------------------------------------------------------------------
-  // [도형 편집 모드 핸들 인터랙션 (마우스/펜/터치 드래그)]
-  // --------------------------------------------------------------------------
-  const getCanvasCoordsFromEvent = (e: React.PointerEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: e.clientX, y: e.clientY };
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
-    };
-  };
-
-  const handleHandlePointerDown = (
-    e: React.PointerEvent,
-    handleInfo: {
-      type: 'vertex' | 'arc_point' | 'arc_apex' | 'circle_center' | 'circle_radius';
-      index?: number;
-      subIndex?: number;
-    }
-  ) => {
-    e.stopPropagation();
-    try {
-      (e.target as Element).setPointerCapture(e.pointerId);
-    } catch {}
-    const coords = getCanvasCoordsFromEvent(e);
-    draggingHandleRef.current = {
-      ...handleInfo,
-      startCoord: coords
-    };
-  };
-
-  const handleHandlePointerMove = (e: React.PointerEvent) => {
-    if (!draggingHandleRef.current || !editingShapeRef.current) return;
-    e.stopPropagation();
-    const { x, y } = getCanvasCoordsFromEvent(e);
-    const h = draggingHandleRef.current;
-
-    const shape: EditableShape = { ...editingShapeRef.current };
-
-    if (shape.type === 'line' && shape.vertices && h.type === 'vertex' && h.index !== undefined) {
-      const newVerts = [...shape.vertices];
-      newVerts[h.index] = { x, y };
-      shape.vertices = newVerts;
-    } else if (shape.type === 'arc' && shape.arcSegments) {
-      const newSegs = [...shape.arcSegments];
-      if (h.type === 'arc_point' && h.index !== undefined) {
-        const idx = h.index;
-        if (h.subIndex === 0) {
-          newSegs[idx] = { ...newSegs[idx], start: { x, y } };
-          if (idx > 0) {
-            newSegs[idx - 1] = { ...newSegs[idx - 1], end: { x, y } };
-          }
-        } else {
-          newSegs[idx] = { ...newSegs[idx], end: { x, y } };
-          if (idx < newSegs.length - 1) {
-            newSegs[idx + 1] = { ...newSegs[idx + 1], start: { x, y } };
-          }
-        }
-      } else if (h.type === 'arc_apex' && h.index !== undefined) {
-        newSegs[h.index] = { ...newSegs[h.index], apex: { x, y } };
-      }
-      shape.arcSegments = newSegs;
-    } else if (shape.type === 'circle' && shape.circle) {
-      const c = { ...shape.circle };
-      if (h.type === 'circle_center') {
-        c.cx = x;
-        c.cy = y;
-      } else if (h.type === 'circle_radius') {
-        c.radius = Math.max(8, Math.hypot(x - c.cx, y - c.cy));
-      }
-      shape.circle = c;
-    }
-
-    setEditingShape(shape);
-    editingShapeRef.current = shape;
-
-    // 캔버스 실시간 피드백 렌더링
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        renderCanvasGridAndStrokes(canvas, propsRef.current.strokes, fullPageBackground, paperTheme, enablePressure);
-        const tempStroke: Stroke = {
-          id: 'temp_editing_stroke',
-          tool: shape.strokeProps.tool,
-          color: shape.strokeProps.color,
-          size: shape.strokeProps.size,
-          points: generateStrokePointsFromEditableShape(shape)
-        };
-        drawSingleStroke(ctx, tempStroke, false);
-      }
-    }
-  };
-
-  const handleHandlePointerUp = (e: React.PointerEvent) => {
-    if (draggingHandleRef.current) {
-      e.stopPropagation();
-      try {
-        (e.target as Element).releasePointerCapture(e.pointerId);
-      } catch {}
-      draggingHandleRef.current = null;
-    }
-  };
-
   return (
-    <div
+    <canvas
+      ref={canvasRef}
+      className="student-canvas"
       style={{
         position: 'absolute',
         top: 0,
         left: 0,
         width: '100%',
         height: '100%',
-        pointerEvents: 'none'
+        display: 'block',
+        zIndex: tool === 'image' && selectedImageId ? 2 : 4,
+        pointerEvents: tool === 'image' ? 'none' : 'auto',
+        touchAction: 'none',
+        WebkitTouchCallout: 'none',
+        WebkitUserSelect: 'none',
+        userSelect: 'none',
+        WebkitTapHighlightColor: 'transparent'
       }}
-    >
-      <canvas
-        ref={canvasRef}
-        className="student-canvas"
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          display: 'block',
-          zIndex: tool === 'image' && selectedImageId ? 2 : 4,
-          pointerEvents: tool === 'image' ? 'none' : 'auto',
-          touchAction: 'none',
-          WebkitTouchCallout: 'none',
-          WebkitUserSelect: 'none',
-          userSelect: 'none',
-          WebkitTapHighlightColor: 'transparent'
-        }}
-      />
-
-      {/* [도형 편집 모드 조작 핸들 SVG 오버레이] */}
-      {editingShape && (
-        <svg
-          viewBox={`0 0 ${A4_WIDTH} ${A4_HEIGHT}`}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            pointerEvents: 'none',
-            zIndex: 10
-          }}
-        >
-          <defs>
-            <filter id="handle-shadow" x="-50%" y="-50%" width="200%" height="200%">
-              <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#000000" floodOpacity="0.3" />
-            </filter>
-          </defs>
-
-          {/* (1) 직선(Line / Polyline) 꼭짓점 핸들 */}
-          {editingShape.type === 'line' &&
-            editingShape.vertices?.map((v, i) => (
-              <g
-                key={`line-v-${i}`}
-                transform={`translate(${v.x}, ${v.y})`}
-                style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                onPointerDown={(e) => handleHandlePointerDown(e, { type: 'vertex', index: i })}
-                onPointerMove={handleHandlePointerMove}
-                onPointerUp={handleHandlePointerUp}
-              >
-                {/* 넉넉한 터치 패딩 */}
-                <circle r={22} fill="transparent" />
-                <circle r={8} fill="#ffffff" stroke="#2563eb" strokeWidth={2.5} filter="url(#handle-shadow)" />
-                <circle r={3} fill="#2563eb" />
-              </g>
-            ))}
-
-          {/* (2) 호(Arc Chain) 연결점 및 정점(곡률) 핸들 */}
-          {editingShape.type === 'arc' &&
-            editingShape.arcSegments?.map((seg, i) => (
-              <g key={`arc-seg-${i}`}>
-                {/* 시작점 핸들 (첫 세그먼트만 렌더링) */}
-                {i === 0 && (
-                  <g
-                    transform={`translate(${seg.start.x}, ${seg.start.y})`}
-                    style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                    onPointerDown={(e) => handleHandlePointerDown(e, { type: 'arc_point', index: 0, subIndex: 0 })}
-                    onPointerMove={handleHandlePointerMove}
-                    onPointerUp={handleHandlePointerUp}
-                  >
-                    <circle r={22} fill="transparent" />
-                    <circle r={8} fill="#ffffff" stroke="#2563eb" strokeWidth={2.5} filter="url(#handle-shadow)" />
-                    <circle r={3} fill="#2563eb" />
-                  </g>
-                )}
-
-                {/* 끝점 핸들 */}
-                <g
-                  transform={`translate(${seg.end.x}, ${seg.end.y})`}
-                  style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                  onPointerDown={(e) => handleHandlePointerDown(e, { type: 'arc_point', index: i, subIndex: 1 })}
-                  onPointerMove={handleHandlePointerMove}
-                  onPointerUp={handleHandlePointerUp}
-                >
-                  <circle r={22} fill="transparent" />
-                  <circle r={8} fill="#ffffff" stroke="#2563eb" strokeWidth={2.5} filter="url(#handle-shadow)" />
-                  <circle r={3} fill="#2563eb" />
-                </g>
-
-                {/* 곡률 정점(Apex) 핸들 (에메랄드 다이아몬드/원) */}
-                <g
-                  transform={`translate(${seg.apex.x}, ${seg.apex.y})`}
-                  style={{ cursor: 'pointer', pointerEvents: 'auto' }}
-                  onPointerDown={(e) => handleHandlePointerDown(e, { type: 'arc_apex', index: i })}
-                  onPointerMove={handleHandlePointerMove}
-                  onPointerUp={handleHandlePointerUp}
-                >
-                  <circle r={22} fill="transparent" />
-                  <circle r={7} fill="#ffffff" stroke="#059669" strokeWidth={2} filter="url(#handle-shadow)" />
-                  <circle r={2.5} fill="#059669" />
-                </g>
-              </g>
-            ))}
-
-          {/* (3) 원(Circle) 중심 및 반지름 핸들 */}
-          {editingShape.type === 'circle' && editingShape.circle && (
-            <g>
-              {/* 중심점 핸들 (위치 이동) */}
-              <g
-                transform={`translate(${editingShape.circle.cx}, ${editingShape.circle.cy})`}
-                style={{ cursor: 'move', pointerEvents: 'auto' }}
-                onPointerDown={(e) => handleHandlePointerDown(e, { type: 'circle_center' })}
-                onPointerMove={handleHandlePointerMove}
-                onPointerUp={handleHandlePointerUp}
-              >
-                <circle r={22} fill="transparent" />
-                <circle r={9} fill="#ffffff" stroke="#2563eb" strokeWidth={2.5} filter="url(#handle-shadow)" />
-                <circle r={3.5} fill="#2563eb" />
-              </g>
-
-              {/* 둘레 조절 핸들 (반지름 크기 조절) */}
-              <g
-                transform={`translate(${editingShape.circle.cx + editingShape.circle.radius}, ${editingShape.circle.cy})`}
-                style={{ cursor: 'ew-resize', pointerEvents: 'auto' }}
-                onPointerDown={(e) => handleHandlePointerDown(e, { type: 'circle_radius' })}
-                onPointerMove={handleHandlePointerMove}
-                onPointerUp={handleHandlePointerUp}
-              >
-                <circle r={22} fill="transparent" />
-                <circle r={8} fill="#ffffff" stroke="#7c3aed" strokeWidth={2.5} filter="url(#handle-shadow)" />
-                <circle r={3} fill="#7c3aed" />
-              </g>
-            </g>
-          )}
-        </svg>
-      )}
-
-      {/* [도형 편집 완료 / 취소 플로팅 액션 바] */}
-      {editingShape && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 24,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 20,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '8px 18px',
-            background: 'rgba(15, 23, 42, 0.88)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            borderRadius: 9999,
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.12)',
-            color: '#ffffff',
-            fontSize: 13,
-            fontWeight: 600,
-            fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            pointerEvents: 'auto',
-            userSelect: 'none'
-          }}
-        >
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#93c5fd' }}>
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: '#3b82f6',
-                boxShadow: '0 0 8px #60a5fa'
-              }}
-            />
-            {editingShape.type === 'line' ? '직선 편집' : editingShape.type === 'arc' ? '호 곡선 편집' : '원 편집'}
-            <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 400, marginLeft: 2 }}>
-              (빈 곳 터치 시 완료)
-            </span>
-          </span>
-
-          <span style={{ color: 'rgba(255,255,255,0.2)' }}>|</span>
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              commitEditingShape();
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '6px 14px',
-              borderRadius: 9999,
-              background: '#2563eb',
-              color: '#ffffff',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: 600,
-              boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)',
-              transition: 'all 0.15s ease'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#1d4ed8')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = '#2563eb')}
-          >
-            ✓ 도형 완성
-          </button>
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              cancelEditingShape();
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              padding: '6px 10px',
-              borderRadius: 9999,
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: '#cbd5e1',
-              border: 'none',
-              cursor: 'pointer',
-              fontSize: 12,
-              fontWeight: 500,
-              transition: 'all 0.15s ease'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.18)')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)')}
-          >
-            취소
-          </button>
-        </div>
-      )}
-    </div>
+    />
   );
 };
