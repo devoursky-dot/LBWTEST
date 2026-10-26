@@ -30,6 +30,30 @@ export interface RecognizedShape {
   apexPoint?: { x: number; y: number }; // 호의 정점 (최대 편차점)
 }
 
+export interface EditableArcSegment {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+  apex: { x: number; y: number };
+}
+
+export interface EditableShape {
+  type: 'line' | 'arc' | 'circle';
+  vertices?: { x: number; y: number }[];
+  arcSegments?: EditableArcSegment[];
+  circle?: {
+    cx: number;
+    cy: number;
+    radius: number;
+    pivotX: number;
+    pivotY: number;
+  };
+  strokeProps: {
+    color: string;
+    size: number;
+    tool: 'pen' | 'highlighter';
+  };
+}
+
 /**
  * 점 p에서 선분 a-b까지의 수직 절대 거리
  */
@@ -242,10 +266,118 @@ export function generateSingleArcPoints(
 }
 
 /**
+ * 2차 베지에 호의 시작점, 끝점, 정점(Apex)으로부터 제어점(Control Point) 역산
+ */
+export function getArcControlPoint(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  apex: { x: number; y: number }
+): { x: number; y: number } {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lenSq = dx * dx + dy * dy;
+
+  let t0 = 0.5;
+  if (lenSq > 0) {
+    t0 = ((apex.x - start.x) * dx + (apex.y - start.y) * dy) / lenSq;
+    t0 = Math.max(0.15, Math.min(0.85, t0));
+  }
+
+  const denom = 2 * t0 * (1 - t0);
+  const pcX = (apex.x - (1 - t0) * (1 - t0) * start.x - t0 * t0 * end.x) / denom;
+  const pcY = (apex.y - (1 - t0) * (1 - t0) * start.y - t0 * t0 * end.y) / denom;
+
+  return { x: pcX, y: pcY };
+}
+
+/**
+ * 이전 호의 끝점과 제어점을 바탕으로, 새 호의 시작점에서의 접선 방향을 유지하는 새 apex 계산 ($C^1$ 연속성)
+ */
+export function calculateTangentArcApex(
+  prevCtrl: { x: number; y: number },
+  prevEnd: { x: number; y: number },
+  currEnd: { x: number; y: number }
+): { x: number; y: number } {
+  const tx = prevEnd.x - prevCtrl.x;
+  const ty = prevEnd.y - prevCtrl.y;
+  const tLen = Math.hypot(tx, ty);
+
+  const dx = currEnd.x - prevEnd.x;
+  const dy = currEnd.y - prevEnd.y;
+  const dLen = Math.hypot(dx, dy);
+
+  if (tLen < 0.001 || dLen < 1) {
+    return { x: (prevEnd.x + currEnd.x) / 2, y: (prevEnd.y + currEnd.y) / 2 };
+  }
+
+  const ux = tx / tLen;
+  const uy = ty / tLen;
+
+  // 새 호의 시작 제어점을 접선 연장선상에 배치 ($C^1$ 연속성)
+  const ctrlDist = Math.max(8, dLen * 0.5);
+  const pcX = prevEnd.x + ux * ctrlDist;
+  const pcY = prevEnd.y + uy * ctrlDist;
+
+  // 2차 베지에 곡선에서 t = 0.5일 때의 위치: B(0.5) = 0.25*P0 + 0.5*Pc + 0.25*P1
+  const apexX = 0.25 * prevEnd.x + 0.5 * pcX + 0.25 * currEnd.x;
+  const apexY = 0.25 * prevEnd.y + 0.5 * pcY + 0.25 * currEnd.y;
+
+  return { x: apexX, y: apexY };
+}
+
+/**
+ * 편집 모드 도형(EditableShape)으로부터 렌더링용 StrokePoint 배열 재생성
+ */
+export function generateStrokePointsFromEditableShape(shape: EditableShape): StrokePoint[] {
+  if (shape.type === 'line' && shape.vertices && shape.vertices.length >= 2) {
+    const pts: StrokePoint[] = [];
+    for (let i = 0; i < shape.vertices.length - 1; i++) {
+      const segPts = generateLinePoints(
+        { ...shape.vertices[i], pressure: 0.5 },
+        { ...shape.vertices[i + 1], pressure: 0.5 },
+        0.5
+      );
+      if (i > 0 && segPts.length > 0) {
+        pts.push(...segPts.slice(1));
+      } else {
+        pts.push(...segPts);
+      }
+    }
+    return pts;
+  }
+
+  if (shape.type === 'arc' && shape.arcSegments && shape.arcSegments.length > 0) {
+    const pts: StrokePoint[] = [];
+    for (let i = 0; i < shape.arcSegments.length; i++) {
+      const seg = shape.arcSegments[i];
+      const segPts = generateSingleArcPoints(
+        { ...seg.start, pressure: 0.5 },
+        { ...seg.end, pressure: 0.5 },
+        { ...seg.apex, pressure: 0.5 },
+        0.5,
+        32
+      );
+      if (i > 0 && segPts.length > 0) {
+        pts.push(...segPts.slice(1));
+      } else {
+        pts.push(...segPts);
+      }
+    }
+    return pts;
+  }
+
+  if (shape.type === 'circle' && shape.circle) {
+    return generateCirclePoints(shape.circle.cx, shape.circle.cy, shape.circle.radius, 0.5);
+  }
+
+  return [];
+}
+
+/**
  * 획(StrokePoint 배열)을 분석하여 직선, 정원, 한번 휘어진 호로 자동 인식
  * ============================================================================
  * [사용자 정의 3대 직관 규칙]
- * 1. 직선: 오차 4.5% 미만, 직선 비율 95% 이상 -> 직선으로 스냅 및 드래그 조절 ("직선은 그대로 진행하고")
+ * 1. 직선: 오차 7.5% 미만, 직선 비율 90% 이상 -> 직선으로 즉각 스냅 및 드래그 조절 ("직선 인식 확률 상향")
  * 2. 원: 시작점과 끝점의 거리가 펜 크기의 5배 이내인 폐곡선 -> 정원(Circle)으로 스냅 ("시작점과 끝점의 거리가 펜 크기의 5배 이내이면 곡선을 원으로")
  * 3. 곡선: 열린 곡선 -> 시작점과 끝점을 잇는 단일 곡률의 '한 번 휘어진 호(Single Curved Arc)'로 표시 ("곡선은 한번 휘어진 호로 표시를 하고")
  * ============================================================================
@@ -263,8 +395,8 @@ export function recognizeShape(points: StrokePoint[], strokeSize: number = 3): R
   const uniformPressure = 0.5;
 
   // --------------------------------------------------------------------------
-  // 1. 직선(Line) 판별: 오차 4.5% 미만, 직선 비율 95% 이상의 명확한 직선
-  // "직선은 그대로 진행하고"
+  // 1. 직선(Line) 판별: 오차 7.5% 미만, 직선 비율 90% 이상 (자연스러운 손필기 직선 즉각 인식)
+  // [사용자 요청: 직선으로 인식할 확률 상향!]
   // --------------------------------------------------------------------------
   if (directDistance > 25) {
     let maxDeviation = 0;
@@ -274,7 +406,7 @@ export function recognizeShape(points: StrokePoint[], strokeSize: number = 3): R
     }
 
     const deviationRatio = maxDeviation / directDistance;
-    if (deviationRatio < 0.045 && (directDistance / totalPathLength) > 0.95) {
+    if (deviationRatio < 0.075 && (directDistance / totalPathLength) > 0.90) {
       return {
         type: 'line',
         startPoint: { x: start.x, y: start.y },
