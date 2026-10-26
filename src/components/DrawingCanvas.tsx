@@ -362,7 +362,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const ev = eventsToProcess[i];
         const { x, y } = getCanvasCoords(ev.clientX, ev.clientY);
 
-        // 1) 이미 도형으로 스냅된 경우: 점을 추가하지 않고 손끝을 따라 도형 크기/각도 실시간 피벗
+        // 1) 이미 도형으로 스냅된 경우: 점을 추가하지 않고 손끝(x, y)을 접점으로 지름/크기 실시간 피벗
         if (isHoldSnappedRef.current && snappedShapeRef.current) {
           const s = snappedShapeRef.current;
           if (s.type === 'line' && s.startPoint) {
@@ -371,18 +371,29 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
               { x, y, pressure: 0.5 }
             );
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-            drawSingleStroke(ctx, currentStroke, p.enablePressure);
-          } else if (s.type === 'circle' && s.center) {
-            const currentR = Math.hypot(x - s.center.x, y - s.center.y);
-            currentStroke.points = generateCirclePoints(s.center.x, s.center.y, Math.max(10, currentR), 0.5);
+            drawSingleStroke(ctx, currentStroke, false); // 도형은 정갈한 중간 굵기
+          } else if (s.type === 'circle' && s.oppositePoint) {
+            // [멈춘 지점 접점 지름 방식]:
+            // 멈춘 지점의 반대편 점(oppositePoint)이 바닥에 고정된 지름 끝점이 되고,
+            // 현재 손끝(x, y)이 지름의 반대쪽 접점이 됨!
+            const opp = s.oppositePoint;
+            const newDiameter = Math.hypot(x - opp.x, y - opp.y);
+            const newRadius = Math.max(8, newDiameter / 2);
+            const newCx = (opp.x + x) / 2;
+            const newCy = (opp.y + y) / 2;
+            currentStroke.points = generateCirclePoints(newCx, newCy, newRadius, 0.5);
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-            drawSingleStroke(ctx, currentStroke, p.enablePressure);
-          } else if (s.type === 'ellipse' && s.center) {
-            const currentRx = Math.max(10, Math.abs(x - s.center.x));
-            const currentRy = Math.max(10, Math.abs(y - s.center.y));
-            currentStroke.points = generateEllipsePoints(s.center.x, s.center.y, currentRx, currentRy, 0.5);
+            drawSingleStroke(ctx, currentStroke, false); // 도형은 정갈한 중간 굵기
+          } else if (s.type === 'ellipse' && s.oppositePoint) {
+            const opp = s.oppositePoint;
+            const newMajor = Math.hypot(x - opp.x, y - opp.y);
+            const newRx = Math.max(8, newMajor / 2);
+            const newRy = Math.max(6, (s.radiusY || newRx * 0.45));
+            const newCx = (opp.x + x) / 2;
+            const newCy = (opp.y + y) / 2;
+            currentStroke.points = generateEllipsePoints(newCx, newCy, newRx, newRy, 0.5);
             renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-            drawSingleStroke(ctx, currentStroke, p.enablePressure);
+            drawSingleStroke(ctx, currentStroke, false); // 도형은 정갈한 중간 굵기
           }
           continue;
         }
@@ -467,9 +478,9 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 snappedShapeRef.current = shape;
                 currentStrokeRef.current.points = shape.points;
 
-                // 캔버스 배경 및 기존 획 다시 그리기 후 보정된 도형 깔끔 반영
+                // 캔버스 배경 및 기존 획 다시 그리기 후 보정된 도형 깔끔 반영 (정갈한 중간 굵기)
                 renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-                drawSingleStroke(ctx, currentStrokeRef.current, p.enablePressure);
+                drawSingleStroke(ctx, currentStrokeRef.current, false);
               }
             }, 380); // 380ms 홀드 감지
           }

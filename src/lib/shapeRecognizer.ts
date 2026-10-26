@@ -4,6 +4,11 @@
  * 선을 긋고 터치를 유지(Hold)할 때 직선, 정원, 타원을 사람의 손떨림에 맞춰
  * 똑똑하고 자연스럽게 인식하여 변환하는 퀵셰이프(QuickShape) 코어 모듈
  * (GoodNotes / Samsung Notes / Procreate 알고리즘)
+ * 
+ * [혁신적 사용자 경험 설계]
+ * 1. 멈춘 지점(Hold Point)을 원주 접점(지름의 한쪽 끝)으로 하여 직관적 중심/지름 생성
+ * 2. 큰 지름과 작은 지름의 비율(55% 이상)을 고려한 정원(Circle) 우선 생성
+ * 3. 기하학적 도형 변환 시 선 굵기를 균일하고 반듯한 중간 필압(0.5)으로 정돈
  * ============================================================================
  */
 
@@ -18,22 +23,33 @@ export interface RecognizedShape {
   radiusY?: number;
   startPoint?: { x: number; y: number };
   endPoint?: { x: number; y: number };
+  oppositePoint?: { x: number; y: number }; // 멈춘 지점의 반대편 지름 끝점 (접점 피벗)
 }
 
 /**
- * 점 p에서 선분 a-b까지의 수직 거리
+ * 점 p에서 선분 a-b까지의 부호 있는 수직 거리 (좌/우 판별 포함)
+ */
+function signedPerpendicularDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return 0;
+  // 외적(Cross Product)을 통해 좌(+) / 우(-) 부호 있는 수직 거리 산출
+  return ((px - ax) * dy - (py - ay) * dx) / len;
+}
+
+/**
+ * 점 p에서 선분 a-b까지의 수직 절대 거리
  */
 function perpendicularDistance(p: StrokePoint, a: StrokePoint, b: StrokePoint): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
-
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  const projX = a.x + t * dx;
-  const projY = a.y + t * dy;
-  return Math.hypot(p.x - projX, p.y - projY);
+  return Math.abs(signedPerpendicularDistance(p.x, p.y, a.x, a.y, b.x, b.y));
 }
 
 /**
@@ -49,6 +65,7 @@ function calculatePathLength(points: StrokePoint[]): number {
 
 /**
  * 정원(Circle) 보정 점 배열 생성 (48개 세그먼트 매끄러운 곡선)
+ * - 기하 도형의 완성도를 위해 균일한 중간 필압(0.5) 적용
  */
 export function generateCirclePoints(
   cx: number,
@@ -63,7 +80,7 @@ export function generateCirclePoints(
     pts.push({
       x: cx + radius * Math.cos(angle),
       y: cy + radius * Math.sin(angle),
-      pressure
+      pressure // 중간 크기 균일 필압
     });
   }
   return pts;
@@ -71,6 +88,7 @@ export function generateCirclePoints(
 
 /**
  * 타원(Ellipse) 보정 점 배열 생성
+ * - 기하 도형의 완성도를 위해 균일한 중간 필압(0.5) 적용
  */
 export function generateEllipsePoints(
   cx: number,
@@ -86,14 +104,15 @@ export function generateEllipsePoints(
     pts.push({
       x: cx + rx * Math.cos(angle),
       y: cy + ry * Math.sin(angle),
-      pressure
+      pressure // 중간 크기 균일 필압
     });
   }
   return pts;
 }
 
 /**
- * 직선(Line) 보정 점 배열 생성 (시작점, 1/4, 2/4, 3/4, 끝점 세그먼트)
+ * 직선(Line) 보정 점 배열 생성
+ * - 기하 도형의 완성도를 위해 균일한 중간 필압(0.5) 적용
  */
 export function generateLinePoints(
   start: StrokePoint,
@@ -101,13 +120,13 @@ export function generateLinePoints(
   pressure: number = 0.5
 ): StrokePoint[] {
   const pts: StrokePoint[] = [];
-  const steps = 6;
+  const steps = 8;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     pts.push({
       x: start.x + (end.x - start.x) * t,
       y: start.y + (end.y - start.y) * t,
-      pressure
+      pressure // 중간 크기 균일 필압
     });
   }
   return pts;
@@ -120,70 +139,99 @@ export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
   if (!points || points.length < 5) return null;
 
   const start = points[0];
-  const end = points[points.length - 1];
+  const end = points[points.length - 1]; // 멈춘 지점 (Hold Point)
   const directDistance = Math.hypot(end.x - start.x, end.y - start.y);
   const totalPathLength = calculatePathLength(points);
 
   if (totalPathLength < 20) return null; // 너무 작은 획은 무시
 
-  const avgPressure = points.reduce((acc, p) => acc + (p.pressure || 0.5), 0) / points.length;
+  // 도형으로 스냅될 때는 들쭉날쭉한 필압 대신 단정하고 깨끗한 중간 굵기(0.5)로 통일
+  const uniformPressure = 0.5;
 
   // --------------------------------------------------------------------------
   // 1. 원(Circle) & 타원(Ellipse) 판별
-  // 시작점과 끝점이 만나는 폐곡선이거나, 회전각이 1바퀴에 가까운 경우
   // --------------------------------------------------------------------------
   const closureRatio = directDistance / totalPathLength;
 
-  // 원 경계 박스 계산
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  let sumX = 0, sumY = 0;
-  for (const p of points) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-    sumX += p.x;
-    sumY += p.y;
-  }
+  if (points.length >= 7 && totalPathLength > 35) {
+    // 멈춘 지점(end)에서 궤적 상 가장 먼 반대편 점(oppositePoint) 탐색
+    let maxDistFromEnd = 0;
+    let oppositePoint = start;
+    let oppIndex = 0;
 
-  const cx = sumX / points.length;
-  const cy = sumY / points.length;
-  const rx = Math.max(5, (maxX - minX) / 2);
-  const ry = Math.max(5, (maxY - minY) / 2);
+    for (let i = 0; i < points.length; i++) {
+      const d = Math.hypot(points[i].x - end.x, points[i].y - end.y);
+      if (d > maxDistFromEnd) {
+        maxDistFromEnd = d;
+        oppositePoint = points[i];
+        oppIndex = i;
+      }
+    }
 
-  // 원형 궤적 검사 (점 수가 8개 이상이고 둘레 길이가 충분한 경우)
-  if (points.length >= 8 && totalPathLength > 40 && (rx + ry) > 20) {
-    // 시작점-끝점 간격이 둘레의 48% 이하이면 원형 후보 (손으로 그리다 덜 닫혀도 허용)
-    if (closureRatio < 0.48) {
-      // 중심점으로부터 각 점까지의 거리 계산
-      const distances = points.map(p => Math.hypot(p.x - cx, p.y - cy));
-      const avgR = distances.reduce((a, b) => a + b, 0) / distances.length;
-      const variance = distances.reduce((acc, d) => acc + Math.pow(d - avgR, 2), 0) / distances.length;
-      const stdDev = Math.sqrt(variance);
-      const circularity = stdDev / (avgR || 1); // 0에 가까울수록 이상적인 원
+    // 반대편 점이 너무 시작/끝에 치우치지 않고 중간 영역에 있을 때 원형 궤적 성립
+    const isLoopLike = closureRatio < 0.55 && oppIndex > 1 && oppIndex < points.length - 1;
 
-      const aspectRatio = rx / ry;
+    if (isLoopLike && maxDistFromEnd > 20) {
+      // 멈춘 지점(end)과 반대편 점(oppositePoint)을 잇는 축 = 주요 지름 (Major Diameter)
+      const majorDiameter = maxDistFromEnd;
 
-      // 사용자 요청: "가급적 원(정원)으로 만들어주는 기능"
-      // 가로/세로 비율이 0.65 ~ 1.54 사이이고 circularity < 0.42이면 [정원]으로 강력 보정!
-      if (aspectRatio >= 0.65 && aspectRatio <= 1.54 && circularity < 0.42) {
-        const radius = (rx + ry) / 2;
+      // 축에 수직인 방향의 폭(Minor Diameter) 계산
+      let maxLeftDist = 0;
+      let maxRightDist = 0;
+
+      for (const p of points) {
+        const dist = signedPerpendicularDistance(
+          p.x,
+          p.y,
+          end.x,
+          end.y,
+          oppositePoint.x,
+          oppositePoint.y
+        );
+        if (dist > maxLeftDist) maxLeftDist = dist;
+        if (-dist > maxRightDist) maxRightDist = -dist;
+      }
+
+      const minorDiameter = maxLeftDist + maxRightDist;
+
+      // 큰 지름과 작은 지름의 비율 (0.0 ~ 1.0)
+      const diameterRatio = majorDiameter > 0 ? minorDiameter / majorDiameter : 1.0;
+
+      // [원 vs 타원 황금 분기점]:
+      // 사람이 손으로 동그라미를 그릴 때 단축/장축 비율이 55% 이상이면
+      // 99% 의도는 정원(Circle)입니다! 찌그러진 손떨림을 완벽한 정원으로 보정!
+      if (diameterRatio >= 0.52) {
+        // [사용자 제안]: 멈춘 지점(end)을 접점(원주 상의 한 점)으로 하여 지름 형성!
+        // 중심 C는 end와 oppositePoint의 정확한 중점
+        const cx = (end.x + oppositePoint.x) / 2;
+        const cy = (end.y + oppositePoint.y) / 2;
+        const radius = majorDiameter / 2;
+
         return {
           type: 'circle',
           center: { x: cx, y: cy },
           radius,
-          points: generateCirclePoints(cx, cy, radius, avgPressure)
+          oppositePoint: { x: oppositePoint.x, y: oppositePoint.y },
+          endPoint: { x: end.x, y: end.y },
+          points: generateCirclePoints(cx, cy, radius, uniformPressure)
         };
       }
 
-      // 가로 또는 세로로 납작한 경우 [타원]으로 보정
-      if (circularity < 0.48) {
+      // 단축이 장축의 52% 미만으로 확연하게 납작하고 길쭉할 때만 [타원(Ellipse)]으로 생성
+      if (diameterRatio < 0.52 && minorDiameter > 10) {
+        const cx = (end.x + oppositePoint.x) / 2;
+        const cy = (end.y + oppositePoint.y) / 2;
+        const rx = majorDiameter / 2;
+        const ry = Math.max(8, minorDiameter / 2);
+
         return {
           type: 'ellipse',
           center: { x: cx, y: cy },
           radiusX: rx,
           radiusY: ry,
-          points: generateEllipsePoints(cx, cy, rx, ry, avgPressure)
+          oppositePoint: { x: oppositePoint.x, y: oppositePoint.y },
+          endPoint: { x: end.x, y: end.y },
+          points: generateEllipsePoints(cx, cy, rx, ry, uniformPressure)
         };
       }
     }
@@ -191,7 +239,6 @@ export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
 
   // --------------------------------------------------------------------------
   // 2. 직선(Line) 판별
-  // 시작점과 끝점을 잇는 직선과 중간 점들의 최대 수직 편차 검사
   // --------------------------------------------------------------------------
   if (directDistance > 20) {
     let maxDeviation = 0;
@@ -203,13 +250,13 @@ export function recognizeShape(points: StrokePoint[]): RecognizedShape | null {
     }
 
     const deviationRatio = maxDeviation / directDistance;
-    // 오차 비율이 25% 미만이고 직선 뻗음 비율이 80% 이상이면 직선으로 스냅! (손떨림 관대하게 허용)
-    if (deviationRatio < 0.25 && (directDistance / totalPathLength) > 0.80) {
+    // 오차 비율이 24% 미만이고 직선 뻗음 비율이 80% 이상이면 직선으로 스냅!
+    if (deviationRatio < 0.24 && (directDistance / totalPathLength) > 0.80) {
       return {
         type: 'line',
         startPoint: { x: start.x, y: start.y },
         endPoint: { x: end.x, y: end.y },
-        points: generateLinePoints(start, end, avgPressure)
+        points: generateLinePoints(start, end, uniformPressure)
       };
     }
   }
