@@ -221,12 +221,16 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           p.onAutoPenModeDetected();
         }
 
-        // 손바닥으로 잘못 시작된 터치가 있었다면 즉시 파기
+        // 손바닥으로 잘못 시작된 터치가 있었다면 즉시 파기 및 캔버스 지우기
         if (isDrawingRef.current && activeDrawPointerTypeRef.current === 'touch') {
           isDrawingRef.current = false;
           currentStrokeRef.current = null;
           activeDrawPointerIdRef.current = null;
           activeDrawPointerTypeRef.current = null;
+          const cCtx = canvas.getContext('2d');
+          if (cCtx) {
+            renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+          }
         }
       }
 
@@ -413,14 +417,92 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const coalesced = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e];
       const eventsToProcess = coalesced.length > 0 ? coalesced : [e];
 
+      // ----------------------------------------------------------------------
+      // [A] 퀵셰이프 스냅 완료 상태: 드래그하여 끝점 위치 및 각도 실시간 조절
+      // (iPad 120Hz/240Hz 고주파 이벤트로 인한 중복 리렌더링을 차단하고 최신 좌표로 1회 120fps 부드럽게 렌더링)
+      // ----------------------------------------------------------------------
+      if (isHoldSnappedRef.current && snappedShapeRef.current) {
+        const shape = snappedShapeRef.current;
+        const lastEv = eventsToProcess[eventsToProcess.length - 1];
+        const { x, y } = getCanvasCoords(lastEv.clientX, lastEv.clientY);
+
+        // 도형 닫기(Close Loop) 자석 감지: 현재 끝점이 다른 꼭짓점(22px 이내)에 접근했는지 확인
+        const closeMatch = findNearestEndpoint(p.strokes, x, y, 22);
+        const isSameAsStart = activeStartAnchorRef.current && closeMatch &&
+          Math.hypot(closeMatch.x - activeStartAnchorRef.current.x, closeMatch.y - activeStartAnchorRef.current.y) < 6;
+
+        let targetEnd = { x, y };
+        if (closeMatch && !isSameAsStart) {
+          targetEnd = { x: closeMatch.x, y: closeMatch.y };
+          closingSnapRef.current = targetEnd;
+        } else {
+          closingSnapRef.current = null;
+        }
+
+        const fixedStart = activeStartAnchorRef.current
+          ? { x: activeStartAnchorRef.current.x, y: activeStartAnchorRef.current.y }
+          : (shape.startPoint || currentStroke.points[0]);
+
+        const tangent = activeStartAnchorRef.current?.tangent;
+        const dirX = targetEnd.x - fixedStart.x;
+        const dirY = targetEnd.y - fixedStart.y;
+        const dirLen = Math.hypot(dirX, dirY);
+        const dot = (tangent && dirLen > 0) ? (dirX * tangent.x + dirY * tangent.y) / dirLen : 0;
+        const isSmoothTangent = Boolean(tangent && dot >= 0.17); // 이전 선과의 각도 80도 이내 순방향 접선 연속 호
+
+        if (shape.type === 'line') {
+          currentStroke.points = generateLinePoints(fixedStart, targetEnd, 0.5);
+        } else if (shape.type === 'circle') {
+          const pivot = shape.oppositePoint || fixedStart;
+          const diam = Math.hypot(x - pivot.x, y - pivot.y);
+          const radius = Math.max(8, diam / 2);
+          const cx = (pivot.x + x) / 2;
+          const cy = (pivot.y + y) / 2;
+          currentStroke.points = generateCirclePoints(cx, cy, radius, 0.5);
+        } else if (shape.type === 'circular_arc') {
+          if (isSmoothTangent && tangent) {
+            currentStroke.points = generateTangentArcPoints(fixedStart, tangent, targetEnd, 0.5);
+          } else {
+            currentStroke.points = updateCircularArcPoints(shape, fixedStart, targetEnd);
+          }
+        } else if (shape.type === 'elliptic_arc' || shape.type === 'curve') {
+          if (isSmoothTangent && tangent) {
+            currentStroke.points = generateTangentArcPoints(fixedStart, tangent, targetEnd, 0.5);
+          } else {
+            const origStart = shape.startPoint || fixedStart;
+            const origEnd = shape.endPoint || targetEnd;
+            const origApex = shape.apexPoint || { x: (origStart.x + origEnd.x) / 2, y: (origStart.y + origEnd.y) / 2 };
+            const dynamicApex = calculateUpdatedArcApex(origStart, origEnd, origApex, fixedStart, targetEnd);
+            currentStroke.points = generateSingleArcPoints(fixedStart, targetEnd, dynamicApex, 0.5);
+          }
+        } else if (shape.type === 'bezier') {
+          currentStroke.points = updateBezierPoints(shape.points, fixedStart, targetEnd);
+        }
+
+        // 화면 1회 리렌더링 (iPad 고해상도 최적화)
+        renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+        drawSingleStroke(ctx, currentStroke, false);
+
+        // 시작 앵커 링 (청록색)
+        if (activeStartAnchorRef.current) {
+          drawMagneticAnchorRing(ctx, activeStartAnchorRef.current.x, activeStartAnchorRef.current.y, '#06b6d4');
+        }
+        // 끝점 도형 닫기 링 (에메랄드 녹색)
+        if (closingSnapRef.current) {
+          drawMagneticAnchorRing(ctx, closingSnapRef.current.x, closingSnapRef.current.y, '#10b981');
+        }
+
+        return;
+      }
+
+      // ----------------------------------------------------------------------
+      // [B] 일반 필기/드로잉 (손을 뗀 채 자유롭게 그리는 단계)
+      // ----------------------------------------------------------------------
       for (let i = 0; i < eventsToProcess.length; i++) {
         const ev = eventsToProcess[i];
         const { x, y } = getCanvasCoords(ev.clientX, ev.clientY);
 
-        // --------------------------------------------------------------------
-        // [1] 끝점 자석 홀드 타이머 체크: 아직 260ms 전인데 12px 이상 움직였다면?
-        // -> 일반 글씨 쓰기 / 빠른 드로잉이므로 자석 스냅 즉시 취소!
-        // --------------------------------------------------------------------
+        // 끝점 자석 홀드 타이머 체크: 아직 260ms 전인데 12px 이상 움직였다면 일반 드로잉이므로 자석 취소
         if (anchorHoldTimerRef.current && anchorTouchStartPosRef.current) {
           const moveDist = Math.hypot(x - anchorTouchStartPosRef.current.x, y - anchorTouchStartPosRef.current.y);
           if (moveDist > 12) {
@@ -430,86 +512,17 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           }
         }
 
-        // --------------------------------------------------------------------
-        // [2] 퀵셰이프 스냅 완료 상태: 드래그하여 끝점 위치 및 각도 실시간 조절
-        // --------------------------------------------------------------------
-        if (isHoldSnappedRef.current && snappedShapeRef.current) {
-          const shape = snappedShapeRef.current;
-
-          // 도형 닫기(Close Loop) 자석 감지: 현재 끝점이 다른 꼭짓점(22px 이내)에 접근했는지 확인
-          const closeMatch = findNearestEndpoint(p.strokes, x, y, 22);
-          const isSameAsStart = activeStartAnchorRef.current && closeMatch &&
-            Math.hypot(closeMatch.x - activeStartAnchorRef.current.x, closeMatch.y - activeStartAnchorRef.current.y) < 6;
-
-          let targetEnd = { x, y };
-          if (closeMatch && !isSameAsStart) {
-            targetEnd = { x: closeMatch.x, y: closeMatch.y };
-            closingSnapRef.current = targetEnd;
-          } else {
-            closingSnapRef.current = null;
-          }
-
-          const fixedStart = activeStartAnchorRef.current
-            ? { x: activeStartAnchorRef.current.x, y: activeStartAnchorRef.current.y }
-            : (shape.startPoint || currentStroke.points[0]);
-
-          const tangent = activeStartAnchorRef.current?.tangent;
-          const dirX = targetEnd.x - fixedStart.x;
-          const dirY = targetEnd.y - fixedStart.y;
-          const dirLen = Math.hypot(dirX, dirY);
-          const dot = (tangent && dirLen > 0) ? (dirX * tangent.x + dirY * tangent.y) / dirLen : 0;
-          const isSmoothTangent = Boolean(tangent && dot >= 0.17); // 이전 선과의 각도 80도 이내 순방향 접선 연속 호
-
-          if (shape.type === 'line') {
-            currentStroke.points = generateLinePoints(fixedStart, targetEnd, 0.5);
-          } else if (shape.type === 'circle') {
-            const pivot = shape.oppositePoint || fixedStart;
-            const diam = Math.hypot(x - pivot.x, y - pivot.y);
-            const radius = Math.max(8, diam / 2);
-            const cx = (pivot.x + x) / 2;
-            const cy = (pivot.y + y) / 2;
-            currentStroke.points = generateCirclePoints(cx, cy, radius, 0.5);
-          } else if (shape.type === 'circular_arc') {
-            if (isSmoothTangent && tangent) {
-              currentStroke.points = generateTangentArcPoints(fixedStart, tangent, targetEnd, 0.5);
-            } else {
-              currentStroke.points = updateCircularArcPoints(shape, fixedStart, targetEnd);
-            }
-          } else if (shape.type === 'elliptic_arc' || shape.type === 'curve') {
-            if (isSmoothTangent && tangent) {
-              currentStroke.points = generateTangentArcPoints(fixedStart, tangent, targetEnd, 0.5);
-            } else {
-              const origStart = shape.startPoint || fixedStart;
-              const origEnd = shape.endPoint || targetEnd;
-              const origApex = shape.apexPoint || { x: (origStart.x + origEnd.x) / 2, y: (origStart.y + origEnd.y) / 2 };
-              const dynamicApex = calculateUpdatedArcApex(origStart, origEnd, origApex, fixedStart, targetEnd);
-              currentStroke.points = generateSingleArcPoints(fixedStart, targetEnd, dynamicApex, 0.5);
-            }
-          } else if (shape.type === 'bezier') {
-            currentStroke.points = updateBezierPoints(shape.points, fixedStart, targetEnd);
-          }
-
-          // 화면 리렌더링
-          renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-          drawSingleStroke(ctx, currentStroke, false);
-
-          // 시작 앵커 링 (청록색)
-          if (activeStartAnchorRef.current) {
-            drawMagneticAnchorRing(ctx, activeStartAnchorRef.current.x, activeStartAnchorRef.current.y, '#06b6d4');
-          }
-          // 끝점 도형 닫기 링 (에메랄드 녹색)
-          if (closingSnapRef.current) {
-            drawMagneticAnchorRing(ctx, closingSnapRef.current.x, closingSnapRef.current.y, '#10b981');
-          }
-
-          continue;
-        }
-
-        // --------------------------------------------------------------------
-        // [3] 일반 필기/드로잉 (손을 뗀 채 자유롭게 그리는 단계)
-        // --------------------------------------------------------------------
         const pts = currentStroke.points;
         const prevPt = pts[pts.length - 1];
+
+        // 펜촉이 제자리(anchor)에서 홀드 대기 중일 때 미세 진동으로 인한 무의미한 점 누적 방어
+        if (holdAnchorCoordRef.current && prevPt) {
+          const distFromAnchor = Math.hypot(x - holdAnchorCoordRef.current.x, y - holdAnchorCoordRef.current.y);
+          const distFromPrev = Math.hypot(x - prevPt.x, y - prevPt.y);
+          if (distFromAnchor < 8 && distFromPrev < 1.2) {
+            continue;
+          }
+        }
 
         let effectivePressure = ev.pressure > 0 ? ev.pressure : 0.5;
         if (effectivePressure === 0.5 && prevPt) {
@@ -557,7 +570,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         }
       }
 
-      // [4] 퀵셰이프 홀드 감지 (선을 긋고 끝에서 멈추면 직선/호/원으로 스냅)
+      // [C] 퀵셰이프 홀드 감지 (선을 긋고 끝에서 멈추면 직선/호/원으로 스냅)
       if (p.enableQuickShape && !isHoldSnappedRef.current && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter')) {
         const pts = currentStroke.points;
         const lastPt = pts[pts.length - 1];
@@ -565,14 +578,14 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const anchor = holdAnchorCoordRef.current;
         const distFromAnchor = anchor ? Math.hypot(lastPt.x - anchor.x, lastPt.y - anchor.y) : 999;
 
-        if (distFromAnchor > 22 || !holdTimerRef.current) {
+        if (distFromAnchor > 18 || !holdTimerRef.current) {
           holdAnchorCoordRef.current = { x: lastPt.x, y: lastPt.y };
           if (holdTimerRef.current) {
             clearTimeout(holdTimerRef.current);
             holdTimerRef.current = null;
           }
 
-          if (pts.length >= 6) {
+          if (pts.length >= 4) {
             holdTimerRef.current = setTimeout(() => {
               if (!isDrawingRef.current || !currentStrokeRef.current) return;
               const strokeSize = currentStrokeRef.current.size || 3;
@@ -620,8 +633,13 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
                 renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
                 drawSingleStroke(ctx, currentStrokeRef.current, false);
 
+                // 스냅 피드백 링: 아이패드는 햅틱 진동이 없으므로 시각적 스냅 링 표시
                 if (activeStartAnchorRef.current) {
                   drawMagneticAnchorRing(ctx, activeStartAnchorRef.current.x, activeStartAnchorRef.current.y, '#06b6d4');
+                }
+                const snapTip = shape.endPoint || currentStrokeRef.current.points[currentStrokeRef.current.points.length - 1];
+                if (snapTip) {
+                  drawMagneticAnchorRing(ctx, snapTip.x, snapTip.y, '#38bdf8');
                 }
               }
             }, 360);
@@ -742,6 +760,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       }
     };
 
+    const handleNativeContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
     // 네이티브 비수동(passive: false) 리스너 직접 부착
     canvas.addEventListener('pointerdown', handleNativePointerDown, { passive: false });
     canvas.addEventListener('pointermove', handleNativePointerMove, { passive: false });
@@ -749,6 +772,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     canvas.addEventListener('pointercancel', handleNativePointerCancel, { passive: false });
     canvas.addEventListener('touchstart', handleNativeTouchStart, { passive: false });
     canvas.addEventListener('touchmove', handleNativeTouchMove, { passive: false });
+    canvas.addEventListener('contextmenu', handleNativeContextMenu, { passive: false });
 
     // 전역 window 레벨에서도 펜을 빠르게 뗐을 때를 대비해 안전 포인터업 등록
     const handleGlobalWindowPointerUp = (e: PointerEvent) => {
@@ -766,6 +790,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       canvas.removeEventListener('pointercancel', handleNativePointerCancel);
       canvas.removeEventListener('touchstart', handleNativeTouchStart);
       canvas.removeEventListener('touchmove', handleNativeTouchMove);
+      canvas.removeEventListener('contextmenu', handleNativeContextMenu);
       window.removeEventListener('pointerup', handleGlobalWindowPointerUp);
       window.removeEventListener('pointercancel', handleGlobalWindowPointerUp);
     };

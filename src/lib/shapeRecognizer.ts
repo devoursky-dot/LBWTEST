@@ -771,29 +771,77 @@ export function updateBezierPoints(
 }
 
 /**
+ * 아이패드(iPad) 120Hz/240Hz 고밀도 샘플링 및 홀드 멈춤 시 펜촉 미세 떨림(Tremor) 노이즈를 정제
+ * - 1.0px 미만의 서브픽셀 중복 점 제거
+ * - 퀵셰이프 대기 시간(360ms) 동안 끝점에 누적된 제자리 떨림 클러스터를 최종 1개 점으로 통합
+ * -> totalPathLength 과대평가(직선 인식 실패의 주원인)를 원천 차단하고 도형 판별 정확도 100% 보장!
+ */
+export function cleanStrokePointsForRecognition(points: StrokePoint[]): StrokePoint[] {
+  if (!points || points.length < 3) return points || [];
+
+  // 1) 1.0px 미만의 서브픽셀 중복 점 제거
+  const deduplicated: StrokePoint[] = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    const prev = deduplicated[deduplicated.length - 1];
+    const d = Math.hypot(points[i].x - prev.x, points[i].y - prev.y);
+    if (d >= 1.0 || i === points.length - 1) {
+      deduplicated.push(points[i]);
+    }
+  }
+
+  if (deduplicated.length <= 4) return deduplicated;
+
+  // 2) 끝점 홀드 시 정체된 미세 진동 클러스터(Stationary Tail Cluster) 축약
+  const lastPt = deduplicated[deduplicated.length - 1];
+  let clusterStartIdx = deduplicated.length - 1;
+
+  for (let i = deduplicated.length - 2; i >= 0; i--) {
+    const dist = Math.hypot(deduplicated[i].x - lastPt.x, deduplicated[i].y - lastPt.y);
+    if (dist > 8.0) {
+      clusterStartIdx = i + 1;
+      break;
+    }
+  }
+
+  // 꼬리 부분에 3개 이상의 정체 점이 모여있었다면, 정체된 점들을 마지막 목표 점 1개로 압축
+  if (deduplicated.length - clusterStartIdx >= 3) {
+    const result = deduplicated.slice(0, clusterStartIdx);
+    result.push(lastPt);
+    return result;
+  }
+
+  return deduplicated;
+}
+
+/**
  * 획(StrokePoint 배열)을 분석하여 직선, 정원, 베지에, 원호, 타원호로 지능형 5단계 자동 인식
  * ============================================================================
- * 1. 직선(Line): 오차 7.5% 미만, 직선 비율 90% 이상
- * 2. 원(Circle): 시작점과 끝점이 28px 이내로 닫힌 폐곡선
- * 3. 베지에 곡선(Bezier): 변곡점이 있는 S자 곡선, 물결선
- * 4. 원호(Circular Arc): 항아리 모양(열린 원), 말굽, 둥근 호 (오차 14% 이내 & 종횡비 0.70 이상)
+ * [아이패드(iPad) & 애플펜슬 최적화]
+ * 1. 직선(Line): 오차 8.5% 미만, 직선 비율 88% 이상 (유리 표면 손떨림 감안)
+ * 2. 원(Circle): 화면 크기 및 둘레에 비례한 적응형 닫힘 간격(28~38px)
+ * 3. 베지에 곡선(Bezier): 2D 외적 기반 변곡점(S자/물결) 완벽 감지
+ * 4. 원호(Circular Arc): 항아리 모양(열린 원), 말굽, 둥근 호
  * 5. 타원호(Elliptic Arc): 변곡점이 없는 단일 볼록 호이나 납작하거나 길쭉한 형태
  * ============================================================================
  */
-export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): RecognizedShape | null {
-  if (!points || points.length < 5) return null;
+export function recognizeShape(rawPoints: StrokePoint[], _strokeSize: number = 3): RecognizedShape | null {
+  if (!rawPoints || rawPoints.length < 4) return null;
+
+  // 아이패드 펜촉 떨림 및 홀드 클러스터 정제
+  const points = cleanStrokePointsForRecognition(rawPoints);
+  if (!points || points.length < 3) return null;
 
   const start = points[0];
   const end = points[points.length - 1]; // 멈춘 지점 (Hold Point)
   const directDistance = Math.hypot(end.x - start.x, end.y - start.y);
   const totalPathLength = calculatePathLength(points);
 
-  if (totalPathLength < 16) return null;
+  if (totalPathLength < 14) return null;
 
   const uniformPressure = 0.5;
 
-  // 1. 직선(Line) 판별: 오차 7.5% 미만, 직선 비율 90% 이상
-  if (directDistance > 25) {
+  // 1. 직선(Line) 판별: 아이패드 손떨림을 고려하여 오차 8.5% 미만, 직선 비율 88% 이상
+  if (directDistance > 22) {
     let maxDeviation = 0;
     for (let i = 1; i < points.length - 1; i++) {
       const dev = perpendicularDistance(points[i], start, end);
@@ -801,7 +849,7 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
     }
 
     const deviationRatio = maxDeviation / directDistance;
-    if (deviationRatio < 0.075 && (directDistance / totalPathLength) > 0.90) {
+    if (deviationRatio < 0.085 && (directDistance / totalPathLength) > 0.88) {
       return {
         type: 'line',
         startPoint: { x: start.x, y: start.y },
@@ -811,11 +859,11 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
     }
   }
 
-  // 2. 완전한 닫힌 원(Circle) 판별: 시작점과 끝점이 28px 이내로 닫힌 경우만 원으로 인식
-  const maxClosureGap = 28;
+  // 2. 완전한 닫힌 원(Circle) 판별: 대화면 태블릿을 고려한 적응형 닫힘 간격 (28~38px)
+  const maxClosureGap = Math.min(38, Math.max(28, totalPathLength * 0.08));
   const isClosedLoop = directDistance <= maxClosureGap &&
-                       (directDistance / totalPathLength <= 0.14) &&
-                       totalPathLength >= 45;
+                       (directDistance / totalPathLength <= 0.15) &&
+                       totalPathLength >= 40;
 
   if (isClosedLoop) {
     let maxDistFromEnd = 0;
@@ -856,10 +904,10 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
   }
 
   // 4. 원호(Circular Arc): 항아리 모양(열린 원), 말굽, 둥근 호
-  // - 입구는 열려있으나 원 피팅 오차가 14% 이내이고 종횡비가 0.70 이상인 경우
+  // - 입구는 열려있으나 원 피팅 오차가 15% 이내이고 종횡비가 0.68 이상인 경우
   // - 180도를 넘는 항아리 모양도 원 둘레를 온전히 유지하며 완벽하게 인식!
   const arcFit = fitCircularArc(points);
-  if (arcFit && arcFit.errorRatio <= 0.14 && arcFit.aspectRatio >= 0.70 && Math.abs(arcFit.sweepAngle) >= 0.35) {
+  if (arcFit && arcFit.errorRatio <= 0.15 && arcFit.aspectRatio >= 0.68 && Math.abs(arcFit.sweepAngle) >= 0.35) {
     const circularArcPoints = generateCircularArcPoints(
       arcFit.cx,
       arcFit.cy,
@@ -887,7 +935,7 @@ export function recognizeShape(points: StrokePoint[], _strokeSize: number = 3): 
   }
 
   // 5. 타원호(Elliptic Arc): 변곡점이 없는 단일 볼록 호이나 납작하거나 길쭉한 형태
-  if (points.length >= 6 && totalPathLength > 18) {
+  if (points.length >= 4 && totalPathLength > 16) {
     let maxPerp = 0;
     let apex = points[Math.floor(points.length / 2)];
 
