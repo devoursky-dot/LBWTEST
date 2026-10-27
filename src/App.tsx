@@ -1026,6 +1026,10 @@ export default function App() {
       viewUrl: '',
       downloadUrl: ''
     };
+    (driveItem as any).pdfFileId = lesson.pdfId;
+    (driveItem as any).pdfFileName = lesson.pdfName;
+    (driveItem as any).attachedFiles = lesson.attachedFiles || [];
+    (driveItem as any).teacherName = teacherName;
 
     setWhiteboardSessionPrompt(null);
     await startQrLessonViewer(driveItem, terminatePrevious);
@@ -1068,6 +1072,31 @@ export default function App() {
       }
       setStudentSubmissions([]);
       showToast('✨ 이전 기록을 모두 초기화하고 새 수업을 시작합니다.');
+    }
+
+    // Supabase 세션 row에서 첨부파일 및 PDF 정보 자동 보충 조회
+    if (supabase && isSupabaseConfigured && !(item as any).attachedFiles?.length) {
+      try {
+        const { data: sessionData } = await supabase
+          .from('class_notes')
+          .select('strokes_data')
+          .eq('lesson_id', currentLessonId)
+          .eq('student_grade', '_TEACHER_SESSION_')
+          .maybeSingle();
+        if (sessionData?.strokes_data) {
+          if (sessionData.strokes_data.pdfId && !(item as any).pdfFileId) (item as any).pdfFileId = sessionData.strokes_data.pdfId;
+          if (sessionData.strokes_data.pdfName && !(item as any).pdfFileName) (item as any).pdfFileName = sessionData.strokes_data.pdfName;
+          if (sessionData.strokes_data.attachedFiles && !(item as any).attachedFiles?.length) {
+            (item as any).attachedFiles = sessionData.strokes_data.attachedFiles;
+          }
+        }
+      } catch (sbFetchErr) {
+        console.warn('세션 메타데이터 보충 조회 실패:', sbFetchErr);
+      }
+    }
+
+    if (currentSession?.name && !(item as any).teacherName) {
+      (item as any).teacherName = currentSession.name.replace(' 선생님', '').trim();
     }
 
     setIsQrLessonInitialClear(clearExisting);

@@ -52,8 +52,98 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [viewMode, setViewMode] = useState<'auto' | 'scroll'>('auto');
 
   // 수업자료 목록 및 다운로드 모달 상태
-  const [lessonMaterials, setLessonMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string }>>([]);
+  // 수업자료 목록 및 다운로드 모달 상태
+  const [lessonMaterials, setLessonMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string; updatedAt?: string; sourceTag?: string }>>([]);
+  const [driveAllMaterials, setDriveAllMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string; updatedAt?: string; modifiedTime?: string; sourceTag?: string }>>([]);
+  const [isLoadingDriveMaterials, setIsLoadingDriveMaterials] = useState<boolean>(false);
+  const [materialSearchTerm, setMaterialSearchTerm] = useState<string>('');
   const [isMaterialModalOpen, setIsMaterialModalOpen] = useState<boolean>(false);
+
+  // 구글 드라이브 전체 수업자료 파일 실시간 조회 (PDF, 활동지, 교과서 문서 등)
+  const fetchDriveMaterials = useCallback(async () => {
+    setIsLoadingDriveMaterials(true);
+    const combinedFiles = new Map<string, any>();
+    const apiBase = getApiBaseUrl();
+
+    // 1. 현재 수업 폴더(currentLessonId) 내 보관 파일 조회
+    if (currentLessonId) {
+      try {
+        const res = await fetch(`${apiBase}/api/drive?action=list&folderId=${currentLessonId}&_t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.items)) {
+            data.items
+              .filter((i: any) => i.type !== 'folder' && !i.name.endsWith('.json'))
+              .forEach((f: any) => {
+                combinedFiles.set(f.id, {
+                  id: f.id,
+                  name: f.name,
+                  mimeType: f.mimeType || 'application/pdf',
+                  size: f.size,
+                  updatedAt: f.updatedAt,
+                  sourceTag: '수업 폴더'
+                });
+              });
+          }
+        }
+      } catch (e) {
+        console.warn('Lesson folder materials error:', e);
+      }
+    }
+
+    // 2. 선생님 드라이브 폴더 탐색 (루트 폴더 조회 후 교사 폴더 내 학습자료 로드)
+    try {
+      const rootRes = await fetch(`${apiBase}/api/drive?action=list&_t=${Date.now()}`);
+      if (rootRes.ok) {
+        const rootData = await rootRes.json();
+        if (Array.isArray(rootData.items)) {
+          const teacherFolders = rootData.items.filter((i: any) => i.type === 'folder');
+
+          // 담당 교사 폴더 우선, 없으면 모든 교사 폴더의 수업자료 탐색
+          const targetTeacherName = ((lesson as any).teacherName || '').replace(' 선생님', '').trim();
+          const targetFolders = targetTeacherName
+            ? teacherFolders.filter((tf: any) => tf.name.includes(targetTeacherName) || targetTeacherName.includes(tf.name.replace(' 선생님', '')))
+            : teacherFolders;
+
+          const foldersToScan = targetFolders.length > 0 ? targetFolders : teacherFolders;
+
+          await Promise.all(
+            foldersToScan.map(async (tf: any) => {
+              try {
+                const tfRes = await fetch(`${apiBase}/api/drive?action=list&folderId=${tf.id}&_t=${Date.now()}`);
+                if (tfRes.ok) {
+                  const tfData = await tfRes.json();
+                  if (Array.isArray(tfData.items)) {
+                    tfData.items
+                      .filter((i: any) => i.type !== 'folder' && !i.name.endsWith('.json'))
+                      .forEach((f: any) => {
+                        if (!combinedFiles.has(f.id)) {
+                          combinedFiles.set(f.id, {
+                            id: f.id,
+                            name: f.name,
+                            mimeType: f.mimeType || 'application/pdf',
+                            size: f.size,
+                            updatedAt: f.updatedAt,
+                            sourceTag: `${tf.name} 드라이브`
+                          });
+                        }
+                      });
+                  }
+                }
+              } catch (subErr) {
+                console.warn(`Error fetching teacher folder ${tf.name}:`, subErr);
+              }
+            })
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('Teacher materials fetch error:', e);
+    }
+
+    setDriveAllMaterials(Array.from(combinedFiles.values()));
+    setIsLoadingDriveMaterials(false);
+  }, [currentLessonId, (lesson as any).teacherName]);
 
   // 전자칠판 수업자료 스트리밍 다운로드 엔진 (구글 로그인/바이러스 경고 0%)
   const handleDownloadMaterial = (file: { id: string; name: string }) => {
@@ -62,34 +152,21 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     const downloadUrl = `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`;
 
     try {
-      let iframe = document.getElementById('whiteboard-material-dl-iframe') as HTMLIFrameElement;
-      if (!iframe) {
-        iframe = document.createElement('iframe');
-        iframe.id = 'whiteboard-material-dl-iframe';
-        iframe.style.display = 'none';
-        iframe.style.width = '0';
-        iframe.style.height = '0';
-        document.body.appendChild(iframe);
-      }
-      iframe.src = downloadUrl;
-    } catch {}
-
-    try {
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.setAttribute('download', file.name);
       link.target = '_blank';
-      link.rel = 'noreferrer';
-      link.style.display = 'none';
+      link.rel = 'noopener noreferrer';
       document.body.appendChild(link);
       link.click();
       setTimeout(() => {
         try {
           if (document.body.contains(link)) document.body.removeChild(link);
         } catch {}
-      }, 500);
+      }, 800);
     } catch (aErr) {
       console.warn('Material download fallback warning:', aErr);
+      window.open(downloadUrl, '_blank');
     }
   };
 
@@ -117,20 +194,58 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     });
 
     // 1-2. 수업자료 초기 수집: lesson prop의 attachedFiles 및 pdfFileId 등록
-    const initialFiles: Array<{ id: string; name: string; mimeType?: string; size?: string }> = [];
+    const initialFiles: Array<{ id: string; name: string; mimeType?: string; size?: string; sourceTag?: string }> = [];
     if ((lesson as any).attachedFiles && Array.isArray((lesson as any).attachedFiles)) {
-      initialFiles.push(...(lesson as any).attachedFiles);
+      initialFiles.push(...(lesson as any).attachedFiles.map((f: any) => ({ ...f, sourceTag: '수업 등록 자료' })));
     }
     if ((lesson as any).pdfFileId && !initialFiles.some(f => f.id === (lesson as any).pdfFileId)) {
       initialFiles.push({
         id: (lesson as any).pdfFileId,
         name: (lesson as any).pdfFileName || `${cleanLessonTitle}.pdf`,
-        mimeType: 'application/pdf'
+        mimeType: 'application/pdf',
+        sourceTag: '수업 대표 교재'
       });
     }
     setLessonMaterials(initialFiles);
 
-    // 1-3. 폴더 내 모든 파일 비동기 탐색하여 수업자료 목록 보강
+    // 1-3. 구글 드라이브 전체 파일 백그라운드 탐색
+    fetchDriveMaterials();
+
+    // 1-4. Supabase 세션 row에서 첨부자료 및 PDF 보충 조회
+    if (supabase && isSupabaseConfigured) {
+      supabase
+        .from('class_notes')
+        .select('strokes_data')
+        .eq('lesson_id', currentLessonId)
+        .eq('student_grade', '_TEACHER_SESSION_')
+        .maybeSingle()
+        .then(({ data: sessData }) => {
+          if (sessData?.strokes_data) {
+            const filesFromDb: any[] = [];
+            if (sessData.strokes_data.attachedFiles && Array.isArray(sessData.strokes_data.attachedFiles)) {
+              filesFromDb.push(...sessData.strokes_data.attachedFiles.map((f: any) => ({ ...f, sourceTag: '수업 등록 자료' })));
+            }
+            if (sessData.strokes_data.pdfId) {
+              filesFromDb.push({
+                id: sessData.strokes_data.pdfId,
+                name: sessData.strokes_data.pdfName || `${cleanLessonTitle}.pdf`,
+                mimeType: 'application/pdf',
+                sourceTag: '수업 대표 교재'
+              });
+            }
+            if (filesFromDb.length > 0) {
+              setLessonMaterials(prev => {
+                const map = new Map<string, any>();
+                prev.forEach(f => map.set(f.id, f));
+                filesFromDb.forEach(f => map.set(f.id, f));
+                return Array.from(map.values());
+              });
+            }
+          }
+        }, () => {});
+    }
+
+    // 1-5. 폴더 내 모든 파일 비동기 탐색하여 수업자료 목록 보강
     (async () => {
       try {
         const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
@@ -163,7 +278,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         console.warn('수업자료 목록 탐색 실패:', fErr);
       }
     })();
-  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName, (lesson as any).attachedFiles]);
+  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName, (lesson as any).attachedFiles, fetchDriveMaterials]);
 
   // 2. 초기 DB 제출 목록 조회 (Vercel 클라우드 릴레이 + Supabase 1.5초 가드)
   const fetchSubmissionsFromDb = async () => {
@@ -815,33 +930,30 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           <button
             type="button"
             style={{
-              background: 'rgba(56, 189, 248, 0.15)',
-              border: '1px solid rgba(56, 189, 248, 0.45)',
-              color: '#38bdf8',
+              background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.22) 0%, rgba(14, 165, 233, 0.35) 100%)',
+              border: '1.5px solid #38bdf8',
+              color: '#ffffff',
               borderRadius: '8px',
-              padding: '8px 14px',
+              padding: '8px 16px',
               fontSize: '13px',
               fontWeight: 700,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              boxShadow: '0 2px 10px rgba(56, 189, 248, 0.25)'
             }}
             onClick={() => {
-              if (lessonMaterials.length === 0) {
-                showToast('ℹ️ 현재 수업에 등록된 수업자료가 없습니다.');
-              } else if (lessonMaterials.length === 1) {
-                handleDownloadMaterial(lessonMaterials[0]);
-              } else {
-                setIsMaterialModalOpen(true);
-              }
+              setIsMaterialModalOpen(true);
+              fetchDriveMaterials();
             }}
-            title="수업에 연결된 학습자료(PDF, 활동지 등)를 전자칠판 기기에 다운로드합니다."
+            title="구글 드라이브 및 본 수업에 연결된 학습자료(PDF, 활동지 등)를 전자칠판 기기에 다운로드합니다."
           >
-            <span>📥 수업자료 다운로드</span>
-            {lessonMaterials.length > 0 && (
-              <span style={{ fontSize: '11px', background: 'rgba(56, 189, 248, 0.3)', padding: '1px 6px', borderRadius: '10px' }}>
-                {lessonMaterials.length}
+            <span style={{ fontSize: '15px' }}>📥</span>
+            <span>수업자료 다운로드</span>
+            {(lessonMaterials.length > 0 || driveAllMaterials.length > 0) && (
+              <span style={{ fontSize: '11px', background: '#0284c7', color: '#ffffff', padding: '1px 7px', borderRadius: '10px', fontWeight: 800 }}>
+                {lessonMaterials.length > 0 ? lessonMaterials.length : driveAllMaterials.length}
               </span>
             )}
           </button>
@@ -1335,7 +1447,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         />
       )}
 
-      {/* 5. 전자칠판 수업자료 다운로드 모달 (다중 파일 지원) */}
+      {/* 5. 전자칠판 수업자료 다운로드 센터 모달 (구글 드라이브 통합) */}
       {isMaterialModalOpen && (
         <div
           className="modal-backdrop"
@@ -1343,8 +1455,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.75)',
-            backdropFilter: 'blur(4px)',
+            background: 'rgba(0, 0, 0, 0.78)',
+            backdropFilter: 'blur(6px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1355,90 +1467,244 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             onClick={(e) => e.stopPropagation()}
             style={{
               background: '#161b22',
-              border: '1px solid #30363d',
-              borderRadius: '16px',
-              padding: '24px',
-              width: '90%',
-              maxWidth: '480px',
-              boxShadow: '0 20px 40px rgba(0,0,0,0.8)'
+              border: '1.5px solid #30363d',
+              borderRadius: '20px',
+              padding: '24px 28px',
+              width: '94%',
+              maxWidth: '680px',
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 24px 48px rgba(0, 0, 0, 0.85)'
             }}
           >
+            {/* 1. 모달 헤더 */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '22px' }}>📥</span>
-                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#ffffff' }}>
-                  수업자료 다운로드
-                </h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '26px' }}>📥</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#ffffff' }}>
+                    수업자료 다운로드 센터
+                  </h3>
+                  <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                    구글 드라이브에 등록된 학습자료를 전자칠판 기기로 즉시 다운로드합니다.
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setIsMaterialModalOpen(false)}
                 style={{
-                  background: 'transparent',
+                  background: 'rgba(255, 255, 255, 0.08)',
                   border: 'none',
-                  color: '#8b949e',
-                  fontSize: '18px',
-                  cursor: 'pointer'
+                  color: '#94a3b8',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  fontSize: '16px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
                 }}
               >
                 ✕
               </button>
             </div>
 
-            <p style={{ margin: '0 0 14px 0', fontSize: '12.5px', color: '#94a3b8', lineHeight: 1.5 }}>
-              전자칠판 기기에 다운로드할 수업자료를 선택하세요.
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
-              {lessonMaterials.map((file) => (
-                <div
-                  key={file.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '12px 14px',
-                    borderRadius: '10px',
-                    background: 'rgba(255, 255, 255, 0.04)',
-                    border: '1px solid rgba(255, 255, 255, 0.08)'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1, paddingRight: '10px' }}>
-                    <span style={{ fontSize: '20px' }}>
-                      {file.mimeType?.includes('pdf') || file.name.toLowerCase().endsWith('.pdf') ? '📄' : '📁'}
-                    </span>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {file.name}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleDownloadMaterial(file);
-                      setIsMaterialModalOpen(false);
-                    }}
-                    style={{
-                      background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
-                      border: 'none',
-                      color: '#ffffff',
-                      padding: '6px 14px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                  >
-                    <span>📥 다운로드</span>
-                  </button>
-                </div>
-              ))}
+            {/* 2. 자료 검색창 & 새로고침 버튼 */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+              <input
+                type="text"
+                className="g-form-input"
+                placeholder="🔍 파일명 검색 (예: 삼각비, 형성평가, 1단원...)"
+                value={materialSearchTerm}
+                onChange={(e) => setMaterialSearchTerm(e.target.value)}
+                style={{ flex: 1, padding: '10px 14px', fontSize: '13.5px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '10px' }}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={fetchDriveMaterials}
+                disabled={isLoadingDriveMaterials}
+                style={{
+                  background: '#21262d',
+                  border: '1px solid #30363d',
+                  color: '#c9d1d9',
+                  borderRadius: '10px',
+                  padding: '0 16px',
+                  fontSize: '12.5px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+                title="구글 드라이브 최신 목록 새로고침"
+              >
+                {isLoadingDriveMaterials ? '🔄 조회 중...' : '🔄 새로고침'}
+              </button>
             </div>
 
-            <div style={{ marginTop: '18px', display: 'flex', justifyContent: 'flex-end' }}>
+            {/* 3. 파일 목록 컨테이너 */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
+              {(() => {
+                // 통합 자료 맵 (lessonMaterials 우선 + driveAllMaterials 병합)
+                const mergedMap = new Map<string, any>();
+                lessonMaterials.forEach(f => mergedMap.set(f.id, { ...f, isLessonAttached: true }));
+                driveAllMaterials.forEach(f => {
+                  if (!mergedMap.has(f.id)) {
+                    mergedMap.set(f.id, { ...f, isLessonAttached: false });
+                  }
+                });
+                const allList = Array.from(mergedMap.values());
+
+                // 검색 필터링
+                const filtered = allList.filter(f =>
+                  f.name.toLowerCase().includes(materialSearchTerm.trim().toLowerCase())
+                );
+
+                if (isLoadingDriveMaterials && filtered.length === 0) {
+                  return (
+                    <div style={{ padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                      <span style={{ fontSize: '28px', display: 'block', marginBottom: '8px' }}>🔄</span>
+                      구글 드라이브에서 수업자료를 불러오는 중입니다...
+                    </div>
+                  );
+                }
+
+                if (filtered.length === 0) {
+                  return (
+                    <div style={{ padding: '36px 16px', textAlign: 'center', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '12px', border: '1px dashed #30363d' }}>
+                      <span style={{ fontSize: '32px', display: 'block', marginBottom: '8px' }}>📂</span>
+                      <p style={{ margin: '0 0 6px', fontSize: '14px', fontWeight: 600, color: '#ffffff' }}>
+                        {materialSearchTerm ? `'${materialSearchTerm}' 검색 결과가 없습니다.` : '조회된 구글 드라이브 수업자료가 없습니다.'}
+                      </p>
+                      <p style={{ margin: 0, fontSize: '12px', color: '#8b949e' }}>
+                        선생님 구글 드라이브 폴더에 PDF나 문서를 업로드하시면 여기에 자동으로 표시됩니다.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return filtered.map((file) => {
+                  const isPdf = file.mimeType?.includes('pdf') || file.name.toLowerCase().endsWith('.pdf');
+                  const isImage = file.mimeType?.includes('image') || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+                  const isDoc = file.mimeType?.includes('word') || file.mimeType?.includes('document') || /\.(hwp|hwpx|docx?|pptx?)$/i.test(file.name);
+                  const icon = isPdf ? '📄' : isImage ? '🖼️' : isDoc ? '📝' : '📁';
+
+                  return (
+                    <div
+                      key={file.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '12px 16px',
+                        borderRadius: '12px',
+                        background: file.isLessonAttached ? 'rgba(56, 189, 248, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                        border: file.isLessonAttached ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid rgba(255, 255, 255, 0.08)',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1, paddingRight: '12px' }}>
+                        <span style={{ fontSize: '26px', flexShrink: 0 }}>{icon}</span>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {file.name}
+                            </span>
+                            {file.isLessonAttached && (
+                              <span style={{ fontSize: '10.5px', background: 'rgba(56, 189, 248, 0.25)', color: '#7dd3fc', border: '1px solid rgba(56, 189, 248, 0.45)', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                📌 현재 수업 등록 자료
+                              </span>
+                            )}
+                            {file.sourceTag && !file.isLessonAttached && (
+                              <span style={{ fontSize: '10.5px', background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                                🏷️ {file.sourceTag}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '11.5px', color: '#8b949e', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span>
+                              {file.size 
+                                ? (typeof file.size === 'string' && file.size.includes('B') 
+                                    ? file.size 
+                                    : `${(parseInt(file.size, 10) / (1024 * 1024)).toFixed(1)} MB`) 
+                                : '구글 드라이브 문서'}
+                            </span>
+                            {(file.updatedAt || file.modifiedTime) && (
+                              <span>• {file.updatedAt || new Date(file.modifiedTime).toLocaleDateString('ko-KR')}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {/* 1. 직접 스트리밍 다운로드 (전자칠판 원클릭 파일 수신) */}
+                        <a
+                          href={`${getApiBaseUrl()}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`}
+                          download={file.name}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => {
+                            handleDownloadMaterial(file);
+                          }}
+                          style={{
+                            background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                            border: '1px solid #38bdf8',
+                            color: '#ffffff',
+                            padding: '9px 18px',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            boxShadow: '0 2px 8px rgba(2, 132, 199, 0.35)',
+                            textDecoration: 'none'
+                          }}
+                          title={`전자칠판 [다운로드] 폴더에 '${file.name}' 저장`}
+                        >
+                          <span>📥 다운로드</span>
+                        </a>
+
+                        {/* 2. 구글 드라이브 뷰어 미리보기 */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const viewUrl = file.viewUrl || `https://drive.google.com/file/d/${file.id}/view?usp=sharing`;
+                            window.open(viewUrl, '_blank', 'noopener,noreferrer');
+                          }}
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            border: '1px solid #30363d',
+                            color: '#c9d1d9',
+                            padding: '9px 12px',
+                            borderRadius: '8px',
+                            fontSize: '12.5px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                          title="구글 드라이브 뷰어로 새 창 열기"
+                        >
+                          👁️ 미리보기
+                        </button>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* 4. 모달 하단 푸터 */}
+            <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                💡 다운로드된 파일은 전자칠판의 <strong>[다운로드]</strong> 폴더에서 바로 열어 판서에 활용하실 수 있습니다.
+              </span>
               <button
                 type="button"
                 onClick={() => setIsMaterialModalOpen(false)}
@@ -1446,9 +1712,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   background: '#21262d',
                   border: '1px solid #30363d',
                   color: '#c9d1d9',
-                  padding: '7px 16px',
+                  padding: '8px 18px',
                   borderRadius: '8px',
                   fontSize: '13px',
+                  fontWeight: 600,
                   cursor: 'pointer'
                 }}
               >
