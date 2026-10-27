@@ -16,10 +16,24 @@ interface AdminDashboardModalProps {
   driveFolderNames: string[];
   onClose: () => void;
   onToast: (msg: string) => void;
+  onAddTeacher?: (name: string) => Promise<boolean | void>;
+  onRefreshDriveFolders?: () => Promise<any>;
 }
 
-export function AdminDashboardModal({ driveFolderNames, onClose, onToast }: AdminDashboardModalProps) {
+export function AdminDashboardModal({ 
+  driveFolderNames, 
+  onClose, 
+  onToast,
+  onAddTeacher,
+  onRefreshDriveFolders
+}: AdminDashboardModalProps) {
   const [activeTab, setActiveTab] = useState<'students' | 'teachers' | 'whiteboard' | 'admin'>('students');
+
+  // 선생님 추가 인라인 상태
+  const [isAddingTeacherOpen, setIsAddingTeacherOpen] = useState(false);
+  const [newTeacherNameInput, setNewTeacherNameInput] = useState('');
+  const [isAddingTeacher, setIsAddingTeacher] = useState(false);
+  const [isRefreshingDrive, setIsRefreshingDrive] = useState(false);
 
   // 학생 검색 및 필터 상태
   const [studentSearch, setStudentSearch] = useState('');
@@ -172,6 +186,50 @@ export function AdminDashboardModal({ driveFolderNames, onClose, onToast }: Admi
     setNewAdminPw('');
     setRefreshKey(k => k + 1);
     onToast('✅ 관리자 비밀번호가 안전하게 변경되었습니다.');
+  };
+
+  // 새 선생님 추가 핸들러 (구글 드라이브 폴더 자동 생성 및 1234 비밀번호 셋팅)
+  const handleCreateTeacher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = newTeacherNameInput.trim().replace(' 선생님', '').replace('선생님', '').trim();
+    if (!cleanName) {
+      onToast('⚠️ 추가할 선생님 이름을 입력해 주세요.');
+      return;
+    }
+    if (driveFolderNames.some(name => name.trim() === cleanName || name.trim() === `${cleanName} 선생님`)) {
+      onToast(`⚠️ 이미 '${cleanName}' 선생님 폴더가 구글 드라이브에 존재합니다.`);
+      return;
+    }
+
+    setIsAddingTeacher(true);
+    try {
+      if (onAddTeacher) {
+        await onAddTeacher(cleanName);
+      }
+      setIsAddingTeacherOpen(false);
+      setNewTeacherNameInput('');
+      setRefreshKey(k => k + 1);
+    } catch (err: any) {
+      onToast(`❌ 선생님 추가 오류: ${err.message}`);
+    } finally {
+      setIsAddingTeacher(false);
+    }
+  };
+
+  // 구글 드라이브 최상위 폴더 실시간 재동기화
+  const handleManualRefreshDrive = async () => {
+    setIsRefreshingDrive(true);
+    try {
+      if (onRefreshDriveFolders) {
+        await onRefreshDriveFolders();
+      }
+      setRefreshKey(k => k + 1);
+      onToast('🔄 구글 드라이브 선생님 폴더 목록을 최신 상태로 동기화했습니다.');
+    } catch (err: any) {
+      onToast(`⚠️ 동기화 실패: ${err.message}`);
+    } finally {
+      setIsRefreshingDrive(false);
+    }
   };
 
   const modifiedStudentCount = useMemo(() => {
@@ -525,9 +583,131 @@ export function AdminDashboardModal({ driveFolderNames, onClose, onToast }: Admi
         {/* 탭 2: 선생님 계정 관리 (구글 드라이브 폴더 기반) */}
         {activeTab === 'teachers' && (
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: '340px', marginTop: '14px' }}>
-            <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '12px 14px', borderRadius: '12px', fontSize: '12.5px', color: '#93c5fd', marginBottom: '14px' }}>
-              📁 <strong>선생님 폴더 자동 연동:</strong> 구글 드라이브 최상위에 생성된 폴더 이름이 곧 선생님 계정으로 자동 등록됩니다. (초기 비밀번호: <code>1234</code>)
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <div style={{ background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '10px 14px', borderRadius: '12px', fontSize: '12.5px', color: '#93c5fd', flex: 1, minWidth: '280px' }}>
+                📁 <strong>선생님 폴더 자동 연동:</strong> 구글 드라이브 최상위 폴더 이름이 곧 선생님 계정으로 연동됩니다. (초기 비밀번호: <code>1234</code>)
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={handleManualRefreshDrive}
+                  disabled={isRefreshingDrive}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: '10px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    color: '#e2e8f0',
+                    fontSize: '12.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  title="구글 드라이브 루트 폴더의 선생님 폴더를 다시 조회합니다"
+                >
+                  <span>🔄</span>
+                  <span>{isRefreshingDrive ? '동기화 중...' : '새로고침'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingTeacherOpen(prev => !prev)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '10px',
+                    border: '1px solid #3b82f6',
+                    background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                    color: '#ffffff',
+                    fontSize: '12.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.35)'
+                  }}
+                >
+                  <span>➕</span>
+                  <span>선생님 추가</span>
+                </button>
+              </div>
             </div>
+
+            {/* 선생님 추가 폼 */}
+            {isAddingTeacherOpen && (
+              <form
+                onSubmit={handleCreateTeacher}
+                style={{
+                  background: 'rgba(30, 41, 59, 0.85)',
+                  border: '1px solid rgba(59, 130, 246, 0.4)',
+                  padding: '14px 16px',
+                  borderRadius: '12px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  flexWrap: 'wrap'
+                }}
+              >
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap' }}>
+                  👨‍🏫 새 선생님 성함:
+                </span>
+                <input
+                  type="text"
+                  value={newTeacherNameInput}
+                  onChange={(e) => setNewTeacherNameInput(e.target.value)}
+                  placeholder="예: 홍길동 (또는 김선생)"
+                  style={{
+                    flex: 1,
+                    minWidth: '180px',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    background: '#0f172a',
+                    color: '#ffffff',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                  disabled={isAddingTeacher}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={isAddingTeacher}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  {isAddingTeacher ? '⏳ 생성 중...' : '📁 드라이브 폴더 생성 및 1234 등록'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setIsAddingTeacherOpen(false); setNewTeacherNameInput(''); }}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    background: 'transparent',
+                    color: '#94a3b8',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  취소
+                </button>
+              </form>
+            )}
 
             <div style={{ flex: 1, overflowY: 'auto', border: '1px solid rgba(255, 255, 255, 0.1)', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.4)' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
