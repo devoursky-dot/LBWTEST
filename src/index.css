@@ -787,18 +787,18 @@ html, body {
   position: fixed;
   bottom: 24px;
   left: 24px;
-  background: #282a2c;
+  background: #1e293b;
   color: #f1f3f4;
-  border: 1px solid var(--g-border);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   padding: 12px 20px;
-  border-radius: 8px;
+  border-radius: 12px;
   font-size: 13.5px;
-  font-weight: 500;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  font-weight: 600;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   gap: 10px;
-  z-index: 2000;
+  z-index: 100000;
   animation: slideUp 0.2s ease-out;
 }
 

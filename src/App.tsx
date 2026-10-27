@@ -5,7 +5,7 @@ import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
 import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
-import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, resetTeacherPasswordToDefault, parseStudentId, type UserSession } from './lib/auth';
+import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, registerTeacherToCloud, deleteTeacherFromCloud, parseStudentId, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studentSessionManager';
@@ -311,14 +311,19 @@ export default function App() {
     return rootTeacherFolders.map(item => item.name);
   }, [rootTeacherFolders]);
 
-  // 새 선생님 추가 핸들러: 구글 드라이브 최상위 폴더에 실제 폴더 생성 + 초기 비밀번호 1234 설정
+  // 새 선생님 추가 핸들러: 클라우드(Supabase/로컬) 즉시 영구 등록 + 구글 드라이브 폴더 생성 시도
   const handleAddTeacher = async (teacherName: string) => {
     const cleanName = teacherName.trim().replace(' 선생님', '').replace('선생님', '').trim();
-    if (!cleanName) return;
+    if (!cleanName) return { success: false, folderCreated: false };
 
-    showToast(`📁 구글 드라이브에 '${cleanName}' 선생님 폴더를 생성합니다...`);
+    showToast(`📁 [${cleanName} 선생님] 계정 등록 및 구글 드라이브 연동 진행 중...`);
 
+    // 1. Supabase 클라우드 및 로컬스토리지에 즉시 영구 등록 (기본 비밀번호: 1234)
+    await registerTeacherToCloud(cleanName);
+
+    // 2. 구글 드라이브 최상위 폴더에 실제 폴더 생성 시도
     let folderCreated = false;
+    let gasErrorMessage = '';
     try {
       const res = await executeDriveAction({
         action: 'createFolder',
@@ -330,24 +335,51 @@ export default function App() {
       }
     } catch (err: any) {
       console.warn('구글 드라이브 선생님 폴더 생성 오류:', err);
-      showToast(`⚠️ 구글 드라이브 폴더 생성 실패: ${err.message}`);
+      gasErrorMessage = err.message || '';
     }
 
-    // 초기 비밀번호 1234로 선생님 계정 설정
-    try {
-      await resetTeacherPasswordToDefault(cleanName);
-    } catch (authErr) {
-      console.warn('선생님 초기 비밀번호 설정 실패:', authErr);
-    }
-
-    // 최신 구글 드라이브 루트 폴더 목록 재조회
+    // 3. 최신 구글 드라이브 루트 폴더 목록 및 전자칠판 수업 목록 재조회
     await fetchRootTeacherFolders();
+    loadWhiteboardTeacherLessons();
 
     if (folderCreated) {
       showToast(`🎉 '${cleanName}' 선생님 폴더가 구글 드라이브에 정상 생성되었으며, 초기 비밀번호(1234)로 등록되었습니다!`);
     } else {
-      showToast(`🔑 '${cleanName}' 선생님 계정이 초기 비밀번호(1234)로 등록되었습니다. (드라이브 폴더 생성을 위해 GAS 배포 권한을 확인해 주세요)`);
+      showToast(`🔑 '${cleanName}' 선생님 계정이 클라우드에 등록되었습니다. (초기 비밀번호: 1234)`);
     }
+
+    return {
+      success: true,
+      folderCreated,
+      gasErrorMessage,
+      teacherName: cleanName
+    };
+  };
+
+  // 등록된 선생님 계정 삭제 핸들러 (클라우드 및 구글 드라이브 폴더 동기화)
+  const handleDeleteTeacher = async (teacherName: string) => {
+    const cleanName = teacherName.trim().replace(' 선생님', '').replace('선생님', '').trim();
+    if (!cleanName) return;
+
+    await deleteTeacherFromCloud(cleanName);
+
+    // 구글 드라이브에 해당 폴더가 있다면 휴지통 이동 비동기 시도
+    const matchedFolder = rootTeacherFolders.find(f => f.name.replace(' 선생님', '').trim() === cleanName);
+    if (matchedFolder) {
+      try {
+        await executeDriveAction({
+          action: 'delete',
+          id: matchedFolder.id,
+          isFolder: true
+        });
+      } catch (err) {
+        console.warn('구글 드라이브 교사 폴더 삭제 오류:', err);
+      }
+    }
+
+    await fetchRootTeacherFolders();
+    loadWhiteboardTeacherLessons();
+    showToast(`🗑️ '${cleanName}' 선생님 계정이 삭제되었습니다.`);
   };
 
   // 현재 선생님 폴더에 있는 문서 파일 목록 (QR 수업 생성/수정 시 다중 선택 대상)
@@ -1631,6 +1663,7 @@ export default function App() {
           onClose={handlePortalLogout}
           onToast={showToast}
           onAddTeacher={handleAddTeacher}
+          onDeleteTeacher={handleDeleteTeacher}
           onRefreshDriveFolders={fetchRootTeacherFolders}
         />
         {toastMessage && (
@@ -3700,6 +3733,7 @@ export default function App() {
           onClose={() => setIsAdminDashboardOpen(false)}
           onToast={showToast}
           onAddTeacher={handleAddTeacher}
+          onDeleteTeacher={handleDeleteTeacher}
           onRefreshDriveFolders={fetchRootTeacherFolders}
         />
       )}

@@ -38,6 +38,7 @@ export interface AccountRecord {
   grade?: string;
   classNum?: string;
   studentNum?: string;
+  hasDriveFolder?: boolean; // 구글 드라이브 폴더 연동 여부
 }
 
 // ============================================================================
@@ -586,10 +587,188 @@ export async function changeTeacherPassword(teacherName: string, newPw: string):
   return true;
 }
 
-export async function resetTeacherPasswordToDefault(teacherName: string): Promise<boolean> {
-  const id = `tch_${teacherName.trim()}`;
+// 등록된 선생님 목록 로컬 스토리지 키
+export const STORAGE_KEY_REGISTERED_TEACHERS = 'lbw_registered_teachers_list';
+
+export function getLocalRegisteredTeachers(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_REGISTERED_TEACHERS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalRegisteredTeacher(name: string): void {
+  if (typeof window === 'undefined') return;
+  const clean = name.trim().replace(' 선생님', '').replace('선생님', '').trim();
+  if (!clean) return;
+  const list = getLocalRegisteredTeachers();
+  if (!list.includes(clean)) {
+    list.push(clean);
+    localStorage.setItem(STORAGE_KEY_REGISTERED_TEACHERS, JSON.stringify(list));
+  }
+}
+
+export function removeLocalRegisteredTeacher(name: string): void {
+  if (typeof window === 'undefined') return;
+  const clean = name.trim().replace(' 선생님', '').replace('선생님', '').trim();
+  const list = getLocalRegisteredTeachers().filter(n => n !== clean);
+  localStorage.setItem(STORAGE_KEY_REGISTERED_TEACHERS, JSON.stringify(list));
+}
+
+/**
+ * 선생님 계정 클라우드(Supabase) 및 로컬스토리지 영구 등록
+ */
+export async function registerTeacherToCloud(name: string): Promise<boolean> {
+  const clean = name.trim().replace(' 선생님', '').replace('선생님', '').trim();
+  if (!clean) return false;
+  saveLocalRegisteredTeacher(clean);
+
+  if (!supabase || !isSupabaseConfigured) return true;
+  try {
+    const id = `tch_${clean}`;
+    const { data: existing } = await supabase
+      .from('class_notes')
+      .select('id')
+      .eq('lesson_id', SYSTEM_AUTH_LESSON_ID)
+      .eq('student_grade', id)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      await supabase
+        .from('class_notes')
+        .update({
+          student_name: `${clean} 선생님`,
+          student_class: '0',
+          student_num: '0',
+          strokes_data: {
+            role: 'teacher',
+            teacherName: clean,
+            isRegisteredTeacher: true,
+            updatedAt: new Date().toISOString()
+          },
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing[0].id);
+    } else {
+      await supabase
+        .from('class_notes')
+        .insert({
+          lesson_id: SYSTEM_AUTH_LESSON_ID,
+          student_grade: id,
+          student_class: '0',
+          student_num: '0',
+          student_name: `${clean} 선생님`,
+          strokes_data: {
+            role: 'teacher',
+            teacherName: clean,
+            isRegisteredTeacher: true,
+            passwordHash: DEFAULT_STUDENT_PW_HASH,
+            isModified: false,
+            registeredAt: new Date().toISOString()
+          }
+        });
+    }
+    return true;
+  } catch (err) {
+    console.warn('registerTeacherToCloud warning:', err);
+    return false;
+  }
+}
+
+/**
+ * 선생님 계정 클라우드(Supabase) 및 로컬스토리지에서 완전 삭제
+ */
+export async function deleteTeacherFromCloud(name: string): Promise<boolean> {
+  const clean = name.trim().replace(' 선생님', '').replace('선생님', '').trim();
+  removeLocalRegisteredTeacher(clean);
+  const id = `tch_${clean}`;
   removeLocalCustomHash(id);
-  await deleteAccountPasswordFromCloud(id);
+
+  if (!supabase || !isSupabaseConfigured) return true;
+  try {
+    await supabase
+      .from('class_notes')
+      .delete()
+      .eq('lesson_id', SYSTEM_AUTH_LESSON_ID)
+      .eq('student_grade', id);
+    return true;
+  } catch (err) {
+    console.warn('deleteTeacherFromCloud warning:', err);
+    return false;
+  }
+}
+
+/**
+ * 클라우드에 등록된 모든 선생님 목록 조회
+ */
+export async function fetchAllRegisteredTeachersFromCloud(): Promise<string[]> {
+  const result = new Set<string>(getLocalRegisteredTeachers());
+  if (!supabase || !isSupabaseConfigured) {
+    return Array.from(result);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('class_notes')
+      .select('student_grade, student_name, strokes_data')
+      .eq('lesson_id', SYSTEM_AUTH_LESSON_ID)
+      .like('student_grade', 'tch_%');
+
+    if (!error && data) {
+      for (const row of data) {
+        const id = row.student_grade;
+        const nameFromId = id ? id.replace('tch_', '').trim() : '';
+        const nameFromStrokes = row.strokes_data?.teacherName;
+        const nameFromStudent = (row.student_name || '').replace(' 선생님', '').trim();
+        const teacherName = nameFromStrokes || nameFromId || nameFromStudent;
+        if (teacherName) {
+          result.add(teacherName);
+          saveLocalRegisteredTeacher(teacherName);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('fetchAllRegisteredTeachersFromCloud warning:', err);
+  }
+  return Array.from(result);
+}
+
+export async function resetTeacherPasswordToDefault(teacherName: string): Promise<boolean> {
+  const clean = teacherName.trim().replace(' 선생님', '').replace('선생님', '').trim();
+  const id = `tch_${clean}`;
+  removeLocalCustomHash(id);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data: existing } = await supabase
+        .from('class_notes')
+        .select('id, strokes_data')
+        .eq('lesson_id', SYSTEM_AUTH_LESSON_ID)
+        .eq('student_grade', id)
+        .limit(1);
+
+      if (existing && existing.length > 0) {
+        const currentData = existing[0].strokes_data || {};
+        await supabase
+          .from('class_notes')
+          .update({
+            strokes_data: {
+              ...currentData,
+              passwordHash: DEFAULT_STUDENT_PW_HASH,
+              isModified: false,
+              updatedAt: new Date().toISOString()
+            },
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existing[0].id);
+      }
+    } catch (err) {
+      console.warn('resetTeacherPasswordToDefault warning:', err);
+    }
+  }
   return true;
 }
 
@@ -625,24 +804,37 @@ export function getAllStudentAccounts(customHashes: Record<string, string> = get
 }
 
 /**
- * 구글 드라이브 폴더 목록 기반 선생님 계정 목록 생성
+ * 구글 드라이브 폴더 목록 + 클라우드 등록 목록 기반 통합 선생님 계정 목록 생성
  */
 export function getTeacherAccounts(
   driveFolderNames: string[],
-  customHashes: Record<string, string> = getLocalCustomHashes()
+  customHashes: Record<string, string> = getLocalCustomHashes(),
+  registeredTeachers: string[] = getLocalRegisteredTeachers()
 ): AccountRecord[] {
-  return driveFolderNames
+  // 1. 구글 드라이브 폴더에서 가져온 선생님 이름
+  const driveNames = driveFolderNames
     .filter(name => !name.startsWith('[QR수업]') && name !== '내 드라이브')
+    .map(name => name.replace(' 선생님', '').trim());
+
+  // 2. 통합 고유 선생님 목록 (Google Drive 폴더 + 클라우드/로컬 등록 교사)
+  const combinedSet = new Set<string>([...driveNames, ...registeredTeachers]);
+
+  return Array.from(combinedSet)
+    .filter(Boolean)
+    .sort()
     .map(name => {
       const id = `tch_${name}`;
       const isModified = Boolean(customHashes[id]);
+      const hasDriveFolder = driveNames.includes(name);
+
       return {
         id,
         name: `${name} 선생님`,
         role: 'teacher' as UserRole,
         passwordHash: isModified ? '•••••• (개별설정)' : '1234 (초기값)',
         isModified,
-        updatedAt: isModified ? '수정됨' : '초기값'
+        updatedAt: isModified ? '수정됨' : '초기값',
+        hasDriveFolder
       };
     });
 }
