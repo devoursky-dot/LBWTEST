@@ -30,8 +30,8 @@ interface DriveItem {
   isQrLesson?: boolean;
 }
 
-const DEFAULT_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
-const DEFAULT_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
+const DEFAULT_ROOT_FOLDER_ID = '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
+const DEFAULT_GOOGLE_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
 const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
 const ADMIN_ID = 'admin';
 
@@ -64,7 +64,7 @@ const GAS_CODE_TEMPLATE = `function doPost(e) {
 
     // 2. 새 폴더 만들기
     if (action === 'createFolder') {
-      var targetFolderId = data.folderId || '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
+      var targetFolderId = data.folderId || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
       var parentFolder = DriveApp.getFolderById(targetFolderId);
       var newFolder = parentFolder.createFolder(data.name || '새 폴더');
       return ContentService.createTextOutput(JSON.stringify({
@@ -88,7 +88,7 @@ const GAS_CODE_TEMPLATE = `function doPost(e) {
 
     // 4. 파일 업로드
     if (action === 'upload') {
-      var upFolderId = data.folderId || '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
+      var upFolderId = data.folderId || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
       var upFolder = DriveApp.getFolderById(upFolderId);
       var contentType = data.mimeType || 'application/octet-stream';
       var decoded = Utilities.base64Decode(data.base64);
@@ -149,12 +149,22 @@ export default function App() {
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   const { handleScannedResult } = useQrScannerAction();
 
-  // --- 드라이브 설정 상태 ---
+  // --- 드라이브 설정 상태 (구형 키/폴더 자동 마이그레이션 적용) ---
   const [rootFolderId, setRootFolderId] = useState<string>(() => {
-    return localStorage.getItem('lbw_root_folder_id') || DEFAULT_ROOT_FOLDER_ID;
+    const saved = localStorage.getItem('lbw_root_folder_id');
+    if (!saved || saved === '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn') {
+      localStorage.setItem('lbw_root_folder_id', DEFAULT_ROOT_FOLDER_ID);
+      return DEFAULT_ROOT_FOLDER_ID;
+    }
+    return saved;
   });
   const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
-    return localStorage.getItem('lbw_google_api_key') || DEFAULT_GOOGLE_API_KEY;
+    const saved = localStorage.getItem('lbw_google_api_key');
+    if (!saved || saved === 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw') {
+      localStorage.setItem('lbw_google_api_key', DEFAULT_GOOGLE_API_KEY);
+      return DEFAULT_GOOGLE_API_KEY;
+    }
+    return saved;
   });
   const [gasUploadUrl, setGasUploadUrl] = useState<string>(() => {
     return localStorage.getItem('lbw_gas_upload_url') || DEFAULT_GAS_UPLOAD_URL;
@@ -3529,7 +3539,7 @@ export default function App() {
                   className="g-form-input" 
                   value={tempRootFolderId}
                   onChange={(e) => setTempRootFolderId(e.target.value)}
-                  placeholder="1Ew38nohOksBhypc2UjHYTmi6bSjbICmn"
+                  placeholder="1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM"
                 />
               </div>
 

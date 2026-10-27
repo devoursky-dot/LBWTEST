@@ -3,7 +3,7 @@ export const config = {
   runtime: 'edge', // Edge Runtime for global low-latency streaming
 };
 
-const DEFAULT_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
+const DEFAULT_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
 
 interface DriveItem {
   id: string;
@@ -19,7 +19,7 @@ interface DriveItem {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const action = url.searchParams.get('action') || 'list';
-  const folderId = url.searchParams.get('folderId') || url.searchParams.get('id') || '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
+  const folderId = url.searchParams.get('folderId') || url.searchParams.get('id') || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
   const fileId = url.searchParams.get('fileId') || url.searchParams.get('id');
   const fileName = url.searchParams.get('fileName') || '수업자료.pdf';
   const apiKey = url.searchParams.get('apiKey') || process.env.GOOGLE_API_KEY || process.env.VITE_GOOGLE_API_KEY || DEFAULT_API_KEY;

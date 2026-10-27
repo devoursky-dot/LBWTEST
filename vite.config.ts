@@ -27,7 +27,7 @@ function autoVersionPlugin(): Plugin {
   };
 }
 
-const DEFAULT_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
+const DEFAULT_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
 
 // 로컬 개발 환경용 Vercel API 모의 미들웨어 플러그인 (다운로드 완전 바이트 스트리밍 포함)
 function localDriveApiPlugin(): Plugin {
@@ -91,7 +91,7 @@ function localDriveApiPlugin(): Plugin {
           const action = urlObj.searchParams.get('action') || 'list';
           const fileId = urlObj.searchParams.get('fileId') || urlObj.searchParams.get('id');
           const fileName = urlObj.searchParams.get('fileName') || '수업자료.pdf';
-          const folderId = urlObj.searchParams.get('folderId') || urlObj.searchParams.get('id') || '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
+          const folderId = urlObj.searchParams.get('folderId') || urlObj.searchParams.get('id') || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
           const apiKey = urlObj.searchParams.get('apiKey') || process.env.GOOGLE_API_KEY || process.env.VITE_GOOGLE_API_KEY || DEFAULT_API_KEY;
 
           // ===================================================================

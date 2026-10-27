@@ -355,7 +355,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       // URL이나 props에 pdfId가 누락되었더라도, 수업 폴더(lessonId)에서 직접 PDF 자동 탐색하여 100% 연동
       (async () => {
         try {
-          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType)&key=AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA&_t=${Date.now()}`;
           const res = await fetch(directUrl);
           if (res.ok) {
             const data = await res.json();
@@ -1051,7 +1051,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       }
 
       if (!buffer) {
-        const directApiUrl = `https://www.googleapis.com/drive/v3/files/${lessonPdfInfo.id}?alt=media&supportsAllDrives=true&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw`;
+        const directApiUrl = `https://www.googleapis.com/drive/v3/files/${lessonPdfInfo.id}?alt=media&supportsAllDrives=true&key=AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA`;
         const res2 = await fetch(directApiUrl);
         if (res2.ok) {
           buffer = await res2.arrayBuffer();
@@ -2226,7 +2226,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     (async () => {
       try {
         const apiBase = getApiBaseUrl();
-        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&key=AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA&_t=${Date.now()}`;
         const cRes = await fetch(directUrl);
         if (cRes.ok) {
           const cData = await cRes.json();
