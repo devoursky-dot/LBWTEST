@@ -51,7 +51,49 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'auto' | 'scroll'>('auto');
 
-  // 1. 학생 참여 QR 코드 및 전용 접속 URL 생성
+  // 수업자료 목록 및 다운로드 모달 상태
+  const [lessonMaterials, setLessonMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string }>>([]);
+  const [isMaterialModalOpen, setIsMaterialModalOpen] = useState<boolean>(false);
+
+  // 전자칠판 수업자료 스트리밍 다운로드 엔진 (구글 로그인/바이러스 경고 0%)
+  const handleDownloadMaterial = (file: { id: string; name: string }) => {
+    showToast(`📥 '${file.name}' 수업자료 다운로드를 시작합니다...`);
+    const apiBase = getApiBaseUrl();
+    const downloadUrl = `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`;
+
+    try {
+      let iframe = document.getElementById('whiteboard-material-dl-iframe') as HTMLIFrameElement;
+      if (!iframe) {
+        iframe = document.createElement('iframe');
+        iframe.id = 'whiteboard-material-dl-iframe';
+        iframe.style.display = 'none';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        document.body.appendChild(iframe);
+      }
+      iframe.src = downloadUrl;
+    } catch {}
+
+    try {
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.setAttribute('download', file.name);
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        try {
+          if (document.body.contains(link)) document.body.removeChild(link);
+        } catch {}
+      }, 500);
+    } catch (aErr) {
+      console.warn('Material download fallback warning:', aErr);
+    }
+  };
+
+  // 1. 학생 참여 QR 코드 및 전용 접속 URL 생성 & 수업자료 일괄 수집
   useEffect(() => {
     const currentPath = window.location.pathname.replace(/\/$/, '');
     const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
@@ -74,28 +116,54 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       console.error('QR 생성 실패:', err);
     });
 
-    // 폴더 내에 PDF 파일이 있는지 비동기 조회하여 URL 및 QR 코드 자동 보강
-    if (!(lesson as any).pdfFileId) {
-      (async () => {
-        try {
-          const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
-          const res = await fetch(directUrl);
-          if (res.ok) {
-            const data = await res.json();
-            const files = data.files || [];
-            const pdfFile = files.find((f: any) => f.mimeType === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
-            if (pdfFile) {
-              const enrichedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}&pdfId=${encodeURIComponent(pdfFile.id)}&pdfName=${encodeURIComponent(pdfFile.name)}`;
-              setStudentUrl(enrichedUrl);
-              QRCode.toDataURL(enrichedUrl, { width: 400, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
-                .then(setQrCodeDataUrl)
-                .catch(() => {});
+    // 1-2. 수업자료 초기 수집: lesson prop의 attachedFiles 및 pdfFileId 등록
+    const initialFiles: Array<{ id: string; name: string; mimeType?: string; size?: string }> = [];
+    if ((lesson as any).attachedFiles && Array.isArray((lesson as any).attachedFiles)) {
+      initialFiles.push(...(lesson as any).attachedFiles);
+    }
+    if ((lesson as any).pdfFileId && !initialFiles.some(f => f.id === (lesson as any).pdfFileId)) {
+      initialFiles.push({
+        id: (lesson as any).pdfFileId,
+        name: (lesson as any).pdfFileName || `${cleanLessonTitle}.pdf`,
+        mimeType: 'application/pdf'
+      });
+    }
+    setLessonMaterials(initialFiles);
+
+    // 1-3. 폴더 내 모든 파일 비동기 탐색하여 수업자료 목록 보강
+    (async () => {
+      try {
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+        const res = await fetch(directUrl);
+        if (res.ok) {
+          const data = await res.json();
+          const files = (data.files || []).filter((f: any) => f.mimeType !== 'application/vnd.google-apps.folder');
+          if (files.length > 0) {
+            setLessonMaterials(prev => {
+              const map = new Map<string, any>();
+              prev.forEach(f => map.set(f.id, f));
+              files.forEach((f: any) => map.set(f.id, f));
+              return Array.from(map.values());
+            });
+
+            // 대표 PDF가 아직 없다면 첫 번째 PDF로 QR 주소 보강
+            if (!(lesson as any).pdfFileId) {
+              const pdfFile = files.find((f: any) => f.mimeType === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+              if (pdfFile) {
+                const enrichedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}&pdfId=${encodeURIComponent(pdfFile.id)}&pdfName=${encodeURIComponent(pdfFile.name)}`;
+                setStudentUrl(enrichedUrl);
+                QRCode.toDataURL(enrichedUrl, { width: 400, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
+                  .then(setQrCodeDataUrl)
+                  .catch(() => {});
+              }
             }
           }
-        } catch {}
-      })();
-    }
-  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName]);
+        }
+      } catch (fErr) {
+        console.warn('수업자료 목록 탐색 실패:', fErr);
+      }
+    })();
+  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName, (lesson as any).attachedFiles]);
 
   // 2. 초기 DB 제출 목록 조회 (Vercel 클라우드 릴레이 + Supabase 1.5초 가드)
   const fetchSubmissionsFromDb = async () => {
@@ -743,6 +811,41 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             </span>
           </div>
 
+          {/* 수업자료 다운로드 버튼 */}
+          <button
+            type="button"
+            style={{
+              background: 'rgba(56, 189, 248, 0.15)',
+              border: '1px solid rgba(56, 189, 248, 0.45)',
+              color: '#38bdf8',
+              borderRadius: '8px',
+              padding: '8px 14px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            onClick={() => {
+              if (lessonMaterials.length === 0) {
+                showToast('ℹ️ 현재 수업에 등록된 수업자료가 없습니다.');
+              } else if (lessonMaterials.length === 1) {
+                handleDownloadMaterial(lessonMaterials[0]);
+              } else {
+                setIsMaterialModalOpen(true);
+              }
+            }}
+            title="수업에 연결된 학습자료(PDF, 활동지 등)를 전자칠판 기기에 다운로드합니다."
+          >
+            <span>📥 수업자료 다운로드</span>
+            {lessonMaterials.length > 0 && (
+              <span style={{ fontSize: '11px', background: 'rgba(56, 189, 248, 0.3)', padding: '1px 6px', borderRadius: '10px' }}>
+                {lessonMaterials.length}
+              </span>
+            )}
+          </button>
+
           {/* 학번순 PDF 저장 버튼 */}
           <button
             type="button"
@@ -1230,6 +1333,130 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             showToast(`🌟 ${studentName} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);
           }}
         />
+      )}
+
+      {/* 5. 전자칠판 수업자료 다운로드 모달 (다중 파일 지원) */}
+      {isMaterialModalOpen && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setIsMaterialModalOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10001
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#161b22',
+              border: '1px solid #30363d',
+              borderRadius: '16px',
+              padding: '24px',
+              width: '90%',
+              maxWidth: '480px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.8)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '22px' }}>📥</span>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#ffffff' }}>
+                  수업자료 다운로드
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMaterialModalOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#8b949e',
+                  fontSize: '18px',
+                  cursor: 'pointer'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ margin: '0 0 14px 0', fontSize: '12.5px', color: '#94a3b8', lineHeight: 1.5 }}>
+              전자칠판 기기에 다운로드할 수업자료를 선택하세요.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+              {lessonMaterials.map((file) => (
+                <div
+                  key={file.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px 14px',
+                    borderRadius: '10px',
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1, paddingRight: '10px' }}>
+                    <span style={{ fontSize: '20px' }}>
+                      {file.mimeType?.includes('pdf') || file.name.toLowerCase().endsWith('.pdf') ? '📄' : '📁'}
+                    </span>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {file.name}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleDownloadMaterial(file);
+                      setIsMaterialModalOpen(false);
+                    }}
+                    style={{
+                      background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                      border: 'none',
+                      color: '#ffffff',
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>📥 다운로드</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginTop: '18px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setIsMaterialModalOpen(false)}
+                style={{
+                  background: '#21262d',
+                  border: '1px solid #30363d',
+                  color: '#c9d1d9',
+                  padding: '7px 16px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  cursor: 'pointer'
+                }}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

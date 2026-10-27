@@ -1252,17 +1252,39 @@ export default function App() {
     if (!targetItem) return;
 
     setIsProcessingAction(true);
+    const targetId = targetItem.folderId || targetItem.id;
     try {
+      // 1. QR 수업인 경우 Supabase 수업 세션 및 기록 완전 삭제 연동
+      if (supabase && isSupabaseConfigured) {
+        try {
+          await supabase.from('class_notes').delete().eq('lesson_id', targetId);
+          fetch(`${apiBase}/api/notes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'reset', lessonId: targetId })
+          }).catch(() => {});
+        } catch (sbErr) {
+          console.warn('Supabase 수업 세션 삭제 연동 오류:', sbErr);
+        }
+      }
+
+      // 2. 구글 드라이브 휴지통 이동
       await executeDriveAction({
         action: 'delete',
-        id: targetItem.id,
+        id: targetId,
         isFolder: targetItem.type === 'folder'
       });
-      showToast(`🗑️ '${targetItem.name}' 항목이 휴지통으로 이동되었습니다.`);
+
+      // 3. UI 및 목록 즉시 갱신
+      setItems(prev => prev.filter(i => (i.folderId || i.id) !== targetId));
+      setSelectedItemId(null);
+      showToast(`🗑️ '${targetItem.name.replace('[QR수업]', '').trim()}' 수업/항목이 휴지통으로 이동되었습니다.`);
       setActiveModal(null);
       setTargetItem(null);
       fetchDriveItems(currentFolder.id);
     } catch (err: any) {
+      console.error('삭제 오류:', err);
+      // 구글 드라이브 삭제에 실패했더라도 Supabase 레코드는 정리되었으므로 UI 안내
       showToast(`❌ 삭제 실패: ${err.message}`);
       if (err.message && (err.message.includes('지원되지 않는') || err.message.includes('DriveApp') || err.message.includes('인수: id') || err.message.includes('잘못된 인수'))) {
         setActiveModal('gas_guide');
@@ -2350,6 +2372,20 @@ export default function App() {
                                 >
                                   ▶️
                                 </button>
+                                {canEdit && (
+                                  <button 
+                                    className="gdrive-icon-btn"
+                                    style={{ width: '28px', height: '28px', fontSize: '13px', color: '#f87171' }}
+                                    title="수업 삭제"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setTargetItem(folder);
+                                      setActiveModal('delete');
+                                    }}
+                                  >
+                                    🗑️
+                                  </button>
+                                )}
                               </div>
                             ) : (
                               canEdit && (
@@ -2879,7 +2915,12 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
               {/* 옵션 1: 이전 기록 이어하기 */}
               <div
-                onClick={() => startQrLessonViewer(sessionPromptLesson, false)}
+                onClick={() => {
+                  const targetLesson = sessionPromptLesson;
+                  setActiveModal(null);
+                  setSessionPromptLesson(null);
+                  startQrLessonViewer(targetLesson, false);
+                }}
                 style={{
                   background: 'rgba(30, 41, 59, 0.7)',
                   border: '1.5px solid #3b82f6',
@@ -2909,9 +2950,10 @@ export default function App() {
               {/* 옵션 2: 새로 갱신하여 시작 */}
               <div
                 onClick={() => {
-                  if (window.confirm(`정말 이전 등록 내용(${existingSessionCount}건)을 모두 지우고 새로 수업을 시작하시겠습니까?\n새로운 반 학생들의 등록을 받습니다.`)) {
-                    startQrLessonViewer(sessionPromptLesson, true);
-                  }
+                  const targetLesson = sessionPromptLesson;
+                  setActiveModal(null);
+                  setSessionPromptLesson(null);
+                  startQrLessonViewer(targetLesson, true);
                 }}
                 style={{
                   background: 'rgba(30, 41, 59, 0.4)',

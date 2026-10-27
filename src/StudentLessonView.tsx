@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useHorizontalToolbarScroll } from './lib/scrollModule';
 import { useAppConfirm } from './lib/fullscreenModule';
 import { useFullscreen } from './modules/fullscreen';
-import { PwaInstallButton, PwaLaunchPromptModal, usePwaInstall } from './modules/pwa';
+import { PwaInstallButton, usePwaInstall } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import { useAppVersionCheck, VersionUpdateOverlay } from './modules/version';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
@@ -390,6 +390,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     enterFullscreen: requestFullscreenSafe,
     exitFullscreen: exitFullscreenSafe
   } = useFullscreen();
+
+  // 📺 앱 실행 시 자동 전체화면 진입 (묻지 않고 즉시 & 첫 화면 터치/클릭 시 100% 자동 실행)
+  useEffect(() => {
+    // 1차 시도: 마운트 즉시 전체화면 진입 시도
+    requestFullscreenSafe().catch(() => {});
+
+    // 2차 시도: 브라우저 보안 제약 해제를 위해 사용자 첫 화면 터치/클릭 시 자동 진입
+    const handleFirstInteraction = () => {
+      if (!document.fullscreenElement) {
+        requestFullscreenSafe().catch(() => {});
+      }
+    };
+
+    window.addEventListener('pointerdown', handleFirstInteraction, { once: true });
+    window.addEventListener('touchstart', handleFirstInteraction, { once: true });
+    window.addEventListener('click', handleFirstInteraction, { once: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', handleFirstInteraction);
+      window.removeEventListener('touchstart', handleFirstInteraction);
+      window.removeEventListener('click', handleFirstInteraction);
+    };
+  }, [requestFullscreenSafe]);
 
   // 📷 카메라 QR코드 스캐너 모달 상태 및 처리 액션
   const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
@@ -3601,9 +3624,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               >
                 ⚙️ 상세 설정
               </button>
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <PwaInstallButton style={{ width: '100%', justifyContent: 'center' }} />
-              </div>
+              {!isStandalone && (
+                <div style={{ display: 'flex', justifyContent: 'center' }}>
+                  <PwaInstallButton style={{ width: '100%', justifyContent: 'center' }} />
+                </div>
+              )}
             </div>
           </div>
 
@@ -5799,11 +5824,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       {/* 5-3. 전체화면을 파괴하지 않는 모듈화 인앱 확인 다이얼로그 (AppConfirmModal) */}
       {confirmModalElement}
 
-      {/* 5-4. 앱 실행 시 PWA 최적화 및 전체화면 바로 시작 안내 모달 (학생 확인 모달 닫힌 후) */}
-      {!isConfirmStudentOpen && !isChangingStudent && (
-        <PwaLaunchPromptModal onStartFullscreen={requestFullscreenSafe} />
-      )}
-
       {/* 5-5. 최신 배포 버전 감지 시 자동 업데이트 진행 오버레이 */}
       <VersionUpdateOverlay isOpen={isUpdating} newVersionTime={newVersionInfo?.buildTime} />
 
@@ -6063,8 +6083,27 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            const dlUrl = file.downloadUrl || `https://drive.google.com/uc?export=download&id=${file.id}`;
-                                            window.open(dlUrl, '_blank');
+                                            showToast(`📥 '${file.name}' 다운로드를 시작합니다...`);
+                                            const apiBase = typeof window !== 'undefined' && window.location.hostname.includes('github.io')
+                                              ? 'https://lbwtest.vercel.app'
+                                              : '';
+                                            const dlUrl = `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`;
+                                            try {
+                                              const link = document.createElement('a');
+                                              link.href = dlUrl;
+                                              link.setAttribute('download', file.name);
+                                              link.target = '_blank';
+                                              link.rel = 'noreferrer';
+                                              document.body.appendChild(link);
+                                              link.click();
+                                              setTimeout(() => {
+                                                try {
+                                                  if (document.body.contains(link)) document.body.removeChild(link);
+                                                } catch {}
+                                              }, 500);
+                                            } catch {
+                                              window.open(dlUrl, '_blank');
+                                            }
                                           }}
                                           style={{
                                             background: '#1f2937',

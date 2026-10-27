@@ -2,6 +2,8 @@
  * usePwaInstall.ts
  * ============================================================================
  * PWA 설치 상태 감지 및 원클릭 설치 훅
+ * - 이미 앱으로 설치되어 실행 중(Standalone/Fullscreen/Minimal-ui)일 때는 완전히 숨김
+ * - 일반 웹 브라우저에서 실행 중일 때만 설치 버튼 노출
  * ============================================================================
  */
 
@@ -13,8 +15,12 @@ export function usePwaInstall() {
     if (typeof window === 'undefined') return false;
     return (
       window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches ||
+      window.matchMedia('(display-mode: minimal-ui)').matches ||
       (navigator as any).standalone === true ||
-      document.referrer.includes('android-app://')
+      document.referrer.includes('android-app://') ||
+      window.location.search.includes('source=pwa') ||
+      window.location.search.includes('mode=app')
     );
   });
   const [isIos, setIsIos] = useState<boolean>(false);
@@ -28,11 +34,17 @@ export function usePwaInstall() {
     setIsIos(isIosDevice);
 
     // Standalone 변경 감지 (미디어 쿼리 리스너)
-    const mediaQuery = window.matchMedia('(display-mode: standalone)');
-    const handleDisplayChange = (e: MediaQueryListEvent) => {
-      setIsStandalone(e.matches);
+    const mediaQueryStandalone = window.matchMedia('(display-mode: standalone)');
+    const mediaQueryFullscreen = window.matchMedia('(display-mode: fullscreen)');
+    const handleDisplayChange = () => {
+      setIsStandalone(
+        mediaQueryStandalone.matches ||
+        mediaQueryFullscreen.matches ||
+        (navigator as any).standalone === true
+      );
     };
-    mediaQuery.addEventListener('change', handleDisplayChange);
+    mediaQueryStandalone.addEventListener('change', handleDisplayChange);
+    mediaQueryFullscreen.addEventListener('change', handleDisplayChange);
 
     // Chrome, Android, Edge 전용 beforeinstallprompt 이벤트 캡처
     const handleBeforeInstallPrompt = (e: Event) => {
@@ -52,20 +64,21 @@ export function usePwaInstall() {
     window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
-      mediaQuery.removeEventListener('change', handleDisplayChange);
+      mediaQueryStandalone.removeEventListener('change', handleDisplayChange);
+      mediaQueryFullscreen.removeEventListener('change', handleDisplayChange);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
+  const canInstall = Boolean(deferredPrompt) || isIos;
+
   const promptInstall = useCallback(async (): Promise<boolean> => {
     if (!deferredPrompt) return false;
-
     try {
       deferredPrompt.prompt();
       const choiceResult = await deferredPrompt.userChoice;
       if (choiceResult.outcome === 'accepted') {
-        console.log('[PWA] 사용자가 앱 설치를 수락했습니다.');
         setDeferredPrompt(null);
         return true;
       }
@@ -77,7 +90,7 @@ export function usePwaInstall() {
 
   return {
     isStandalone,
-    canInstall: Boolean(deferredPrompt) || (isIos && !isStandalone),
+    canInstall,
     isIos,
     promptInstall
   };
