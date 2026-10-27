@@ -178,19 +178,7 @@ const IconFitWidth: React.FC<{ size?: number; color?: string }> = ({ size = 18, 
   </svg>
 );
 
-// 브라우저 새로고침(F5, 모바일 사파리 당겨서 리로드, 백그라운드 탭 리로드 등) 여부 정밀 감지 헬퍼
-const isPageReload = (): boolean => {
-  try {
-    const navEntries = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
-    if (navEntries && navEntries.length > 0) {
-      return navEntries[0].type === 'reload';
-    }
-    // eslint-disable-next-line deprecation/deprecation
-    return (performance as any)?.navigation?.type === 1;
-  } catch {
-    return false;
-  }
-};
+
 
 export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   lessonId,
@@ -434,7 +422,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [hasSavedNote, setHasSavedNote] = useState(false);
   const [lastSavedTimeStr, setLastSavedTimeStr] = useState<string>('');
-  const [recoveryPromptDraft, setRecoveryPromptDraft] = useState<any | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const isInitialMountRef = useRef<boolean>(true);
@@ -448,6 +435,19 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // --- 전자칠판 실시간 연결 및 화면 꺼짐 방지(WakeLock) 상태 ---
   const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
+
+  // 현재 연결된 수업 정보 및 등록 수업자료 다운로드 상태
+  const [activeLessonTitle, setActiveLessonTitle] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search);
+      const title = p.get('title');
+      if (title) return title;
+    }
+    return lessonTitle || '';
+  });
+  const [activeTeacherName, setActiveTeacherName] = useState<string>('');
+  const [connectedLessonFiles, setConnectedLessonFiles] = useState<Array<{ id: string; name: string; size?: string | number; mimeType?: string }>>([]);
+  const [isLessonMaterialsModalOpen, setIsLessonMaterialsModalOpen] = useState<boolean>(false);
 
   // --- 📡 선생님 수업 연결 모달 및 활성 목록 상태 ---
   const [isJoinLessonModalOpen, setIsJoinLessonModalOpen] = useState(false);
@@ -729,7 +729,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       // 드래프트 삭제
       const curStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
       clearStudentDraft(lessonId, curStudentId);
-      setRecoveryPromptDraft(null);
       setHasSavedNote(false);
       setLastSavedTimeStr('');
 
@@ -1934,41 +1933,40 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
   }, [strokes, textItems, fullPageBackground, embeddedImages, pages, currentPageIndex, orientation, studentInfo, lessonId]);
 
-  // [초기 마운트 시 복구 판별]
-  // 1) 새로고침(Reload)인 경우: 작업 중이던 필기를 100% 무조건 자동 복원! (작업 손실 원천 차단)
-  // 2) 신규 진입(Navigate, QR코드 첫 촬영)인 경우: 깨끗한 신규 A4 페이지로 시작하되,
-  //    최근 저장된 작업이 있으면 상단에 [필기 이어하기] 배너를 제공하여 학생이 선택 가능하게 배려
+  // [초기 마운트 시 복구 판별]: 해당 수업 필기가 있으면 번거로운 배너 없이 100% 즉시 자동 복원!
   useEffect(() => {
     try {
       const currentStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
       const loaded = loadStudentDraft(lessonId, currentStudentId);
-      const wasReload = isPageReload();
 
       if (loaded?.draft && Array.isArray(loaded.draft.pages) && loaded.draft.pages.length > 0) {
         const draft = loaded.draft;
-        if (wasReload) {
-          // 새로고침 시 무조건 즉시 자동 복원!
-          applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
-          const now = new Date(draft.timestamp || Date.now());
-          const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-          setLastSavedTimeStr(timeStr);
-          showToast('🔄 새로고침 후 작성 중이던 필기를 안전하게 복원했습니다.');
-          isInitialMountRef.current = false;
-          return;
-        } else {
-          // 새 QR 진입인 경우: 신규 깨끗한 A4 페이지로 열리되, 이전 필기 복구 안내 배너 표시
-          setRecoveryPromptDraft(draft);
-          setHasSavedNote(true);
-        }
+        applyLoadedPages(draft.pages, draft.currentPageIndex ?? 0, draft.orientation);
+        const now = new Date(draft.timestamp || Date.now());
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+        setLastSavedTimeStr(timeStr);
+        setHasSavedNote(true);
+        showToast('📂 작성 중이던 필기를 안전하게 불러왔습니다.');
+        isInitialMountRef.current = false;
+        return;
       }
 
-      // 레거시/개별 백업 확인 (설정 팝업용)
+      // 레거시/개별 백업 확인 및 복원
       const backupKey = getStudentBackupKey(lessonId, currentStudentId);
       const rawSaved = localStorage.getItem(backupKey) ||
                        localStorage.getItem(`lbw_lesson_${lessonId}_note_v2`) ||
                        localStorage.getItem(`lbw_lesson_${lessonId}_note`);
       if (rawSaved) {
         setHasSavedNote(true);
+        try {
+          const parsed = JSON.parse(rawSaved);
+          if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+            applyLoadedPages(parsed.pages, parsed.currentPageIndex ?? 0, parsed.orientation);
+            showToast('📂 보관된 필기를 자동으로 불러왔습니다.');
+            isInitialMountRef.current = false;
+            return;
+          }
+        } catch {}
       }
     } catch (e) {
       console.warn('Failed to inspect draft on mount:', e);
@@ -2025,7 +2023,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       localStorage.removeItem(`lbw_active_draft_${lessonId}_v3`);
       sessionStorage.removeItem(`lbw_session_draft_${lessonId}`);
     } catch {}
-    setRecoveryPromptDraft(null);
     setLastSavedTimeStr('');
     const newPage: LessonPage = {
       id: `page_${Date.now()}`,
@@ -2119,7 +2116,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // ==========================================================================
   // [전자칠판 실시간 연결 및 5초 주기 생존 핑 가동]
   // ==========================================================================
-  const handleConnectToBoard = async (targetLessonId?: string, targetTitle?: string) => {
+  const handleConnectToBoard = async (targetLessonId?: string, targetTitle?: string, targetFiles?: any[], targetTeacher?: string) => {
     if (!studentInfo || !studentInfo.name.trim()) {
       showToast('⚠️ 먼저 학번과 이름을 입력해주세요.');
       setIsChangingStudent(true);
@@ -2157,6 +2154,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     // 3. 전자칠판 실시간 채널 연결 및 5초 주기 핑 발송 자동 가동
     setIsConnectedToBoard(true);
+    if (currentTargetTitle) setActiveLessonTitle(currentTargetTitle);
+    if (targetTeacher) setActiveTeacherName(targetTeacher);
+    if (targetFiles && Array.isArray(targetFiles)) setConnectedLessonFiles(targetFiles);
+
     classroomRealtime.joinLesson(currentTargetId, undefined, 'student', studentInfo);
 
     setIsJoinLessonModalOpen(false);
@@ -2194,13 +2195,64 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [lessonId, lessonTitle]);
 
+  // 실시간 연결 시 활성 수업자료 및 선생님 정보 자동 동기화
+  useEffect(() => {
+    if (!isConnectedToBoard || !lessonId || lessonId.startsWith('student_note_')) return;
+
+    // 1. 활성 선생님 수업 목록에서 매칭 시도
+    classroomRealtime.fetchActiveTeacherLessons().then(teachers => {
+      setActiveTeachersList(teachers);
+      for (const t of teachers) {
+        const found = t.lessons.find(l => l.lessonId === lessonId || (activeLessonTitle && l.title === activeLessonTitle));
+        if (found) {
+          if (found.title) setActiveLessonTitle(found.title);
+          if (t.teacherName) setActiveTeacherName(t.teacherName);
+          if (found.pdfId) {
+            setLessonPdfInfo({ id: found.pdfId, name: found.pdfName || `${found.title}.pdf` });
+          }
+          if (found.attachedFiles && found.attachedFiles.length > 0) {
+            setConnectedLessonFiles(found.attachedFiles);
+          }
+          return;
+        }
+      }
+    }).catch(() => {});
+
+    // 2. 구글 드라이브 lesson_config.json 확인
+    (async () => {
+      try {
+        const apiBase = getApiBaseUrl();
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&fields=files(id,name)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+        const cRes = await fetch(directUrl);
+        if (cRes.ok) {
+          const cData = await cRes.json();
+          const cfgFile = (cData.files || [])[0];
+          if (cfgFile) {
+            const dlRes = await fetch(`${apiBase}/api/drive?action=download&fileId=${cfgFile.id}&fileName=lesson_config.json`);
+            if (dlRes.ok) {
+              const cfgJson = await dlRes.json();
+              if (cfgJson.attachedFiles && Array.isArray(cfgJson.attachedFiles) && cfgJson.attachedFiles.length > 0) {
+                setConnectedLessonFiles(cfgJson.attachedFiles);
+              }
+              if (cfgJson.pdfId && !lessonPdfInfo) {
+                setLessonPdfInfo({ id: cfgJson.pdfId, name: cfgJson.pdfName || `${cfgJson.title || '수업'}.pdf` });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('lesson_config.json sync warning:', err);
+      }
+    })();
+  }, [isConnectedToBoard, lessonId, activeLessonTitle]);
+
   // 수업 나가기 처리 (WakeLock 해제, 퇴장 신호 발송, 오프라인 모드 복귀)
   const handleExitLesson = async () => {
     if (isConnectedToBoard) {
       const ok = await confirm({
         title: '수업 연결 종료',
         message: '전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아가시겠습니까?\n(작성하신 필기는 기기에 안전하게 보존됩니다.)',
-        confirmText: '연결 해제',
+        confirmText: '오프라인 복귀',
         cancelText: '계속 수업하기',
         isDanger: true
       });
@@ -2218,6 +2270,12 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       classroomRealtime.leaveLesson(studentInfo || undefined);
       setIsConnectedToBoard(false);
       showToast('📓 전자칠판 연결이 해제되어 오프라인 공책 모드로 복귀했습니다.');
+
+      // 만약 URL 파라미터로 특정 수업에 진입했던 경우라면, 오프라인 메인으로 URL 갱신
+      if (typeof window !== 'undefined' && window.location.search.includes('lessonId=')) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+      return;
     }
 
     if (onExit) onExit();
@@ -2665,21 +2723,146 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </button>
       ) : (
         <div className="student-floating-toolbar-wrapper">
-          {canToolbarScrollLeft && (
-            <button
-              id="btn-toolbar-scroll-left"
-              type="button"
-              className="toolbar-scroll-hint-btn left"
-              onClick={() => scrollToolbarToLeft(140)}
-              title="도구 왼쪽으로 스크롤"
+          {/* 🌟 1. 수업 연결 시 툴바 바로 위에 배치되는 수업제목줄 */}
+          {isConnectedToBoard && (
+            <div
+              id="student-lesson-header-bar"
+              style={{
+                pointerEvents: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                padding: '6px 14px',
+                borderRadius: '9999px',
+                background: 'rgba(15, 23, 42, 0.94)',
+                backdropFilter: 'blur(16px)',
+                WebkitBackdropFilter: 'blur(16px)',
+                border: '1px solid rgba(56, 189, 248, 0.4)',
+                boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5), 0 0 14px rgba(56, 189, 248, 0.25)',
+                maxWidth: 'calc(100vw - 20px)',
+                boxSizing: 'border-box'
+              }}
             >
-              ◀
-            </button>
+              {/* 1-1. 연결 표시 & 수업 제목 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexShrink: 1 }}>
+                <span
+                  style={{
+                    width: '9px',
+                    height: '9px',
+                    borderRadius: '50%',
+                    background: '#22c55e',
+                    boxShadow: '0 0 10px #22c55e',
+                    display: 'inline-block',
+                    flexShrink: 0
+                  }}
+                />
+                <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#4ade80', whiteSpace: 'nowrap' }}>
+                  실시간 연결
+                </span>
+                <span style={{ color: 'rgba(255, 255, 255, 0.25)', fontSize: '11px' }}>|</span>
+                <span
+                  style={{
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    color: '#ffffff',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    maxWidth: '260px'
+                  }}
+                  title={activeLessonTitle || '실시간 수업'}
+                >
+                  {activeTeacherName ? `[${activeTeacherName}T] ` : ''}{activeLessonTitle || '실시간 수업'}
+                </span>
+              </div>
+
+              {/* 1-2. 수업자료다운로드 버튼 & 수업 나가기 버튼 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                <button
+                  id="btn-header-download-materials"
+                  type="button"
+                  onClick={() => setIsLessonMaterialsModalOpen(true)}
+                  style={{
+                    background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                    border: '1px solid #38bdf8',
+                    color: '#ffffff',
+                    padding: '4px 12px',
+                    borderRadius: '9999px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 2px 8px rgba(2, 132, 199, 0.35)',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="선생님이 등록한 공식 수업자료 다운로드"
+                >
+                  <span>📥</span>
+                  <span>수업자료 다운로드</span>
+                  {((lessonPdfInfo ? 1 : 0) + connectedLessonFiles.length) > 0 && (
+                    <span
+                      style={{
+                        fontSize: '10.5px',
+                        background: 'rgba(255, 255, 255, 0.25)',
+                        padding: '1px 6px',
+                        borderRadius: '10px',
+                        fontWeight: 800
+                      }}
+                    >
+                      {(lessonPdfInfo ? 1 : 0) + connectedLessonFiles.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  id="btn-header-exit-lesson"
+                  type="button"
+                  onClick={handleExitLesson}
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid rgba(239, 68, 68, 0.45)',
+                    color: '#fca5a5',
+                    padding: '4px 12px',
+                    borderRadius: '9999px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아갑니다"
+                >
+                  <span>🚪</span>
+                  <span>수업 나가기</span>
+                </button>
+              </div>
+            </div>
           )}
 
-          <div
-            id="student-main-toolbar"
-            ref={toolbarScrollRef}
+          {/* 2. 메인 플로팅 툴바 가로 컨테이너 */}
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', maxWidth: '100%', pointerEvents: 'none' }}>
+            {canToolbarScrollLeft && (
+              <button
+                id="btn-toolbar-scroll-left"
+                type="button"
+                className="toolbar-scroll-hint-btn left"
+                onClick={() => scrollToolbarToLeft(140)}
+                title="도구 왼쪽으로 스크롤"
+              >
+                ◀
+              </button>
+            )}
+
+            <div
+              id="student-main-toolbar"
+              ref={toolbarScrollRef}
             className="student-floating-toolbar student-toolbar"
             style={{
               position: 'relative',
@@ -3119,8 +3302,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             ▶
           </button>
         )}
-      </div>
-    )}
+          </div>
+        </div>
+      )}
 
       {/* ====================================================================
           [숨김 메뉴 팝오버] ≡ 스케치: "나머지 모두 여기에 정리"
@@ -3689,76 +3873,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </div>
       )}
 
-      {/* 로컬스토리지 백업 복원 배너 (클린 플로팅 디자인) */}
-      {recoveryPromptDraft && (
-        <div
-          id="banner-recovery-prompt"
-          style={{
-            position: 'absolute',
-            top: '64px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            zIndex: 1100,
-            background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98))',
-            border: '1px solid rgba(168, 85, 247, 0.6)',
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
-            borderRadius: '12px',
-            padding: '8px 16px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            backdropFilter: 'blur(8px)',
-            maxWidth: 'calc(100vw - 20px)'
-          }}
-        >
-          <div style={{ fontSize: '12.5px', color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span>💡</span>
-            <span>이전에 작성하던 필기(총 {recoveryPromptDraft.pages?.length || 1}쪽)가 보관되어 있습니다.</span>
-          </div>
-          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-            <button
-              id="btn-confirm-recovery"
-              type="button"
-              onClick={() => {
-                applyLoadedPages(recoveryPromptDraft.pages, recoveryPromptDraft.currentPageIndex ?? 0, recoveryPromptDraft.orientation);
-                setRecoveryPromptDraft(null);
-                showToast('📂 이전 필기 내용을 불러왔습니다.');
-              }}
-              style={{
-                background: '#8b5cf6',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '5px 12px',
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              필기 이어하기
-            </button>
-            <button
-              id="btn-dismiss-recovery"
-              type="button"
-              onClick={() => {
-                setRecoveryPromptDraft(null);
-                showToast('✨ 새 A4 공책으로 시작합니다.');
-              }}
-              style={{
-                background: 'rgba(255, 255, 255, 0.1)',
-                color: '#94a3b8',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                borderRadius: '6px',
-                padding: '5px 9px',
-                fontSize: '12px',
-                cursor: 'pointer'
-              }}
-            >
-              새로 시작
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {/* ====================================================================
           플로팅 툴 팝오버 (툴바 바깥 렌더링으로 클리핑 방지)
@@ -5814,6 +5929,232 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         )}
       </ModularModal>
 
+      {/* 🌟 5-1-B. 본 수업 공식 등록 수업자료 다운로드 모달 (ModularModal) */}
+      <ModularModal
+        isOpen={isLessonMaterialsModalOpen}
+        onClose={() => setIsLessonMaterialsModalOpen(false)}
+        maxWidth="540px"
+        zIndex={10000}
+        showCloseButton={true}
+      >
+        <div>
+          {/* 모달 헤더 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+            <div
+              style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '12px',
+                background: 'rgba(56, 189, 248, 0.15)',
+                border: '1px solid rgba(56, 189, 248, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '22px'
+              }}
+            >
+              📥
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#ffffff' }}>
+                수업자료 다운로드
+              </h3>
+              <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#94a3b8' }}>
+                {activeTeacherName ? `${activeTeacherName} 선생님 • ` : ''}{activeLessonTitle || '실시간 수업'}
+              </p>
+            </div>
+          </div>
+
+          {/* 안내 배너 */}
+          <div
+            style={{
+              background: 'rgba(56, 189, 248, 0.08)',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              borderRadius: '10px',
+              padding: '10px 14px',
+              marginBottom: '14px',
+              fontSize: '12px',
+              color: '#bae6fd',
+              lineHeight: 1.5
+            }}
+          >
+            선생님이 본 수업에 공식 등록하신 학습 자료입니다. 기기에 직접 저장하거나 공책 배경으로 바로 넣어 필기할 수 있습니다.
+          </div>
+
+          {/* 자료 목록 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '340px', overflowY: 'auto' }}>
+            {(() => {
+              const allMaterials: Array<{ id: string; name: string; size?: string | number; mimeType?: string; isPrimaryPdf?: boolean }> = [];
+              if (lessonPdfInfo && lessonPdfInfo.id) {
+                allMaterials.push({
+                  id: lessonPdfInfo.id,
+                  name: lessonPdfInfo.name,
+                  mimeType: 'application/pdf',
+                  isPrimaryPdf: true
+                });
+              }
+              if (connectedLessonFiles && connectedLessonFiles.length > 0) {
+                connectedLessonFiles.forEach(f => {
+                  if (f && f.id && !allMaterials.some(m => m.id === f.id)) {
+                    allMaterials.push({ ...f, isPrimaryPdf: false });
+                  }
+                });
+              }
+
+              if (allMaterials.length === 0) {
+                return (
+                  <div style={{ padding: '36px 16px', textAlign: 'center', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '12px', border: '1px dashed #30363d' }}>
+                    <span style={{ fontSize: '30px', display: 'block', marginBottom: '8px' }}>📂</span>
+                    <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
+                      본 수업에 등록된 수업자료가 없습니다.
+                    </p>
+                    <p style={{ margin: 0, fontSize: '12px', color: '#8b949e' }}>
+                      선생님이 수업 자료를 등록하시면 여기에 자동으로 표시됩니다.
+                    </p>
+                  </div>
+                );
+              }
+
+              return allMaterials.map(mat => {
+                const apiBase = getApiBaseUrl();
+                const dlUrl = `${apiBase}/api/drive?action=download&fileId=${mat.id}&fileName=${encodeURIComponent(mat.name)}`;
+                const viewUrl = `https://drive.google.com/file/d/${mat.id}/view?usp=sharing`;
+
+                return (
+                  <div
+                    key={mat.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '10px 14px',
+                      borderRadius: '10px',
+                      background: 'rgba(255, 255, 255, 0.04)',
+                      border: '1px solid rgba(255, 255, 255, 0.08)',
+                      gap: '10px'
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '15px' }}>{mat.mimeType?.includes('pdf') || mat.name.endsWith('.pdf') ? '📄' : '📁'}</span>
+                        <span style={{ fontSize: '13.5px', fontWeight: 700, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {mat.name}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
+                        <span style={{ fontSize: '10.5px', background: mat.isPrimaryPdf ? 'rgba(56, 189, 248, 0.2)' : 'rgba(168, 85, 247, 0.2)', color: mat.isPrimaryPdf ? '#7dd3fc' : '#c084fc', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                          {mat.isPrimaryPdf ? '📌 대표 학습지' : '📎 첨부 자료'}
+                        </span>
+                        {mat.size && (
+                          <span style={{ fontSize: '11px', color: '#64748b' }}>
+                            {formatBytes(mat.size)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      {/* 직접 다운로드 */}
+                      <a
+                        href={dlUrl}
+                        download={mat.name}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                          border: '1px solid #38bdf8',
+                          color: '#ffffff',
+                          padding: '6px 12px',
+                          borderRadius: '7px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          textDecoration: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          boxShadow: '0 2px 6px rgba(2, 132, 199, 0.3)'
+                        }}
+                        title={`기기에 '${mat.name}' 다운로드`}
+                      >
+                        <span>📥</span> 다운로드
+                      </a>
+
+                      {/* PDF인 경우 공책에 바로 넣기 버튼 제공 */}
+                      {(mat.mimeType?.includes('pdf') || mat.name.endsWith('.pdf')) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsLessonMaterialsModalOpen(false);
+                            setLessonPdfInfo({ id: mat.id, name: mat.name });
+                            setIsLessonPdfPromptOpen(true);
+                          }}
+                          style={{
+                            background: 'rgba(99, 102, 241, 0.15)',
+                            border: '1px solid rgba(99, 102, 241, 0.35)',
+                            color: '#a5b4fc',
+                            padding: '6px 10px',
+                            borderRadius: '7px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                          title="공책 배경으로 일괄 삽입하여 필기 시작"
+                        >
+                          <span>📑</span> 공책에 넣기
+                        </button>
+                      )}
+
+                      {/* 미리보기 */}
+                      <button
+                        type="button"
+                        onClick={() => window.open(viewUrl, '_blank', 'noopener,noreferrer')}
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.05)',
+                          border: '1px solid #30363d',
+                          color: '#c9d1d9',
+                          padding: '6px 8px',
+                          borderRadius: '7px',
+                          fontSize: '11.5px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                        title="새 창에서 미리보기"
+                      >
+                        👁️
+                      </button>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          {/* 모달 하단 닫기 */}
+          <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={() => setIsLessonMaterialsModalOpen(false)}
+              style={{
+                background: '#21262d',
+                border: '1px solid #30363d',
+                color: '#c9d1d9',
+                padding: '7px 16px',
+                borderRadius: '8px',
+                fontSize: '12.5px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              닫기
+            </button>
+          </div>
+        </div>
+      </ModularModal>
+
       {/* 5-2. 카메라 기반 전자칠판 QR코드 스캐너 모달 */}
       <QrScannerModal
         isOpen={isQrScannerOpen}
@@ -6014,7 +6355,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                                   {isLive ? (
                                     <button
                                       type="button"
-                                      onClick={() => handleConnectToBoard(lesson.lessonId, lesson.title)}
+                                      onClick={() => handleConnectToBoard(lesson.lessonId, lesson.title, lesson.attachedFiles, teacher.teacherName)}
                                       style={{
                                         background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
                                         border: '1px solid #34d399',
