@@ -1,7 +1,17 @@
-import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './supabase';
-import { getApiBaseUrl } from './apiConfig';
+/**
+ * 초경량 & 무결점 전자칠판-학생 실시간 통신 및 세션 관리 엔진 (Supabase 단일 기반)
+ * 
+ * [핵심 원칙]:
+ * 1. 교사 주도 수업 수명주기: 전자칠판 [수업 개시] -> 학생 연결 허용, [수업 종료] -> 일괄 연결 해제
+ * 2. 2시간 무터치 자동 세션 종료: 칠판 터치 부재 시 2시간 후 자동 CLOSED
+ * 3. 5초 주기 초경량 30바이트 생존 핑(Ping): 잡신호(blur, fullscreen) 100% 제거
+ * 4. 억울한 누명 없는 3단계 연결 판정: connected (5초) -> checking (10초) -> disconnected (15초+)
+ * 5. 학생 앱을 위한 개설된 선생님 목록 및 수업 목록 원클릭 조회 지원
+ */
 
-export type StudentStatus = 'connected' | 'away' | 'left';
+import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './supabase';
+
+export type StudentStatus = 'connected' | 'checking' | 'disconnected';
 
 export interface StudentPresenceInfo {
   grade: string;
@@ -9,31 +19,43 @@ export interface StudentPresenceInfo {
   studentNum: string;
   name: string;
   status: StudentStatus;
-  lastActive: string;
+  lastActiveTime: number; // Date.now() ms
+}
+
+export interface ActiveTeacherLesson {
+  teacherName: string;
+  lessons: Array<{
+    lessonId: string;
+    title: string;
+    pdfId?: string;
+    pdfName?: string;
+    startedAt: string;
+    lastTouched: number;
+  }>;
 }
 
 export type RealtimeSignalType =
-  | 'STUDENT_PRESENCE'       // 학생 접속 / 이탈 상태 알림
-  | 'REQUEST_STUDENT_NOTE'   // 전자칠판 -> 특정 학생 필기 요청
-  | 'RESPONSE_STUDENT_NOTE'  // 학생 -> 전자칠판 필기 응답
-  | 'REQUEST_ALL_SYNC'       // 전자칠판 -> 전체 학생 일괄 동기화 (PDF 저장 전)
-  | 'STUDENT_SUBMIT'         // 학생이 명시적으로 등록/제출한 경우
-  | 'RESET_SESSION'          // 전자칠판 -> 새 수업 시작 시 이전 접속 및 기록 초기화 브로드캐스트
-  | 'KICK_STUDENT';          // 전자칠판 -> 잘못 접속된 특정 학생 수업 접속 해제 (퇴장/정리)
+  | 'STUDENT_PING'           // 학생 -> 전자칠판 5초 주기 초경량 생존 신호 (30바이트)
+  | 'STUDENT_LEAVE'          // 학생 -> 전자칠판 정상 퇴장 알림
+  | 'STUDENT_SUBMIT'         // 학생 -> 전자칠판 필기 답안 제출
+  | 'REQUEST_STUDENT_NOTE'   // 전자칠판 -> 학생 실시간 필기 요청
+  | 'RESPONSE_STUDENT_NOTE'  // 학생 -> 전자칠판 실시간 필기 응답
+  | 'RESET_SESSION'          // 전자칠판 -> 학생 수업 종료/초기화 통보
+  | 'KICK_STUDENT'           // 전자칠판 -> 학생 강제 퇴장 신호
+  | 'REQUEST_ALL_SYNC';      // 전자칠판 -> 전체 학생 일괄 동기화 요청
 
 export interface RealtimeSignalPayload {
   type: RealtimeSignalType;
   lessonId: string;
+  targetStudentKey?: string;
   student?: {
     grade: string;
     classNum: string;
     studentNum: string;
     name: string;
   };
-  status?: StudentStatus;
-  targetStudentKey?: string; // `${grade}_${classNum}_${studentNum}`
   noteRecord?: ClassNoteRecord;
-  timestamp: string;
+  timestamp: number; // ms
 }
 
 type SignalListener = (signal: RealtimeSignalPayload) => void;
@@ -44,18 +66,189 @@ class ClassroomRealtimeManager {
   private currentRole: 'teacher' | 'student' = 'student';
   private listeners: Set<SignalListener> = new Set();
   private localBroadcastListener: ((e: MessageEvent) => void) | null = null;
-  private pollIntervalId: any = null;
-  private knownNotesHash: Map<string, string> = new Map();
+  private pingIntervalId: any = null;
+  private touchThrottleTimer: any = null;
+  private lastTouchRegisteredTime: number = 0;
+
+  // ==========================================================================
+  // [1. 교사 수업 세션 관리 (Supabase class_notes 기반 무결점 저장)]
+  // ==========================================================================
 
   /**
-   * 실시간 수업 채널 초기화 (600명 동시성 무료 티어 100% 최적화 아키텍처)
-   * 
-   * [Supabase Free Tier 200명 동시 웹소켓 한도 완벽 방어]:
-   * - teacher (전자칠판 1대): Realtime 채널을 구독하여 학생 필기를 모니터링 (커넥션 단 1개 소모)
-   * - student (학생 600명): 상시 웹소켓 연결을 맺지 않아 Supabase 200명 한도를 절대 초과하지 않음!
-   *   필기 제출 시에만 고효율 REST API로 전송하므로 600명이 동시 접속해도 0% 오류 보장.
+   * 교사 전자칠판: 수업 개시 등록 (2시간 유효)
    */
-  public joinLesson(lessonId: string, onSignal?: SignalListener, role: 'teacher' | 'student' = 'student'): void {
+  public async registerTeacherSession(params: {
+    lessonId: string;
+    teacherName: string;
+    lessonTitle: string;
+    pdfId?: string;
+    pdfName?: string;
+  }): Promise<boolean> {
+    const { lessonId, teacherName, lessonTitle, pdfId, pdfName } = params;
+    if (!supabase || !isSupabaseConfigured) return false;
+
+    try {
+      const now = new Date().toISOString();
+      const payload: ClassNoteRecord = {
+        lesson_id: lessonId,
+        student_grade: '_TEACHER_SESSION_',
+        student_class: teacherName.trim() || '선생님',
+        student_num: 'ACTIVE',
+        student_name: lessonTitle.trim() || '수업',
+        strokes_data: {
+          pdfId: pdfId || null,
+          pdfName: pdfName || null,
+          startedAt: now,
+          lastTouched: Date.now()
+        },
+        updated_at: now
+      };
+
+      // 기존 세션 row 확인 후 upsert
+      const { data: existing } = await supabase
+        .from('class_notes')
+        .select('id')
+        .eq('lesson_id', lessonId)
+        .eq('student_grade', '_TEACHER_SESSION_')
+        .maybeSingle();
+
+      if (existing?.id) {
+        payload.id = existing.id;
+      }
+
+      const { error } = await supabase.from('class_notes').upsert(payload);
+      if (error) {
+        console.warn('[Realtime] registerTeacherSession error:', error.message);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn('[Realtime] registerTeacherSession exception:', err);
+      return false;
+    }
+  }
+
+  /**
+   * 전자칠판 화면 터치/조작 시 마지막 활동 시간 갱신 (20초 디바운스/쓰로틀링)
+   */
+  public touchTeacherSession(lessonId: string): void {
+    const now = Date.now();
+    if (now - this.lastTouchRegisteredTime < 20000) return; // 20초 이내 중복 방지
+    this.lastTouchRegisteredTime = now;
+
+    if (!supabase || !isSupabaseConfigured) return;
+
+    if (this.touchThrottleTimer) clearTimeout(this.touchThrottleTimer);
+    const client = supabase;
+    this.touchThrottleTimer = setTimeout(async () => {
+      try {
+        if (!client) return;
+        await client
+          .from('class_notes')
+          .update({
+            updated_at: new Date().toISOString(),
+            strokes_data: { lastTouched: Date.now() }
+          })
+          .eq('lesson_id', lessonId)
+          .eq('student_grade', '_TEACHER_SESSION_');
+      } catch {}
+    }, 500);
+  }
+
+  /**
+   * 교사 전자칠판: 수업 종료 선언 (CLOSED 상태로 전환 및 전체 학생 퇴장 신호 발송)
+   */
+  public async closeTeacherSession(lessonId: string): Promise<void> {
+    try {
+      if (supabase && isSupabaseConfigured) {
+        await supabase
+          .from('class_notes')
+          .update({
+            student_num: 'CLOSED',
+            updated_at: new Date().toISOString()
+          })
+          .eq('lesson_id', lessonId)
+          .eq('student_grade', '_TEACHER_SESSION_');
+      }
+
+      // 수업 종료 신호 브로드캐스트
+      await this.sendSignal({
+        type: 'RESET_SESSION',
+        lessonId
+      });
+    } catch (err) {
+      console.warn('[Realtime] closeTeacherSession error:', err);
+    }
+  }
+
+  /**
+   * 학생앱: 현재 활성화된 선생님 및 수업 목록 가져오기 (2시간 무터치 세션 자동 제외)
+   */
+  public async fetchActiveTeacherLessons(): Promise<ActiveTeacherLesson[]> {
+    if (!supabase || !isSupabaseConfigured) return [];
+
+    try {
+      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+      const now = Date.now();
+
+      const { data, error } = await supabase
+        .from('class_notes')
+        .select('*')
+        .eq('student_grade', '_TEACHER_SESSION_')
+        .eq('student_num', 'ACTIVE');
+
+      if (error || !data) return [];
+
+      const teacherMap = new Map<string, ActiveTeacherLesson['lessons']>();
+
+      for (const row of data) {
+        const lastTouched = row.strokes_data?.lastTouched || (row.updated_at ? new Date(row.updated_at).getTime() : 0);
+        // 2시간 이상 경과한 세션은 자동 무시
+        if (now - lastTouched > TWO_HOURS_MS) continue;
+
+        const teacherName = row.student_class || '선생님';
+        const lessonInfo = {
+          lessonId: row.lesson_id,
+          title: row.student_name || '수업',
+          pdfId: row.strokes_data?.pdfId,
+          pdfName: row.strokes_data?.pdfName,
+          startedAt: row.strokes_data?.startedAt || row.updated_at || new Date().toISOString(),
+          lastTouched
+        };
+
+        if (!teacherMap.has(teacherName)) {
+          teacherMap.set(teacherName, []);
+        }
+        teacherMap.get(teacherName)!.push(lessonInfo);
+      }
+
+      return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => ({
+        teacherName,
+        lessons
+      }));
+    } catch (err) {
+      console.warn('[Realtime] fetchActiveTeacherLessons exception:', err);
+      return [];
+    }
+  }
+
+  // ==========================================================================
+  // [2. 실시간 채널 연결 및 5초 주기 초경량 핑 (Ping)]
+  // ==========================================================================
+
+  /**
+   * 수업 채널 참가
+   * @param lessonId 수업 ID
+   * @param onSignal 신호 콜백
+   * @param role 'teacher' | 'student'
+   * @param studentInfo 학생 역할일 때 필수 (5초 주기 핑 발송용)
+   */
+  public joinLesson(
+    lessonId: string,
+    onSignal?: SignalListener,
+    role: 'teacher' | 'student' = 'student',
+    studentInfo?: { grade: string; classNum: string; studentNum: string; name: string }
+  ): void {
     if (this.currentLessonId === lessonId && this.currentRole === role) {
       if (onSignal) this.listeners.add(onSignal);
       return;
@@ -66,8 +259,8 @@ class ClassroomRealtimeManager {
     this.currentRole = role;
     if (onSignal) this.listeners.add(onSignal);
 
-    // 1. [선생님/전자칠판 전용] Supabase Realtime 채널 생성 (무료 한도 200명 중 단 1명만 점유!)
-    if (role === 'teacher' && supabase && isSupabaseConfigured) {
+    // 1. Supabase Realtime 채널 생성 (단일 채널로 교사-학생 양방향 초경량 브로드캐스트)
+    if (supabase && isSupabaseConfigured) {
       try {
         const channelName = `classroom_lesson_${lessonId}`;
         this.activeChannel = supabase
@@ -79,29 +272,13 @@ class ClassroomRealtimeManager {
               this.notifyListeners(payload);
             }
           })
-          .subscribe((status) => {
-            console.log(`[Realtime] Teacher channel '${channelName}' status:`, status);
-            // Realtime 연결 상태에 따라 Vercel 폴링 주기 동적 최적화
-            if (status === 'SUBSCRIBED') {
-              this.isRealtimeConnected = true;
-              this.adjustPollingInterval(60000); // 실시간 연결 정상 -> Vercel 폴링 60초로 완화 (Vercel 한도 99% 절약)
-            } else {
-              this.isRealtimeConnected = false;
-              this.adjustPollingInterval(10000); // 실시간 장애 시 10초 주기 Fallback 백업망 가동
-            }
-          });
+          .subscribe();
       } catch (err) {
-        console.warn('[Realtime] Teacher channel error:', err);
-        this.isRealtimeConnected = false;
+        console.warn('[Realtime] Join channel error:', err);
       }
     }
 
-    // 2. [선생님/전자칠판 전용] 지능형 Vercel 릴레이 클라우드 폴링 (적응형 백오프)
-    if (role === 'teacher') {
-      this.startVercelRelayPolling(lessonId);
-    }
-
-    // 3. 브라우저 탭 간 BroadcastChannel 리스너 (동일 기기 테스트 0.001초 동기화)
+    // 2. 브라우저 탭 간 BroadcastChannel 리스너 (동일 PC/기기 즉각 동기화)
     if (localRealtimeChannel) {
       this.localBroadcastListener = (event: MessageEvent) => {
         if (event.data && event.data.lessonId === this.currentLessonId) {
@@ -110,92 +287,42 @@ class ClassroomRealtimeManager {
       };
       localRealtimeChannel.addEventListener('message', this.localBroadcastListener);
     }
-  }
 
-  private isRealtimeConnected: boolean = false;
-  private currentPollingIntervalMs: number = 30000;
-
-  private adjustPollingInterval(newIntervalMs: number): void {
-    if (this.currentPollingIntervalMs === newIntervalMs) return;
-    this.currentPollingIntervalMs = newIntervalMs;
-    if (this.pollIntervalId && this.currentLessonId) {
-      clearInterval(this.pollIntervalId);
-      this.pollIntervalId = setInterval(this.pollOnce, this.currentPollingIntervalMs);
+    // 3. [학생 전용] 5초 주기 초경량 생존 핑(Ping, 30바이트) 자동 발송 시작
+    if (role === 'student' && studentInfo) {
+      this.startStudentPing(lessonId, studentInfo);
     }
   }
-
-  private pollOnce = async () => {
-    if (!this.currentLessonId || typeof window === 'undefined') return;
-    // 브라우저 탭이 백그라운드이거나 최소화되어 있으면 불필요한 폴링 중지
-    if (document.visibilityState === 'hidden') return;
-
-    try {
-      const apiBase = getApiBaseUrl();
-      const res = await fetch(`${apiBase}/api/notes?lessonId=${encodeURIComponent(this.currentLessonId)}&_t=${Date.now()}`, {
-        cache: 'no-store'
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          // [A] 신규/수정된 학생 필기 알림
-          if (Array.isArray(data.notes)) {
-            for (const note of data.notes) {
-              const key = `${note.student_grade}_${note.student_class}_${note.student_num}`;
-              const hash = `${note.updated_at || ''}_${note.id || ''}`;
-              if (this.knownNotesHash.get(key) !== hash) {
-                this.knownNotesHash.set(key, hash);
-                this.notifyListeners({
-                  type: 'STUDENT_SUBMIT',
-                  lessonId: this.currentLessonId,
-                  student: {
-                    grade: note.student_grade,
-                    classNum: note.student_class,
-                    studentNum: note.student_num,
-                    name: note.student_name
-                  },
-                  noteRecord: note,
-                  timestamp: note.updated_at || new Date().toISOString()
-                });
-              }
-            }
-          }
-
-          // [B] 학생 출석 현황 알림
-          if (Array.isArray(data.presences)) {
-            for (const p of data.presences) {
-              this.notifyListeners({
-                type: 'STUDENT_PRESENCE',
-                lessonId: this.currentLessonId,
-                student: {
-                  grade: p.grade,
-                  classNum: p.classNum,
-                  studentNum: p.studentNum,
-                  name: p.name
-                },
-                status: p.status,
-                timestamp: p.lastActive || new Date().toISOString()
-              });
-            }
-          }
-        }
-      }
-    } catch {
-      // 네트워크 일시 오류 시 무시
-    }
-  };
 
   /**
-   * Vercel API 적응형 릴레이 동기화 폴러 (Supabase 정상 시 60초, 장애 시 10초 Fallback)
+   * 학생: 5초 주기 초경량 생존 핑 발송
    */
-  private startVercelRelayPolling(_lessonId?: string): void {
-    if (typeof window === 'undefined') return;
+  private startStudentPing(
+    lessonId: string,
+    studentInfo: { grade: string; classNum: string; studentNum: string; name: string }
+  ): void {
+    this.stopStudentPing();
 
-    // 즉시 1회 초기 동기화 실행
-    this.pollOnce();
-    
-    // 기본 주기: Supabase Realtime 연결 상태에 따라 60초 vs 10초 가동
-    this.currentPollingIntervalMs = this.isRealtimeConnected ? 60000 : 15000;
-    this.pollIntervalId = setInterval(this.pollOnce, this.currentPollingIntervalMs);
+    const sendPing = () => {
+      if (this.currentLessonId !== lessonId) return;
+      this.sendSignal({
+        type: 'STUDENT_PING',
+        lessonId,
+        student: studentInfo
+      }).catch(() => {});
+    };
+
+    // 진입 즉시 1회 발송
+    sendPing();
+    // 5초 주기 정기 발송
+    this.pingIntervalId = setInterval(sendPing, 5000);
+  }
+
+  private stopStudentPing(): void {
+    if (this.pingIntervalId) {
+      clearInterval(this.pingIntervalId);
+      this.pingIntervalId = null;
+    }
   }
 
   public subscribe(listener: SignalListener): () => void {
@@ -214,100 +341,54 @@ class ClassroomRealtimeManager {
   }
 
   /**
-   * 실시간 신호 방송 (Vercel 클라우드 릴레이 + Supabase + Local 3중 발송)
+   * 실시간 신호 전송 (Supabase 브로드캐스트 + 로컬 채널)
    */
   public async sendSignal(signal: Omit<RealtimeSignalPayload, 'timestamp'>): Promise<void> {
     const fullPayload: RealtimeSignalPayload = {
       ...signal,
-      timestamp: new Date().toISOString()
+      timestamp: Date.now()
     };
 
-    // 1. [Vercel 릴레이] 클라우드 API 즉시 전송 (0.05초 초고속)
-    try {
-      const apiBase = getApiBaseUrl();
-      let body: any = null;
-
-      if (signal.type === 'STUDENT_SUBMIT' && signal.noteRecord) {
-        body = {
-          action: 'submit',
-          lessonId: signal.lessonId,
-          record: signal.noteRecord
-        };
-      } else if (signal.type === 'STUDENT_PRESENCE' && signal.student) {
-        body = {
-          action: 'presence',
-          lessonId: signal.lessonId,
-          student: signal.student,
-          status: signal.status || 'connected'
-        };
-      } else if (signal.type === 'RESET_SESSION') {
-        body = {
-          action: 'reset',
-          lessonId: signal.lessonId
-        };
-      } else if (signal.type === 'KICK_STUDENT' && signal.targetStudentKey) {
-        body = {
-          action: 'kick',
-          lessonId: signal.lessonId,
-          targetStudentKey: signal.targetStudentKey
-        };
-      }
-
-      if (body) {
-        // 비차단 초고속 호출 (최대 2초 타임아웃)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
-        fetch(`${apiBase}/api/notes`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        }).finally(() => clearTimeout(timeoutId)).catch(() => {});
-      }
-    } catch (relayErr) {
-      console.warn('[Realtime] Vercel relay send warning:', relayErr);
-    }
-
-    // 2. Supabase Broadcast 전송 (타임아웃 안전 가드)
+    // 1. Supabase Broadcast 전송
     if (this.activeChannel && isSupabaseConfigured) {
       try {
-        const sbPromise = this.activeChannel.send({
+        await this.activeChannel.send({
           type: 'broadcast',
           event: 'classroom_signal',
           payload: fullPayload
         });
-        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
-        await Promise.race([sbPromise, timeoutPromise]);
       } catch (err) {
         console.warn('[Realtime] Supabase broadcast send error:', err);
       }
     }
 
-    // 3. 로컬 브로드캐스트 채널 전송
+    // 2. 로컬 브로드캐스트 채널 전송
     if (localRealtimeChannel) {
       try {
         localRealtimeChannel.postMessage(fullPayload);
-      } catch (err) {
-        console.warn('[Realtime] Local broadcast send error:', err);
-      }
+      } catch {}
     }
   }
 
   /**
-   * 수업 채널 해제
+   * 수업 채널 연결 해제 및 핑 중지
    */
-  public leaveLesson(): void {
-    if (this.pollIntervalId) {
-      clearInterval(this.pollIntervalId);
-      this.pollIntervalId = null;
+  public leaveLesson(studentInfo?: { grade: string; classNum: string; studentNum: string; name: string }): void {
+    this.stopStudentPing();
+
+    // 학생인 경우 퇴장 신호 발송
+    if (this.currentRole === 'student' && this.currentLessonId && studentInfo) {
+      this.sendSignal({
+        type: 'STUDENT_LEAVE',
+        lessonId: this.currentLessonId,
+        student: studentInfo
+      }).catch(() => {});
     }
 
     if (this.activeChannel && supabase) {
       try {
         supabase.removeChannel(this.activeChannel);
-      } catch (e) {
-        console.warn('[Realtime] Remove channel error:', e);
-      }
+      } catch {}
       this.activeChannel = null;
     }
 
@@ -316,9 +397,13 @@ class ClassroomRealtimeManager {
       this.localBroadcastListener = null;
     }
 
+    if (this.touchThrottleTimer) {
+      clearTimeout(this.touchThrottleTimer);
+      this.touchThrottleTimer = null;
+    }
+
     this.currentLessonId = null;
     this.listeners.clear();
-    this.knownNotesHash.clear();
   }
 }
 

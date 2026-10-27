@@ -681,3 +681,12 @@ export function setCurrentSession(session: UserSession | null): void {
     localStorage.removeItem(STORAGE_KEY_SESSION);
   }
 }
+
+/**
+ * 학생 저장 정보 및 세션 완전 초기화 (로그아웃용)
+ */
+export function clearSavedStudentInfo(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(STORAGE_KEY_SESSION);
+  localStorage.removeItem('lbw_student_info');
+}

@@ -26,7 +26,9 @@ interface PortalLoginViewProps {
 }
 
 export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalLoginViewProps) {
-  const [activeTab, setActiveTab] = useState<UserRole>('whiteboard');
+  // 기본 로그인 화면을 학생(student) 위주로 설정
+  const [activeTab, setActiveTab] = useState<UserRole>('student');
+  const [isStaffMenuOpen, setIsStaffMenuOpen] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // 📷 카메라 QR코드 스캐너 모달 상태
@@ -465,6 +467,152 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
           pointerEvents: 'none'
         }} />
 
+        {/* 우측 상단: 삼선(≡ 햄버거 메뉴) 교직원/관리자 숨김 메뉴 버튼 */}
+        <div style={{ position: 'absolute', top: '24px', right: '24px', zIndex: 100 }}>
+          <button
+            type="button"
+            onClick={() => setIsStaffMenuOpen(!isStaffMenuOpen)}
+            title="교직원 및 관리자 메뉴 (선생님/전자칠판/최고관리자)"
+            style={{
+              background: isStaffMenuOpen ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+              border: isStaffMenuOpen ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.15)',
+              borderRadius: '10px',
+              width: '40px',
+              height: '40px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: isStaffMenuOpen ? '#60a5fa' : '#ffffff',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+            }}
+          >
+            {/* 삼선(≡) 대표 아이콘 */}
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
+
+          {/* 삼선 숨김 메뉴 팝오버 */}
+          {isStaffMenuOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '48px',
+                right: 0,
+                background: 'rgba(18, 22, 30, 0.98)',
+                backdropFilter: 'blur(16px)',
+                WebkitBackdropFilter: 'blur(16px)',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                borderRadius: '14px',
+                padding: '8px',
+                boxShadow: '0 16px 36px rgba(0, 0, 0, 0.8)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                minWidth: '180px',
+                zIndex: 200
+              }}
+            >
+              <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600, padding: '4px 8px' }}>
+                교직원 및 관리자 모드
+              </div>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('teacher'); setIsStaffMenuOpen(false); }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  background: activeTab === 'teacher' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                  border: 'none',
+                  color: activeTab === 'teacher' ? '#60a5fa' : '#ffffff',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left'
+                }}
+                title="선생님 로그인: 내 수업 자료 관리 및 QR수업 개설"
+              >
+                <span>👨‍🏫</span> 선생님 로그인
+              </button>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('whiteboard'); setIsStaffMenuOpen(false); }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  background: activeTab === 'whiteboard' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                  border: 'none',
+                  color: activeTab === 'whiteboard' ? '#60a5fa' : '#ffffff',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left'
+                }}
+                title="전자칠판 로그인: 교실 실시간 대시보드"
+              >
+                <span>🖥️</span> 전자칠판 모드
+              </button>
+              <button
+                type="button"
+                onClick={() => { setActiveTab('admin'); setIsStaffMenuOpen(false); }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  background: activeTab === 'admin' ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                  border: 'none',
+                  color: activeTab === 'admin' ? '#60a5fa' : '#ffffff',
+                  padding: '8px 12px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left'
+                }}
+                title="최고관리자: API 설정 및 회원 관리"
+              >
+                <span>🛡️</span> 최고관리자
+              </button>
+              {activeTab !== 'student' && (
+                <>
+                  <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+                  <button
+                    type="button"
+                    onClick={() => { setActiveTab('student'); setIsStaffMenuOpen(false); }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      background: 'rgba(34, 197, 94, 0.15)',
+                      border: '1px solid rgba(34, 197, 94, 0.3)',
+                      color: '#4ade80',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      textAlign: 'left'
+                    }}
+                    title="기본 학생 필기 로그인 화면으로 복귀"
+                  >
+                    <span>🧑‍🎓</span> 학생 모드로 복귀
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* 서비스 타이틀 */}
         <div style={{ textAlign: 'center', marginBottom: '28px', position: 'relative' }}>
           <div style={{
@@ -481,65 +629,52 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
             marginBottom: '14px',
             transition: 'all 0.3s ease'
           }}>
-            🏫
+            {activeTab === 'student' ? '🧑‍🎓' : activeTab === 'teacher' ? '👨‍🏫' : activeTab === 'whiteboard' ? '🖥️' : '🛡️'}
           </div>
           <h1 style={{ fontSize: '22px', fontWeight: 700, margin: '0 0 6px 0', letterSpacing: '-0.02em', color: '#ffffff' }}>
-            스마트 전자칠판 포털
+            {activeTab === 'student' ? '스마트 학생 필기 포털' : activeTab === 'teacher' ? '선생님 수업 관리' : activeTab === 'whiteboard' ? '스마트 전자칠판' : '시스템 최고 관리자'}
           </h1>
           <p style={{ fontSize: '13px', color: isVercel ? '#888888' : '#94a3b8', margin: 0 }}>
-            원하시는 사용자 역할을 선택하여 로그인하세요
+            {activeTab === 'student'
+              ? '학번과 비밀번호를 입력하고 나만의 스마트 필기 공책을 시작하세요'
+              : '인증 비밀번호를 입력하여 관리 모드로 로그인하세요'}
           </p>
         </div>
 
-        {/* 4대 역할 탭 셀렉터 */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          background: themeStyles.tabContainerBg,
-          padding: '4px',
-          borderRadius: '14px',
-          border: themeStyles.tabContainerBorder,
-          marginBottom: '24px',
-          transition: 'all 0.3s ease'
-        }}>
-          {[
-            { role: 'whiteboard', label: '전자칠판', icon: '🖥️' },
-            { role: 'teacher', label: '선생님', icon: '👨‍🏫' },
-            { role: 'student', label: '학생', icon: '👨‍🎓' },
-            { role: 'admin', label: '관리자', icon: '🛡️' }
-          ].map(tab => {
-            const isActive = activeTab === tab.role;
-            return (
-              <button
-                key={tab.role}
-                type="button"
-                onClick={() => {
-                  setActiveTab(tab.role as UserRole);
-                  setErrorMsg(null);
-                  setSuccessMsg(null);
-                }}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  padding: '8px 4px',
-                  borderRadius: '10px',
-                  border: 'none',
-                  background: isActive ? themeStyles.tabActiveBg : 'transparent',
-                  color: isActive ? themeStyles.tabActiveColor : themeStyles.tabInactiveColor,
-                  fontSize: '11.5px',
-                  fontWeight: isActive ? 700 : 500,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-                  boxShadow: isActive ? themeStyles.tabActiveShadow : 'none'
-                }}
-              >
-                <span style={{ fontSize: '16px', marginBottom: '2px' }}>{tab.icon}</span>
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        {/* 교직원/관리자 모드 활성화 시 학생 모드 복귀 버튼 배너 */}
+        {activeTab !== 'student' && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            background: 'rgba(59, 130, 246, 0.12)',
+            border: '1px solid rgba(59, 130, 246, 0.3)',
+            borderRadius: '12px',
+            padding: '8px 14px',
+            marginBottom: '20px'
+          }}>
+            <span style={{ fontSize: '12.5px', color: '#93c5fd', fontWeight: 600 }}>
+              {activeTab === 'teacher' ? '👨‍🏫 선생님 모드' : activeTab === 'whiteboard' ? '🖥️ 전자칠판 모드' : '🛡️ 최고관리자 모드'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveTab('student')}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: 'none',
+                color: '#ffffff',
+                borderRadius: '6px',
+                padding: '4px 10px',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+              title="기본 학생 필기 모드로 돌아갑니다"
+            >
+              🧑‍🎓 학생 모드로 복귀
+            </button>
+          </div>
+        )}
 
         {/* 에러 / 성공 메시지 표시 */}
         {errorMsg && (

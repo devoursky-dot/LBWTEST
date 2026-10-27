@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
@@ -36,7 +36,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [studentUrl, setStudentUrl] = useState<string>('');
 
   // 실시간 학생 접속 및 제출 목록 상태
-  const [studentPresences, setStudentPresences] = useState<Map<string, StudentPresenceInfo>>(new Map());
+  const [_studentPresences, setStudentPresences] = useState<Map<string, StudentPresenceInfo>>(new Map());
   const [studentSubmissions, setStudentSubmissions] = useState<ClassNoteRecord[]>([]);
   const [selectedStudentNote, setSelectedStudentNote] = useState<ClassNoteRecord | null>(null);
   const [selectedStudentPageIdx, setSelectedStudentPageIdx] = useState<number>(0);
@@ -192,34 +192,114 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   }, [currentLessonId, initialClear]);
 
-  // 3. 실시간 신호 채널 구독 (전자칠판은 teacher 역할로 Supabase Realtime 채널 1개만 활성화)
+  // 4. 학생별 실시간 핑 상태 추적 Map: key -> { student, lastPingTime, status }
+  const [studentHeartbeats, setStudentHeartbeats] = useState<Map<string, {
+    grade: string;
+    classNum: string;
+    studentNum: string;
+    name: string;
+    lastPingTime: number;
+    status: 'connected' | 'checking' | 'disconnected';
+  }>>(new Map());
+
+  // 2시간 무터치 자동 종료 감지용 마지막 터치 시간 (ms)
+  const lastInteractionTimeRef = useRef<number>(Date.now());
+
+  // 화면 터치/클릭 발생 시 마지막 조작 시간 갱신 & Supabase 세션 터치
+  const handleUserInteraction = useCallback(() => {
+    lastInteractionTimeRef.current = Date.now();
+    classroomRealtime.touchTeacherSession(currentLessonId);
+  }, [currentLessonId]);
+
+  // 1초 주기로 학생 생존 핑 및 2시간 무터치 검사
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = Date.now();
+
+      // [A] 2시간(7200초) 무터치 시 자동 세션 종료
+      if (now - lastInteractionTimeRef.current > 2 * 60 * 60 * 1000) {
+        clearInterval(timer);
+        showToast('⚠️ 2시간 동안 조작이 없어 수업 세션이 자동으로 종료되었습니다.');
+        classroomRealtime.closeTeacherSession(currentLessonId);
+        onExit();
+        return;
+      }
+
+      // [B] 학생 5초 핑 상태 정밀 판정 (8초 이내: 정상, 8~15초: 확인 중, 15초 초과: 끊김)
+      setStudentHeartbeats((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+
+        for (const [key, info] of next.entries()) {
+          const diff = now - info.lastPingTime;
+          let newStatus = info.status;
+
+          if (diff <= 8000) {
+            newStatus = 'connected';
+          } else if (diff <= 15000) {
+            newStatus = 'checking';
+          } else {
+            newStatus = 'disconnected';
+          }
+
+          if (newStatus !== info.status) {
+            next.set(key, { ...info, status: newStatus });
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [currentLessonId, onExit]);
+
+  // 3. 실시간 신호 채널 구독 (Supabase Realtime)
   useEffect(() => {
     classroomRealtime.joinLesson(currentLessonId, undefined, 'teacher');
 
     const unsubscribe = classroomRealtime.subscribe((signal: RealtimeSignalPayload) => {
       if (signal.lessonId !== currentLessonId) return;
 
-      // [1] 학생 접속 상태 알림
-      if (signal.type === 'STUDENT_PRESENCE' && signal.student) {
+      // [1] 학생 5초 주기 생존 핑(PING) 수신
+      if (signal.type === 'STUDENT_PING' && signal.student) {
         const key = `${signal.student.grade}_${signal.student.classNum}_${signal.student.studentNum}`;
-        const newStatus = signal.status === 'left' ? 'left' : 'connected';
+        const now = Date.now();
 
-        setStudentPresences((prev) => {
+        setStudentHeartbeats((prev) => {
           const next = new Map(prev);
+          const wasExisting = next.has(key);
+          const prevStatus = next.get(key)?.status;
+
           next.set(key, {
             ...signal.student!,
-            status: newStatus,
-            lastActive: signal.timestamp
+            lastPingTime: now,
+            status: 'connected'
           });
+
+          // 처음 접속하거나 복귀했을 때만 토스트 알림 1회
+          if (!wasExisting || prevStatus === 'disconnected') {
+            showToast(`🟢 ${signal.student!.grade}-${signal.student!.classNum} ${signal.student!.name} 학생 접속됨`);
+          }
           return next;
         });
-
-        if (newStatus === 'connected') {
-          showToast(`🟢 ${signal.student.grade}-${signal.student.classNum} ${signal.student.name} 학생이 출석했습니다.`);
-        }
       }
 
-      // [2] 학생 필기 등록 / 제출
+      // [2] 학생 정상 퇴장(LEAVE) 수신
+      if (signal.type === 'STUDENT_LEAVE' && signal.student) {
+        const key = `${signal.student.grade}_${signal.student.classNum}_${signal.student.studentNum}`;
+        setStudentHeartbeats((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(key);
+          if (existing) {
+            next.set(key, { ...existing, status: 'disconnected' });
+          }
+          return next;
+        });
+        showToast(`🚪 ${signal.student.name} 학생 퇴장`);
+      }
+
+      // [3] 학생 필기 등록 / 제출
       if (signal.type === 'STUDENT_SUBMIT' && signal.noteRecord) {
         const record = signal.noteRecord;
         const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
@@ -235,17 +315,17 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           setSelectedStudentNote(record);
           setIsLoadingDetail(false);
         }
-        showToast(`📝 ${record.student_grade}-${record.student_class} ${record.student_name} 학생이 필기를 제출했습니다!`);
+        showToast(`📝 ${record.student_grade}-${record.student_class} ${record.student_name} 학생 답안 제출!`);
       }
 
-      // [3] 온디맨드 필기 응답 수신 (stale closure 방지: selectedStudentKeyRef 활용)
+      // [4] 온디맨드 필기 응답 수신
       if (signal.type === 'RESPONSE_STUDENT_NOTE' && signal.noteRecord) {
         const record = signal.noteRecord;
         const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
         if (selectedStudentKeyRef.current === recKey) {
           setSelectedStudentNote(record);
           setIsLoadingDetail(false);
-          showToast(`⚡ ${record.student_name} 학생의 최신 필기가 동기화되었습니다.`);
+          showToast(`⚡ ${record.student_name} 학생 최신 필기 동기화됨`);
         }
         setStudentSubmissions((prev) => {
           const filtered = prev.filter(p => !(
@@ -264,7 +344,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     };
   }, [currentLessonId]);
 
-  // 4. 통합 학생 목록 생성 (접속 정보 + 제출 정보 병합 후 [학번순] 정렬)
+  // 4. 통합 학생 목록 생성 (접속자 + 제출자 병합 후 [학번순] 정렬)
   const sortedStudentRoster = useMemo(() => {
     const studentMap = new Map<string, {
       key: string;
@@ -272,7 +352,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       classNum: string;
       studentNum: string;
       name: string;
-      status: 'connected' | 'away' | 'offline';
+      status: 'connected' | 'checking' | 'disconnected';
       submission?: ClassNoteRecord;
     }>();
 
@@ -285,40 +365,30 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         classNum: sub.student_class,
         studentNum: sub.student_num,
         name: sub.student_name,
-        status: 'offline',
+        status: 'disconnected',
         submission: sub
       });
     }
 
-    // 2) 실시간 접속자 상태 병합
-    for (const [key, presence] of studentPresences.entries()) {
-      if (presence.status === 'left') {
-        const existing = studentMap.get(key);
-        if (existing) existing.status = 'offline';
-        continue;
-      }
-
+    // 2) 실시간 핑 접속자 상태 병합
+    for (const [key, hb] of studentHeartbeats.entries()) {
       const existing = studentMap.get(key);
       if (existing) {
-        existing.status = presence.status;
-        existing.name = presence.name;
+        existing.status = hb.status;
+        existing.name = hb.name;
       } else {
-        const lastActiveTime = presence.lastActive ? new Date(presence.lastActive).getTime() : 0;
-        const isRecent = Date.now() - lastActiveTime < 120000;
-        if (presence.status === 'connected' && isRecent) {
-          studentMap.set(key, {
-            key,
-            grade: presence.grade,
-            classNum: presence.classNum,
-            studentNum: presence.studentNum,
-            name: presence.name,
-            status: 'connected'
-          });
-        }
+        studentMap.set(key, {
+          key,
+          grade: hb.grade,
+          classNum: hb.classNum,
+          studentNum: hb.studentNum,
+          name: hb.name,
+          status: hb.status
+        });
       }
     }
 
-    // 3) 학번순 엄격 자연 정렬 (학년 -> 반 -> 번호 오름차순, 1번~35번 완벽 보장)
+    // 3) 학번순 정렬
     const list = Array.from(studentMap.values());
     const parseNum = (val?: string) => {
       if (!val) return 999;
@@ -343,10 +413,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     });
 
     return list;
-  }, [studentSubmissions, studentPresences]);
+  }, [studentSubmissions, studentHeartbeats]);
 
   // 실시간 출석 카운트
-  const activeCount = sortedStudentRoster.filter(s => s.status === 'connected').length;
+  const activeCount = sortedStudentRoster.filter(s => s.status === 'connected' || s.status === 'checking').length;
 
   // 5. 학생 타일 클릭 시 온디맨드 필기 상세 열람
   const handleSelectStudent = async (studentItem: typeof sortedStudentRoster[0]) => {
@@ -584,6 +654,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   return (
     <div
       id="live-classroom-dashboard"
+      onPointerDown={handleUserInteraction}
+      onTouchStart={handleUserInteraction}
+      onClick={handleUserInteraction}
       style={{
         position: 'fixed',
         inset: 0,
@@ -899,25 +972,18 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           </button>
         )}
 
-        {/* 우측 메인 영역: 25명 한 화면 자동배치 그리드 */}
-        {(() => {
-          const totalStudents = sortedStudentRoster.length;
-          // 25명 기준 최적 자동 배치 그리드 열 및 행 계산 (5열 x 5행 = 25명 완벽 맞춤)
-          const autoCols = totalStudents <= 4 ? 4 : totalStudents <= 12 ? 4 : totalStudents <= 20 ? 5 : totalStudents <= 25 ? 5 : totalStudents <= 30 ? 6 : totalStudents <= 40 ? 7 : 8;
-          const autoRows = totalStudents <= 4 ? 4 : Math.max(1, Math.ceil(totalStudents / autoCols));
-
-          return (
-            <main
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                padding: '16px 24px',
-                overflow: viewMode === 'auto' ? 'hidden' : 'auto',
-                height: '100%',
-                boxSizing: 'border-box'
-              }}
-            >
+        {/* 우측 메인 영역: 30석 고정 타일 배치 그리드 */}
+        <main
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '16px 24px',
+            overflow: viewMode === 'auto' ? 'hidden' : 'auto',
+            height: '100%',
+            boxSizing: 'border-box'
+          }}
+        >
               {/* 타이틀 및 정렬 안내 바 */}
               <div
                 style={{
@@ -1008,208 +1074,146 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 </div>
               </div>
 
-              {/* 전체 학생 바둑판 타일 그리드 */}
-              {sortedStudentRoster.length === 0 ? (
-                <div
-                  style={{
-                    flex: 1,
-                    border: '2px dashed #30363d',
-                    borderRadius: '16px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#8b949e',
-                    padding: '40px'
-                  }}
-                >
-                  <span style={{ fontSize: '48px', marginBottom: '14px' }}>📱</span>
-                  <h3 style={{ fontSize: '18px', fontWeight: 600, color: '#ffffff', marginBottom: '8px' }}>
-                    아직 접속한 학생이 없습니다.
-                  </h3>
-                  <p style={{ fontSize: '14px', textAlign: 'center', lineHeight: 1.6 }}>
-                    좌측 QR코드로 학생들이 접속하고 <strong>[📡 전자칠판 연결]</strong>을 터치하면<br />
-                    이곳에 학생별 출석 카드와 필기 현황이 학번순으로 나타납니다.
-                  </p>
-                </div>
-              ) : (
-                <div
-                  style={
-                    viewMode === 'auto'
-                      ? {
-                          flex: 1,
-                          minHeight: 0,
-                          display: 'grid',
-                          gridTemplateColumns: `repeat(${autoCols}, minmax(0, 1fr))`,
-                          gridTemplateRows: `repeat(${autoRows}, minmax(0, 1fr))`,
-                          gap: '8px',
-                          height: '100%',
-                          overflow: 'hidden'
-                        }
-                      : {
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-                          gap: '12px',
-                          overflowY: 'auto',
-                          paddingBottom: '20px'
-                        }
-                  }
-                >
-                  {sortedStudentRoster.map((studentItem) => {
-                    const isOnline = studentItem.status === 'connected';
-                    const hasNote = Boolean(studentItem.submission);
+              {/* 30인 고정 타일 그리드 (화면 울렁임 0% 보장, 30명 초과 시 아래로 스크롤) */}
+              <div
+                style={{
+                  flex: 1,
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+                  gap: '10px',
+                  overflowY: 'auto',
+                  paddingRight: '4px',
+                  alignContent: 'start'
+                }}
+              >
+                {Array.from({ length: Math.max(30, sortedStudentRoster.length) }).map((_, seatIdx) => {
+                  const studentItem = sortedStudentRoster[seatIdx];
 
-                    let badgeBg = '#484f58';
-                    let badgeLabel = '미접속';
-                    let borderColor = '#30363d';
-                    let cardBg = '#161b22';
-
-                    if (isOnline) {
-                      badgeBg = '#238636';
-                      badgeLabel = '🟢 참여 중';
-                      borderColor = '#388bfd';
-                      cardBg = 'rgba(56, 139, 253, 0.12)';
-                    } else if (hasNote) {
-                      badgeBg = '#1f6feb';
-                      badgeLabel = '제출 완료';
-                    }
-
+                  // [A] 빈 자리 슬롯 (화면 울렁임 방지용 고정 자리)
+                  if (!studentItem) {
                     return (
                       <div
-                        key={studentItem.key}
-                        onClick={() => handleSelectStudent(studentItem)}
+                        key={`seat-empty-${seatIdx}`}
                         style={{
-                          background: cardBg,
-                          border: `1.5px solid ${borderColor}`,
+                          height: '92px',
+                          background: 'rgba(22, 27, 34, 0.4)',
+                          border: '1.5px dashed rgba(48, 54, 61, 0.7)',
                           borderRadius: '10px',
-                          padding: viewMode === 'auto' ? '6px 8px' : '14px 10px',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease',
-                          position: 'relative',
-                          boxShadow: isOnline ? '0 4px 14px rgba(56, 139, 253, 0.2)' : 'none',
-                          minHeight: 0,
-                          height: '100%',
-                          boxSizing: 'border-box'
+                          gap: '4px',
+                          color: '#484f58',
+                          userSelect: 'none'
                         }}
-                        title="클릭하여 학생 필기 원본을 전체화면으로 확인"
                       >
-                        {/* 좌측 상단 온라인 상태 닷 */}
+                        <span style={{ fontSize: '16px', opacity: 0.5 }}>🪑</span>
+                        <span style={{ fontSize: '11px', fontWeight: 600 }}>자리 {seatIdx + 1}</span>
+                      </div>
+                    );
+                  }
+
+                  // [B] 접속한 학생 자리 카드
+                  const isOnline = studentItem.status === 'connected';
+                  const isChecking = studentItem.status === 'checking';
+                  const hasNote = Boolean(studentItem.submission);
+
+                  let badgeBg = '#30363d';
+                  let badgeLabel = '미접속';
+                  let borderColor = '#30363d';
+                  let cardBg = '#161b22';
+
+                  if (isOnline) {
+                    badgeBg = '#238636';
+                    badgeLabel = '🟢 연결됨';
+                    borderColor = '#388bfd';
+                    cardBg = 'rgba(56, 139, 253, 0.12)';
+                  } else if (isChecking) {
+                    badgeBg = '#d29922';
+                    badgeLabel = '🟡 확인 중';
+                    borderColor = '#d29922';
+                    cardBg = 'rgba(210, 153, 34, 0.12)';
+                  } else if (hasNote) {
+                    badgeBg = '#1f6feb';
+                    badgeLabel = '제출 완료';
+                  }
+
+                  return (
+                    <div
+                      key={studentItem.key}
+                      onClick={() => handleSelectStudent(studentItem)}
+                      style={{
+                        height: '92px',
+                        background: cardBg,
+                        border: `1.5px solid ${borderColor}`,
+                        borderRadius: '10px',
+                        padding: '8px 10px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease',
+                        position: 'relative',
+                        boxShadow: isOnline ? '0 4px 14px rgba(56, 139, 253, 0.2)' : 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      title={`${studentItem.grade}학년 ${studentItem.classNum}반 ${studentItem.studentNum}번 ${studentItem.name} (클릭하여 필기 보기)`}
+                    >
+                      {/* 학생 접속 상태 뱃지 & 연결 해제 버튼 */}
+                      <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span
                           style={{
-                            position: 'absolute',
-                            top: '6px',
-                            left: '6px',
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            background: isOnline ? '#3fb950' : '#8b949e',
-                            boxShadow: isOnline ? '0 0 6px #3fb950' : 'none'
+                            fontSize: '9.5px',
+                            fontWeight: 700,
+                            padding: '1px 6px',
+                            borderRadius: '10px',
+                            background: badgeBg,
+                            color: '#ffffff'
                           }}
-                          title={isOnline ? '현재 실시간 참여 중' : '미접속'}
-                        />
-
-                        {/* 우측 상단 잘못 접속된 학생 삭제/해제 버튼 */}
+                        >
+                          {badgeLabel}
+                        </span>
                         <button
                           type="button"
-                          className="btn-disconnect-student"
-                          style={{
-                            position: 'absolute',
-                            top: '4px',
-                            right: '4px',
-                            width: viewMode === 'auto' ? '18px' : '22px',
-                            height: viewMode === 'auto' ? '18px' : '22px',
-                            borderRadius: '50%',
-                            background: 'rgba(239, 68, 68, 0.15)',
-                            color: '#f87171',
-                            border: '1px solid rgba(239, 68, 68, 0.35)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: viewMode === 'auto' ? '10px' : '12px',
-                            fontWeight: 700,
-                            lineHeight: 1,
-                            cursor: 'pointer',
-                            padding: 0,
-                            zIndex: 10,
-                            transition: 'all 0.15s ease'
-                          }}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDisconnectStudent(studentItem);
                           }}
-                          title="학생 접속 해제 및 칠판에서 삭제"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#484f58',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                            padding: '0 2px'
+                          }}
+                          title="학생 연결 끊기"
                         >
                           ✕
                         </button>
+                      </div>
 
-                        {/* 아이콘 + 학번 */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ fontSize: viewMode === 'auto' ? '18px' : '26px' }}>
-                            👨‍🎓
-                          </span>
-                          <span style={{ fontSize: viewMode === 'auto' ? '12px' : '13.5px', fontWeight: 700, color: '#93c5fd' }}>
-                            {studentItem.grade}-{studentItem.classNum} {studentItem.studentNum}번
-                          </span>
+                      {/* 학번 및 이름 */}
+                      <div style={{ textAlign: 'center', width: '100%', overflow: 'hidden' }}>
+                        <div style={{ fontSize: '11px', color: '#8b949e', fontWeight: 600 }}>
+                          {studentItem.grade}-{studentItem.classNum} {studentItem.studentNum}번
                         </div>
-
-                        {/* 학생 이름 */}
-                        <span
-                          style={{
-                            fontSize: viewMode === 'auto' ? '14px' : '15px',
-                            fontWeight: 800,
-                            color: '#ffffff',
-                            marginTop: '2px',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            maxWidth: '100%'
-                          }}
-                        >
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#f0f6fc', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                           {studentItem.name}
-                        </span>
-
-                        {/* 상태 라벨 뱃지 및 필기 여부 */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                          <span
-                            style={{
-                              fontSize: viewMode === 'auto' ? '9.5px' : '10.5px',
-                              fontWeight: 700,
-                              color: '#ffffff',
-                              background: badgeBg,
-                              padding: '1px 6px',
-                              borderRadius: '8px'
-                            }}
-                          >
-                            {badgeLabel}
-                          </span>
-                          {hasNote && (
-                            <span
-                              style={{
-                                fontSize: viewMode === 'auto' ? '9.5px' : '10.5px',
-                                color: '#67e8f9',
-                                background: 'rgba(6, 182, 212, 0.15)',
-                                border: '1px solid rgba(6, 182, 212, 0.3)',
-                                padding: '1px 5px',
-                                borderRadius: '8px',
-                                fontWeight: 700
-                              }}
-                            >
-                              📝 필기
-                            </span>
-                          )}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+
+                      {/* 필기 작성/제출 여부 */}
+                      <div style={{ fontSize: '10px', color: hasNote ? '#58a6ff' : '#8b949e' }}>
+                        {hasNote ? '📝 필기 있음' : '작성 중...'}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </main>
-          );
-        })()}
       </div>
 
       {/* 4. 전자칠판 전체화면 학생 필기 뷰어 (나가기 버튼 + 쪽 이동 + 확대축소/팬) */}

@@ -19,7 +19,7 @@ export interface LessonPage {
 }
 
 export interface StudentNotebookFile {
-  fileType: 'lbw_student_notebook';
+  fileType: 'qrdocs_student_notebook' | 'lbw_student_notebook';
   version: 'a4_v3';
   exportedAt: string;
   lessonTitle: string;
@@ -37,9 +37,10 @@ export interface StudentNotebookFile {
 }
 
 /**
- * 학생 공책 전체(모든 쪽, 획, 텍스트, 이미지, 배경)를 다시 편집 가능한 .lbwnote 파일로 로컬 저장
+ * 학생 공책 전체(모든 쪽, 획, 텍스트, 이미지, 배경)를 다시 편집 가능한 .qrdocs 파일로 로컬 저장 (다른 이름으로 저장 지원)
  */
 export function exportNotebookToFile(params: {
+  customFileName?: string;
   lessonTitle: string;
   studentInfo: {
     grade: string;
@@ -53,27 +54,33 @@ export function exportNotebookToFile(params: {
   A4_WIDTH: number;
   A4_HEIGHT: number;
 }): { success: boolean; fileName: string } {
-  const { lessonTitle, studentInfo, pages, currentPageIndex, orientation, A4_WIDTH, A4_HEIGHT } = params;
+  const { customFileName, lessonTitle, studentInfo, pages, currentPageIndex, orientation, A4_WIDTH, A4_HEIGHT } = params;
 
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const dateTimeStr = `${year}${month}${day}_${hours}${minutes}`;
+  let finalFileName = '';
+  if (customFileName && customFileName.trim()) {
+    const cleanCustom = customFileName.trim().replace(/[/\\?%*:|"<>]/g, '_');
+    finalFileName = cleanCustom.endsWith('.qrdocs') ? cleanCustom : `${cleanCustom}.qrdocs`;
+  } else {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const dateTimeStr = `${year}${month}${day}_${hours}${minutes}`;
 
-  const studentNameStr = (studentInfo && studentInfo.name)
-    ? `${studentInfo.grade}학년${studentInfo.classNum}반_${studentInfo.name}`
-    : '학생필기';
-  const cleanTitle = (lessonTitle || '수업필기').replace(/[/\\?%*:|"<>]/g, '_').trim();
-  const fileName = `[필기파일]_${cleanTitle}_${studentNameStr}_${dateTimeStr}.lbwnote`;
+    const studentNameStr = (studentInfo && studentInfo.name)
+      ? `${studentInfo.grade}학년${studentInfo.classNum}반_${studentInfo.name}`
+      : '학생필기';
+    const cleanTitle = (lessonTitle || '스마트필기').replace(/[/\\?%*:|"<>]/g, '_').trim();
+    finalFileName = `[QR필기]_${cleanTitle}_${studentNameStr}_${dateTimeStr}.qrdocs`;
+  }
 
   const notebookData: StudentNotebookFile = {
-    fileType: 'lbw_student_notebook',
+    fileType: 'qrdocs_student_notebook',
     version: 'a4_v3',
-    exportedAt: now.toISOString(),
-    lessonTitle: cleanTitle,
+    exportedAt: new Date().toISOString(),
+    lessonTitle: (lessonTitle || '스마트필기').trim(),
     studentInfo,
     pages,
     currentPageIndex: Math.max(0, Math.min(currentPageIndex, pages.length - 1)),
@@ -88,17 +95,17 @@ export function exportNotebookToFile(params: {
 
   const link = document.createElement('a');
   link.href = blobUrl;
-  link.download = fileName;
+  link.download = finalFileName;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 
-  return { success: true, fileName };
+  return { success: true, fileName: finalFileName };
 }
 
 /**
- * 로컬 기기에서 선택한 .lbwnote 또는 .json 필기 파일을 파싱하여 복원 가능한 데이터로 변환
+ * 로컬 기기에서 선택한 .qrdocs 또는 .lbwnote 필기 파일을 파싱하여 복원 가능한 데이터로 변환
  */
 export async function importNotebookFromFile(file: File): Promise<StudentNotebookFile> {
   const text = await file.text();
@@ -106,7 +113,7 @@ export async function importNotebookFromFile(file: File): Promise<StudentNoteboo
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('올바른 JSON 또는 .lbwnote 파일 형식이 아닙니다.');
+    throw new Error('올바른 .qrdocs 파일 형식이 아닙니다.');
   }
 
   // 멀티페이지 데이터 정규화 및 구버전 호환 검증
@@ -137,7 +144,7 @@ export async function importNotebookFromFile(file: File): Promise<StudentNoteboo
   const a4Height = parsed.A4_HEIGHT || (orientation === 'landscape' ? 2480 : 3508);
 
   return {
-    fileType: 'lbw_student_notebook',
+    fileType: 'qrdocs_student_notebook',
     version: 'a4_v3',
     exportedAt: parsed.exportedAt || new Date().toISOString(),
     lessonTitle: parsed.lessonTitle || '',

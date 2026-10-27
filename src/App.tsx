@@ -9,6 +9,7 @@ import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRec
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
 import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studentSessionManager';
+import { classroomRealtime } from './lib/classroomRealtime';
 import { PwaInstallButton } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import './index.css';
@@ -244,6 +245,12 @@ export default function App() {
     } else if (session.role === 'teacher') {
       setAuthMode('teacher');
       localStorage.setItem('lbw_auth_mode', 'teacher');
+      const teacherName = session.id.replace('tch_', '').trim();
+      const matchedFolder = items.find(i => i.type === 'folder' && i.name.includes(teacherName));
+      if (matchedFolder) {
+        setFolderHistory([{ id: matchedFolder.id, name: `${teacherName} 선생님 드라이브` }]);
+        fetchDriveItems(matchedFolder.id);
+      }
     } else {
       setAuthMode('guest');
       localStorage.setItem('lbw_auth_mode', 'guest');
@@ -757,6 +764,17 @@ export default function App() {
       pdfName: (item as any).pdfFileName
     });
 
+    // 교사 세션 Supabase 등록 (학생이 [선생님 목록 ➔ 수업 목록]에서 선택할 수 있도록 활성화)
+    const rawTeacherName = currentSession?.name || '선생님';
+    const cleanTeacherName = rawTeacherName.replace(' 선생님', '').trim();
+    classroomRealtime.registerTeacherSession({
+      lessonId: currentLessonId,
+      teacherName: cleanTeacherName,
+      lessonTitle: cleanTitle,
+      pdfId: (item as any).pdfFileId,
+      pdfName: (item as any).pdfFileName
+    }).catch(() => {});
+
     try {
       const qrDataUrl = await QRCode.toDataURL(studentUrl, {
         width: 320,
@@ -1094,6 +1112,25 @@ export default function App() {
     );
   }
 
+  // 최고관리자 역할로 로그인한 경우: 설정 & 회원관리 전용 대시보드를 즉시 실행
+  if (currentSession.role === 'admin') {
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#0a0a0a', color: '#ffffff' }}>
+        <AdminDashboardModal
+          driveFolderNames={driveTeacherFolders}
+          onClose={handlePortalLogout}
+          onToast={showToast}
+        />
+        {toastMessage && (
+          <div className="toast-container">
+            <span>🔔</span>
+            <span>{toastMessage}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div 
       className="gdrive-app"
@@ -1195,8 +1232,8 @@ export default function App() {
           >
             🔄
           </button>
-          {/* 드라이브 시스템 설정 (루트 폴더 ID, API 키, GAS URL 등) - 오직 관리자(Admin)에게만 노출 */}
-          {currentSession?.role === 'admin' && (
+          {/* 드라이브 시스템 설정 - 최고관리자 대시보드 외 비상 진입 지원 */}
+          {(currentSession as any)?.role === 'admin' && (
             <button 
               id="btn-settings-open"
               className="gdrive-icon-btn" 
@@ -1212,25 +1249,6 @@ export default function App() {
             </button>
           )}
 
-          {/* 관리자일 경우 비번 관리 센터 원클릭 바로가기 버튼 */}
-          {currentSession?.role === 'admin' && (
-            <button
-              className="g-btn g-btn-primary"
-              style={{
-                fontSize: '12px',
-                background: 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)',
-                color: '#1e293b',
-                fontWeight: 700,
-                border: 'none',
-                padding: '6px 12px'
-              }}
-              onClick={() => setIsAdminDashboardOpen(true)}
-              title="전자칠판, 선생님, 1101~3830 학생 비밀번호 관리 센터"
-            >
-              🛡️ 계정/비번 관리 센터
-            </button>
-          )}
-
           {/* 현재 로그인 프로필 및 로그아웃 버튼 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div
@@ -1240,14 +1258,14 @@ export default function App() {
                 gap: '6px',
                 padding: '6px 12px',
                 borderRadius: 'var(--radius-full)',
-                background: currentSession?.role === 'admin' ? 'rgba(234, 179, 8, 0.15)' : currentSession?.role === 'teacher' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                border: `1px solid ${currentSession?.role === 'admin' ? '#eab308' : currentSession?.role === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
+                background: currentSession?.role === 'teacher' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                border: `1px solid ${currentSession?.role === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
                 color: '#ffffff',
                 fontSize: '12.5px',
                 fontWeight: 600
               }}
             >
-              <span>{currentSession?.role === 'admin' ? '🛡️' : currentSession?.role === 'teacher' ? '👨‍🏫' : '🖥️'}</span>
+              <span>{currentSession?.role === 'teacher' ? '👨‍🏫' : '🖥️'}</span>
               <span>{currentSession?.name || '전자칠판 (기본모드)'}</span>
             </div>
 
@@ -1939,7 +1957,11 @@ export default function App() {
         <LiveClassroomDashboard
           lesson={activeQrLesson}
           initialClear={isQrLessonInitialClear}
-          onExit={() => setActiveModal(null)}
+          onExit={() => {
+            const currentLessonId = activeQrLesson.folderId || activeQrLesson.id;
+            classroomRealtime.closeTeacherSession(currentLessonId).catch(() => {});
+            setActiveModal(null);
+          }}
           onOpenFolder={handleOpenFolder}
           executeDriveAction={executeDriveAction}
           showToast={showToast}
@@ -2383,7 +2405,7 @@ export default function App() {
       {/* ====================================================================
           모달 4: 드라이브 시스템 설정
           ==================================================================== */}
-      {activeModal === 'settings' && currentSession?.role === 'admin' && (
+      {activeModal === 'settings' && (currentSession as any)?.role === 'admin' && (
         <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
           <div className="modal-box" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">

@@ -35,7 +35,7 @@ import {
 import { type Stroke, type StrokePoint } from './lib/drawingGeometry';
 import { exportStudentNotebookToPdf } from './lib/studentPdfExporter';
 import { exportNotebookToFile, importNotebookFromFile } from './lib/studentNotebookFileManager';
-import { classroomRealtime } from './lib/classroomRealtime';
+import { classroomRealtime, type ActiveTeacherLesson } from './lib/classroomRealtime';
 import { getApiBaseUrl } from './lib/apiConfig';
 import { compressNotePagesForTransmission } from './lib/imageCompressor';
 import {
@@ -46,7 +46,8 @@ import {
   getStoredStudentName,
   fetchStudentNameFromCloud,
   getCurrentSession,
-  setCurrentSession
+  setCurrentSession,
+  clearSavedStudentInfo
 } from './lib/auth';
 import {
   type StudentInfo,
@@ -424,6 +425,16 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // --- 전자칠판 실시간 연결 및 화면 꺼짐 방지(WakeLock) 상태 ---
   const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
   const wakeLockRef = useRef<any>(null);
+
+  // --- 📡 선생님 수업 연결 모달 및 활성 목록 상태 ---
+  const [isJoinLessonModalOpen, setIsJoinLessonModalOpen] = useState(false);
+  const [activeTeachersList, setActiveTeachersList] = useState<ActiveTeacherLesson[]>([]);
+  const [isLoadingActiveLessons, setIsLoadingActiveLessons] = useState(false);
+  const [expandedTeacherName, setExpandedTeacherName] = useState<string | null>(null);
+
+  // --- 💾 다른 이름으로 저장 (.qrdocs) 모달 상태 ---
+  const [isSaveAsModalOpen, setIsSaveAsModalOpen] = useState(false);
+  const [saveAsFileNameInput, setSaveAsFileNameInput] = useState('');
 
 
   // DOM 참조
@@ -2054,14 +2065,36 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   };
 
   // ==========================================================================
-  // [전자칠판 실시간 연결 및 출석 신호 전송 (초경량 100바이트)]
+  // [선생님 목록 및 활성 수업 로드]
   // ==========================================================================
-  const handleConnectToBoard = async () => {
+  const handleOpenJoinLessonModal = async () => {
+    setIsJoinLessonModalOpen(true);
+    setIsLoadingActiveLessons(true);
+    try {
+      const teachers = await classroomRealtime.fetchActiveTeacherLessons();
+      setActiveTeachersList(teachers);
+      if (teachers.length > 0) {
+        setExpandedTeacherName(teachers[0].teacherName);
+      }
+    } catch (err) {
+      console.warn('활성 수업 로드 실패:', err);
+    } finally {
+      setIsLoadingActiveLessons(false);
+    }
+  };
+
+  // ==========================================================================
+  // [전자칠판 실시간 연결 및 5초 주기 생존 핑 가동]
+  // ==========================================================================
+  const handleConnectToBoard = async (targetLessonId?: string, targetTitle?: string) => {
     if (!studentInfo || !studentInfo.name.trim()) {
       showToast('⚠️ 먼저 학번과 이름을 입력해주세요.');
       setIsChangingStudent(true);
       return;
     }
+
+    const currentTargetId = targetLessonId || lessonId;
+    const currentTargetTitle = targetTitle || lessonTitle;
 
     // 1. 화면 꺼짐 방지 (Screen Wake Lock API)
     try {
@@ -2072,32 +2105,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       console.warn('Wake Lock 활성화 경고:', wlErr);
     }
 
-    // 3. 전자칠판 실시간 채널 연결 및 출석 신호 전송 (학생은 웹소켓 연결을 소모하지 않는 student 모드로 등록)
-    setIsConnectedToBoard(true);
-    classroomRealtime.joinLesson(lessonId, undefined, 'student');
-    // 600명 동시 로그인 시 트래픽 스파이크 방지 (0~1500ms 랜덤 지터)
-    const connectJitter = Math.floor(Math.random() * 1500);
-    setTimeout(async () => {
-      try {
-        await classroomRealtime.sendSignal({
-          type: 'STUDENT_PRESENCE',
-          lessonId,
-          student: studentInfo,
-          status: 'connected'
-        });
-      } catch {}
-    }, connectJitter);
+    // 2. 전체화면 전환 시도
+    try {
+      if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+        await document.documentElement.requestFullscreen().catch(() => {});
+      }
+    } catch {}
 
-    showToast(`📡 '${studentInfo.name}' 학생이 전자칠판에 연결되었습니다! (전체화면)`);
+    // 3. 전자칠판 실시간 채널 연결 및 5초 주기 핑 발송 자동 가동
+    setIsConnectedToBoard(true);
+    classroomRealtime.joinLesson(currentTargetId, undefined, 'student', studentInfo);
+
+    setIsJoinLessonModalOpen(false);
+    showToast(`🟢 '${currentTargetTitle}' 수업에 실시간 연결되었습니다! (5초 핑 가동)`);
   };
 
-  // 수업 나가기 처리 (WakeLock 해제, 전체화면 종료, 이탈 신호)
+  // 수업 나가기 처리 (WakeLock 해제, 퇴장 신호 발송, 오프라인 모드 복귀)
   const handleExitLesson = async () => {
     if (isConnectedToBoard) {
       const ok = await confirm({
-        title: '수업 종료',
-        message: '수업을 종료하고 전자칠판 연결을 해제하시겠습니까?',
-        confirmText: '수업 종료',
+        title: '수업 연결 종료',
+        message: '전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아가시겠습니까?\n(작성하신 필기는 기기에 안전하게 보존됩니다.)',
+        confirmText: '연결 해제',
         cancelText: '계속 수업하기',
         isDanger: true
       });
@@ -2110,14 +2139,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         wakeLockRef.current = null;
       }
       await exitFullscreenSafe();
-      await classroomRealtime.sendSignal({
-        type: 'STUDENT_PRESENCE',
-        lessonId,
-        student: studentInfo || undefined,
-        status: 'left'
-      });
-      classroomRealtime.leaveLesson();
+
+      // 퇴장 신호 발송 및 채널 정리
+      classroomRealtime.leaveLesson(studentInfo || undefined);
       setIsConnectedToBoard(false);
+      showToast('📓 전자칠판 연결이 해제되어 오프라인 공책 모드로 복귀했습니다.');
     }
 
     if (onExit) onExit();
@@ -3108,71 +3134,141 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             </div>
           ) : null}
 
-          {/* 핵심 수업 액션 (등록하기 & 전자칠판 실시간 연결) */}
+          {/* 1. 수업 연결 & 실시간 상태 관리 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button
-              id="menu-btn-submit-lesson"
-              type="button"
-              className="g-btn g-btn-primary"
-              style={{
-                width: '100%',
-                padding: '10px 14px',
-                fontSize: '13px',
-                fontWeight: 700,
-                background: hasSavedNote
-                  ? 'linear-gradient(135deg, #059669 0%, #047857 100%)'
-                  : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                borderRadius: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                border: hasSavedNote ? '1px solid #34d399' : 'none',
-                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
-                cursor: 'pointer'
-              }}
-              disabled={isSubmitting}
-              onClick={() => {
-                handleSubmitLesson();
-                setActivePopup(null);
-              }}
-            >
-              {isSubmitting ? '칠판으로 전송 중...' : hasSavedNote ? '✅ 칠판 등록 완료 (다시 등록)' : '🚀 선생님 전자칠판에 등록하기'}
-            </button>
+            {isConnectedToBoard ? (
+              <>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(34, 197, 94, 0.15)',
+                  border: '1px solid rgba(34, 197, 94, 0.35)',
+                  borderRadius: '10px',
+                  padding: '8px 12px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: '#4ade80' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
+                    <span>전자칠판 실시간 연결 중</span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: '#86efac' }}>5초 생존 핑</span>
+                </div>
 
-            <button
-              id="menu-btn-connect-board"
-              type="button"
-              style={{
-                width: '100%',
-                padding: '9px 12px',
-                fontSize: '12.5px',
-                fontWeight: 700,
-                background: isConnectedToBoard
-                  ? 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)'
-                  : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                color: '#ffffff',
-                border: isConnectedToBoard ? '1px solid #4ade80' : '1px solid #60a5fa',
-                borderRadius: '10px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                cursor: 'pointer'
-              }}
-              onClick={() => {
-                handleConnectToBoard();
-                setActivePopup(null);
-              }}
-            >
-              <span>{isConnectedToBoard ? '🟢' : '📡'}</span>
-              <span>{isConnectedToBoard ? '전자칠판 연결됨 (전체화면 유지)' : '전자칠판 실시간 연결'}</span>
-            </button>
+                {/* 답안 등록하기 버튼 */}
+                <button
+                  id="menu-btn-submit-lesson"
+                  type="button"
+                  className="g-btn g-btn-primary"
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    background: hasSavedNote
+                      ? 'linear-gradient(135deg, #059669 0%, #047857 100%)'
+                      : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    border: hasSavedNote ? '1px solid #34d399' : 'none',
+                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
+                    cursor: 'pointer'
+                  }}
+                  disabled={isSubmitting}
+                  onClick={() => {
+                    handleSubmitLesson();
+                    setActivePopup(null);
+                  }}
+                  title="내 필기를 전자칠판 출석부에 즉시 등록/제출합니다"
+                >
+                  {isSubmitting ? '칠판으로 전송 중...' : hasSavedNote ? '✅ 답안 등록 완료 (다시 등록)' : '🚀 선생님 전자칠판에 답안 등록'}
+                </button>
+
+                {/* 수업 연결 해제 버튼 */}
+                <button
+                  id="menu-btn-disconnect-board"
+                  type="button"
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    color: '#fca5a5',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => {
+                    handleExitLesson();
+                    setActivePopup(null);
+                  }}
+                  title="전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아갑니다"
+                >
+                  <span>🚪</span> 수업 연결 종료 (오프라인 복귀)
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(148, 163, 184, 0.1)',
+                  border: '1px solid rgba(148, 163, 184, 0.2)',
+                  borderRadius: '10px',
+                  padding: '8px 12px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, color: '#cbd5e1' }}>
+                    <span>📓</span>
+                    <span>오프라인 자유 공책 모드</span>
+                  </div>
+                  <span style={{ fontSize: '11px', color: '#94a3b8' }}>로컬 자동저장</span>
+                </div>
+
+                {/* 선생님 수업 연결하기 버튼 */}
+                <button
+                  id="menu-btn-open-join-modal"
+                  type="button"
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                    color: '#ffffff',
+                    border: '1px solid #60a5fa',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)'
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActivePopup(null);
+                    handleOpenJoinLessonModal();
+                  }}
+                  title="개설된 선생님 목록을 확인하거나 QR을 찍어 수업에 참여합니다"
+                >
+                  <span>📡</span>
+                  <span>선생님 수업 연결하기 (목록 / QR)</span>
+                </button>
+              </>
+            )}
           </div>
 
           <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
 
-          {/* 페이지 관리 & 모아보기 */}
+          {/* 2. 페이지 관리 (추가, 개별 삭제, 전체 비우기) */}
           <div>
             <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>📄 공책 페이지 관리</span>
@@ -3189,9 +3285,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               }}
               style={{
                 width: '100%',
-                padding: '9px 12px',
+                padding: '8px 12px',
                 borderRadius: '8px',
-                fontSize: '12.5px',
+                fontSize: '12px',
                 fontWeight: 600,
                 background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.22) 0%, rgba(139, 92, 246, 0.22) 100%)',
                 border: '1px solid rgba(139, 92, 246, 0.45)',
@@ -3201,22 +3297,23 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 justifyContent: 'center',
                 gap: '7px',
                 cursor: 'pointer',
-                marginBottom: '8px',
-                boxShadow: '0 2px 8px rgba(139, 92, 246, 0.15)'
+                marginBottom: '8px'
               }}
+              title="전체 페이지를 썸네일로 확인하고 순서를 이동합니다"
             >
               <span>🖼️</span>
-              <span>전체 페이지 모아보기 및 빠른 이동 ({pages.length}쪽)</span>
+              <span>전체 페이지 목록 보기 ({pages.length}쪽)</span>
             </button>
 
             {/* 이전/다음 쪽 이동 & 추가 */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.04)', padding: '6px 10px', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(255,255,255,0.04)', padding: '6px 10px', borderRadius: '8px', marginBottom: '6px' }}>
               <button
                 type="button"
                 className="student-tool-btn"
                 disabled={currentPageIndex <= 0}
                 onClick={() => handleGoToPage(currentPageIndex - 1)}
                 style={{ padding: '4px 10px', fontSize: '12px' }}
+                title="이전 쪽으로 이동"
               >
                 ◀ 이전 쪽
               </button>
@@ -3229,6 +3326,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 disabled={currentPageIndex >= pages.length - 1}
                 onClick={() => handleGoToPage(currentPageIndex + 1)}
                 style={{ padding: '4px 10px', fontSize: '12px' }}
+                title="다음 쪽으로 이동"
               >
                 다음 쪽 ▶
               </button>
@@ -3237,31 +3335,33 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 className="student-tool-btn"
                 onClick={handleAddPage}
                 style={{ padding: '4px 10px', fontSize: '12px', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', fontWeight: 600 }}
+                title="새로운 페이지를 추가합니다"
               >
                 + 쪽 추가
               </button>
             </div>
-          </div>
 
-          <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
-
-          {/* 공책 파일 & 저장 관리 */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
-              💾 공책 및 파일 관리
-            </div>
+            {/* 개별 페이지 삭제 & 전체 비우기 */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
               <button
                 type="button"
                 className="student-tool-btn"
                 onClick={() => {
-                  handleExportStudentPdf();
+                  handleDeletePage(currentPageIndex);
                   setActivePopup(null);
                 }}
-                disabled={isExportingPdf}
-                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd' }}
+                disabled={pages.length <= 1}
+                style={{
+                  justifyContent: 'center',
+                  fontSize: '11.5px',
+                  padding: '6px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: pages.length <= 1 ? '#6b7280' : '#f87171',
+                  border: '1px solid rgba(239, 68, 68, 0.25)'
+                }}
+                title="현재 보고 있는 페이지를 삭제합니다 (최소 1쪽 유지)"
               >
-                📥 PDF 다운로드
+                🗑️ 현재 쪽 삭제
               </button>
               <button
                 type="button"
@@ -3270,61 +3370,100 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   handleResetNotebookClean();
                   setActivePopup(null);
                 }}
-                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px', background: 'rgba(249, 115, 22, 0.12)', color: '#fdba74' }}
-              >
-                🔄 새로 쓰기
-              </button>
-              <button
-                type="button"
-                className="student-tool-btn"
-                onClick={() => {
-                  handleExportNotebookFile();
-                  setActivePopup(null);
-                }}
-                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px' }}
-              >
-                💾 파일로 저장
-              </button>
-              <button
-                type="button"
-                className="student-tool-btn"
-                onClick={() => {
-                  notebookFileInputRef.current?.click();
-                  setActivePopup(null);
-                }}
-                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px' }}
-              >
-                📂 파일 불러오기
-              </button>
-            </div>
-            {lessonPdfInfo && (
-              <button
-                type="button"
-                className="student-tool-btn"
-                onClick={() => {
-                  setIsLessonPdfPromptOpen(true);
-                  setActivePopup(null);
-                }}
                 style={{
                   justifyContent: 'center',
-                  fontSize: '12px',
-                  padding: '8px',
-                  background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(59, 130, 246, 0.25) 100%)',
-                  color: '#a5b4fc',
-                  fontWeight: 600
+                  fontSize: '11.5px',
+                  padding: '6px',
+                  background: 'rgba(249, 115, 22, 0.12)',
+                  color: '#fdba74',
+                  border: '1px solid rgba(249, 115, 22, 0.25)'
                 }}
+                title="공책의 모든 필기를 지우고 1쪽 새 공책으로 완전 초기화합니다"
               >
-                📑 선생님 수업 학습지 열기
+                🧹 공책 전체 비우기
               </button>
-            )}
+            </div>
           </div>
 
           <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
 
-          {/* 환경 및 보기 설정 */}
+          {/* 3. 공책 파일 저장 관리 (.qrdocs & PDF) */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
-              ⚙️ 환경 설정
+              💾 파일 저장 및 관리
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSaveAsFileNameInput(`${studentInfo?.name || '학생'}_스마트필기`);
+                  setIsSaveAsModalOpen(true);
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px', background: 'rgba(59, 130, 246, 0.15)', color: '#93c5fd' }}
+                title="원하는 파일명으로 편집 가능한 원본 파일(*.qrdocs)을 저장합니다"
+              >
+                💾 다른이름 저장 (.qrdocs)
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  notebookFileInputRef.current?.click();
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px' }}
+                title="이전에 저장한 .qrdocs 파일을 불러와서 필기를 이어갑니다"
+              >
+                📂 .qrdocs 불러오기
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExportStudentPdf();
+                  setActivePopup(null);
+                }}
+                disabled={isExportingPdf}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '8px 6px', background: 'rgba(34, 197, 94, 0.15)', color: '#86efac' }}
+                title="제출 및 보관용 최종본 PDF를 다운로드합니다"
+              >
+                📄 최종 PDF 저장
+              </button>
+              {lessonPdfInfo && (
+                <button
+                  type="button"
+                  className="student-tool-btn"
+                  onClick={() => {
+                    setIsLessonPdfPromptOpen(true);
+                    setActivePopup(null);
+                  }}
+                  style={{
+                    justifyContent: 'center',
+                    fontSize: '12px',
+                    padding: '8px 6px',
+                    background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(59, 130, 246, 0.25) 100%)',
+                    color: '#a5b4fc',
+                    fontWeight: 600
+                  }}
+                  title="선생님이 올려두신 구글 드라이브 학습지 PDF를 확인하고 공책 배경으로 불러옵니다"
+                >
+                  📑 수업 학습지 열기
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
+
+          {/* 4. 환경 & 계정 설정 */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+              ⚙️ 계정 및 설정
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
               <button
@@ -3335,6 +3474,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   setActivePopup(null);
                 }}
                 style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', background: 'rgba(168, 85, 247, 0.18)', color: '#d8b4fe' }}
+                title="칠판의 QR코드를 카메라로 스캔하여 수업에 연결합니다"
               >
                 📷 수업 QR 스캔
               </button>
@@ -3343,14 +3483,42 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 className="student-tool-btn"
                 onClick={toggleFullscreen}
                 style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px' }}
+                title="전체화면 모드를 켜거나 끕니다"
               >
                 {isFullscreen ? '⛶ 전체화면 종료' : '⛶ 전체화면'}
               </button>
               <button
                 type="button"
                 className="student-tool-btn"
+                onClick={() => {
+                  setIsChangingStudent(true);
+                  setActivePopup(null);
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px' }}
+                title="학생 비밀번호를 변경합니다"
+              >
+                🔑 비밀번호 변경
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
+                onClick={() => {
+                  if (window.confirm('현재 학생 계정에서 로그아웃하시겠습니까?')) {
+                    clearSavedStudentInfo();
+                    window.location.reload();
+                  }
+                }}
+                style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', color: '#f87171' }}
+                title="공용 태블릿에서 다른 학생이 로그인할 수 있도록 로그아웃합니다"
+              >
+                🚪 학생 로그아웃
+              </button>
+              <button
+                type="button"
+                className="student-tool-btn"
                 onClick={handleTogglePenTouchMode}
                 style={{ justifyContent: 'center', fontSize: '12px', padding: '7px 6px', color: penOnlyMode ? '#93c5fd' : '#cbd5e1' }}
+                title="펜 터치 전용 모드를 토글합니다"
               >
                 {penOnlyMode ? '✏️ 펜 전용 모드' : '🖐️ 터치 모드'}
               </button>
@@ -5601,7 +5769,285 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         }}
       />
 
-      {/* 7. 숨김 파일 입력 엘리먼트: PDF/이미지 및 .lbwnote 필기 파일 */}
+      {/* 8. 📡 선생님 수업 연결 모달 (선생님 목록 ➔ 개설 수업 선택 or QR 스캔) */}
+      <ModularModal
+        isOpen={isJoinLessonModalOpen}
+        onClose={() => setIsJoinLessonModalOpen(false)}
+        maxWidth="500px"
+        zIndex={10000}
+        showCloseButton={true}
+      >
+        <div>
+          {/* 헤더 */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '24px' }}>📡</span>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#ffffff' }}>
+                  선생님 수업 연결하기
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                  수업을 선택하면 교사 전자칠판에 🟢 출석으로 연결됩니다
+                </p>
+              </div>
+            </div>
+
+            {/* 카메라 QR 스캔 버튼 */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsJoinLessonModalOpen(false);
+                setIsQrScannerOpen(true);
+              }}
+              style={{
+                background: 'rgba(168, 85, 247, 0.2)',
+                border: '1px solid rgba(168, 85, 247, 0.45)',
+                color: '#d8b4fe',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                fontSize: '12px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+              title="칠판의 QR코드를 카메라로 스캔하여 빠르게 연결합니다"
+            >
+              <span>📷</span> QR 스캔
+            </button>
+          </div>
+
+          {/* 활성 선생님 및 개설 수업 목록 */}
+          <div style={{ maxHeight: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px' }}>
+            {isLoadingActiveLessons ? (
+              <div style={{ textAlign: 'center', padding: '40px 0', color: '#94a3b8', fontSize: '13px' }}>
+                <span style={{ fontSize: '24px', display: 'block', marginBottom: '8px' }}>🔄</span>
+                현재 열려있는 선생님 수업을 탐색 중입니다...
+              </div>
+            ) : activeTeachersList.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '36px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px dashed #30363d' }}>
+                <span style={{ fontSize: '32px', display: 'block', marginBottom: '8px' }}>🏫</span>
+                <p style={{ margin: '0 0 6px 0', fontSize: '14px', fontWeight: 600, color: '#ffffff' }}>
+                  현재 진행 중인 선생님 수업이 없습니다.
+                </p>
+                <p style={{ margin: '0 0 14px 0', fontSize: '12px', color: '#8b949e' }}>
+                  선생님이 전자칠판에서 <strong>[수업 개시]</strong>를 누른 후 다시 확인하세요.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleOpenJoinLessonModal}
+                  style={{
+                    background: '#21262d',
+                    border: '1px solid #30363d',
+                    color: '#c9d1d9',
+                    padding: '6px 14px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  🔄 목록 새로고침
+                </button>
+              </div>
+            ) : (
+              activeTeachersList.map(teacher => {
+                const isExpanded = expandedTeacherName === teacher.teacherName;
+                return (
+                  <div
+                    key={teacher.teacherName}
+                    style={{
+                      background: 'rgba(22, 27, 34, 0.8)',
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      borderRadius: '12px',
+                      overflow: 'hidden'
+                    }}
+                  >
+                    {/* 선생님 카드 헤더 */}
+                    <button
+                      type="button"
+                      onClick={() => setExpandedTeacherName(isExpanded ? null : teacher.teacherName)}
+                      style={{
+                        width: '100%',
+                        padding: '12px 14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        background: isExpanded ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                        border: 'none',
+                        color: '#ffffff',
+                        cursor: 'pointer',
+                        textAlign: 'left'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '18px' }}>👨‍🏫</span>
+                        <span style={{ fontSize: '14px', fontWeight: 700 }}>{teacher.teacherName} 선생님</span>
+                        <span style={{ fontSize: '11px', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)', padding: '1px 6px', borderRadius: '10px', fontWeight: 600 }}>
+                          {teacher.lessons.length}개 수업 진행 중
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '12px', color: '#8b949e' }}>
+                        {isExpanded ? '▲ 접기' : '▼ 펼치기'}
+                      </span>
+                    </button>
+
+                    {/* 하위 수업 목록 */}
+                    {isExpanded && (
+                      <div style={{ padding: '8px 12px 12px 12px', display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                        {teacher.lessons.map(lesson => (
+                          <div
+                            key={lesson.lessonId}
+                            style={{
+                              background: 'rgba(30, 41, 59, 0.7)',
+                              border: '1px solid rgba(59, 130, 246, 0.3)',
+                              borderRadius: '10px',
+                              padding: '10px 12px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '10px'
+                            }}
+                          >
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {lesson.title}
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span>🟢 진행 중</span>
+                                {lesson.pdfName && <span style={{ color: '#a5b4fc' }}>• 학습지: {lesson.pdfName}</span>}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleConnectToBoard(lesson.lessonId, lesson.title)}
+                              style={{
+                                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                                border: '1px solid #60a5fa',
+                                color: '#ffffff',
+                                padding: '6px 14px',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                                boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
+                              }}
+                              title="이 수업에 즉시 실시간 연결합니다"
+                            >
+                              연결하기 ▶
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </ModularModal>
+
+      {/* 9. 💾 다른 이름으로 저장 (.qrdocs) 모달 */}
+      <ModularModal
+        isOpen={isSaveAsModalOpen}
+        onClose={() => setIsSaveAsModalOpen(false)}
+        maxWidth="440px"
+        zIndex={10000}
+        showCloseButton={true}
+      >
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+            <span style={{ fontSize: '24px' }}>💾</span>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#ffffff' }}>
+                다른 이름으로 저장 (*.qrdocs)
+              </h3>
+              <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                필기 원본을 파일로 저장하여 언제든 다시 불러올 수 있습니다
+              </p>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e1', marginBottom: '6px', fontWeight: 600 }}>
+              문서 파일 이름 (.qrdocs 자동 부여)
+            </label>
+            <input
+              type="text"
+              value={saveAsFileNameInput}
+              onChange={(e) => setSaveAsFileNameInput(e.target.value)}
+              placeholder="예: 3단원_수학_오답정리"
+              style={{
+                width: '100%',
+                background: '#161b22',
+                border: '1px solid #30363d',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                color: '#ffffff',
+                fontSize: '13px',
+                outline: 'none',
+                boxSizing: 'border-box'
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const currentPages = pages.map((p, idx) => idx === currentPageIndex ? { ...p, strokes, textItems, fullPageBackground, images: embeddedImages } : p);
+                  exportNotebookToFile({
+                    customFileName: saveAsFileNameInput.trim(),
+                    lessonTitle,
+                    studentInfo,
+                    pages: currentPages,
+                    currentPageIndex,
+                    orientation,
+                    A4_WIDTH,
+                    A4_HEIGHT
+                  });
+                  setIsSaveAsModalOpen(false);
+                  showToast(`💾 '${saveAsFileNameInput}.qrdocs' 파일이 저장되었습니다!`);
+                }
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              type="button"
+              className="g-btn g-btn-text"
+              onClick={() => setIsSaveAsModalOpen(false)}
+              style={{ color: '#94a3b8' }}
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              className="g-btn g-btn-primary"
+              style={{ padding: '8px 16px', fontSize: '13px', fontWeight: 700 }}
+              onClick={() => {
+                const currentPages = pages.map((p, idx) => idx === currentPageIndex ? { ...p, strokes, textItems, fullPageBackground, images: embeddedImages } : p);
+                const result = exportNotebookToFile({
+                  customFileName: saveAsFileNameInput.trim(),
+                  lessonTitle,
+                  studentInfo,
+                  pages: currentPages,
+                  currentPageIndex,
+                  orientation,
+                  A4_WIDTH,
+                  A4_HEIGHT
+                });
+                setIsSaveAsModalOpen(false);
+                showToast(`💾 '${result.fileName}' 파일로 안전하게 저장되었습니다!`);
+              }}
+            >
+              💾 저장하기
+            </button>
+          </div>
+        </div>
+      </ModularModal>
+
+      {/* 7. 숨김 파일 입력 엘리먼트: PDF/이미지 및 .qrdocs/.lbwnote 필기 파일 */}
       <input
         type="file"
         ref={imagePdfInputRef}
@@ -5613,7 +6059,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         type="file"
         ref={notebookFileInputRef}
         onChange={handleImportNotebookFile}
-        accept=".lbwnote,.json"
+        accept=".qrdocs,.lbwnote,.json"
         style={{ display: 'none' }}
       />
     </div>
