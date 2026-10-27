@@ -70,10 +70,10 @@ export function useAppVersionCheck(options?: {
   useEffect(() => {
     if (!autoCheck) return;
 
-    // 1. 앱 구동 1.2초 후 최초 버전 검사
+    // 1. 앱 구동 즉시 최초 버전 검사 (최신 버전 보장)
     const initTimer = setTimeout(() => {
       checkVersion(false);
-    }, 1200);
+    }, 50);
 
     // 2. 3분(180초) 주기 상시 백그라운드 버전 검사
     const intervalTimer = setInterval(() => {

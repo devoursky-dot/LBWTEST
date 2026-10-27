@@ -23,9 +23,18 @@ import { PwaInstallButton } from './modules/pwa';
 interface PortalLoginViewProps {
   driveTeacherFolders: string[]; // 구글 드라이브에서 가져온 선생님 폴더 목록
   onLoginSuccess: (session: UserSession) => void;
+  appVersion?: string;
+  buildTime?: string;
+  onCheckVersion?: () => void;
 }
 
-export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalLoginViewProps) {
+export function PortalLoginView({ 
+  driveTeacherFolders, 
+  onLoginSuccess,
+  appVersion,
+  buildTime,
+  onCheckVersion
+}: PortalLoginViewProps) {
   // 기본 로그인 화면을 학생(student) 위주로 설정
   const [activeTab, setActiveTab] = useState<UserRole>('student');
   const [isStaffMenuOpen, setIsStaffMenuOpen] = useState(false);
@@ -467,8 +476,34 @@ export function PortalLoginView({ driveTeacherFolders, onLoginSuccess }: PortalL
           pointerEvents: 'none'
         }} />
 
-        {/* 우측 상단: 삼선(≡ 햄버거 메뉴) 교직원/관리자 숨김 메뉴 버튼 */}
-        <div style={{ position: 'absolute', top: '24px', right: '24px', zIndex: 100 }}>
+        {/* 우측 상단: 버전 확인 & 삼선(≡ 햄버거 메뉴) */}
+        <div style={{ position: 'absolute', top: '24px', right: '24px', zIndex: 100, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {appVersion && (
+            <button
+              type="button"
+              onClick={onCheckVersion}
+              title={`빌드 일시: ${buildTime || '최신'}\n클릭 시 최신 배포 버전을 확인하여 자동 업데이트합니다.`}
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                borderRadius: '10px',
+                padding: '0 12px',
+                height: '40px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: '#cbd5e1',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+              }}
+            >
+              <span style={{ fontSize: '13px' }}>🔄</span>
+              <span>v{appVersion}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setIsStaffMenuOpen(!isStaffMenuOpen)}

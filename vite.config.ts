@@ -14,14 +14,15 @@ function getBuildInfo() {
   return { version, buildTime, timestamp: now.getTime() };
 }
 
+const sharedBuildInfo = getBuildInfo();
+
 function autoVersionPlugin(): Plugin {
   return {
     name: 'auto-version-plugin',
     buildStart() {
-      const info = getBuildInfo();
       const versionFile = path.resolve(__dirname, 'public/version.json');
-      fs.writeFileSync(versionFile, JSON.stringify(info, null, 2));
-      console.log(`[Vite AutoVersion] 새 앱 버전 생성 완료: ${info.version} (${info.buildTime})`);
+      fs.writeFileSync(versionFile, JSON.stringify(sharedBuildInfo, null, 2));
+      console.log(`[Vite AutoVersion] 새 앱 버전 생성 완료: ${sharedBuildInfo.version} (${sharedBuildInfo.buildTime})`);
     }
   };
 }
@@ -286,7 +287,7 @@ export default defineConfig({
   plugins: [react(), localDriveApiPlugin(), autoVersionPlugin()],
   base: './',
   define: {
-    __APP_BUILD_INFO__: JSON.stringify(getBuildInfo())
+    __APP_BUILD_INFO__: JSON.stringify(sharedBuildInfo)
   },
   build: {
     target: ['es2015', 'chrome60', 'safari11', 'edge18'],

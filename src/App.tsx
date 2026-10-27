@@ -12,6 +12,7 @@ import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studen
 import { classroomRealtime, type AttachedFileItem } from './lib/classroomRealtime';
 import { PwaInstallButton } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
+import { useAppVersionCheck, VersionUpdateOverlay } from './modules/version';
 import './index.css';
 
 // ============================================================================
@@ -241,14 +242,19 @@ export default function App() {
   const currentFolder = folderHistory[folderHistory.length - 1];
 
   // ==========================================================================
-  // [알림 토스트 유틸]
+  // [알림 토스트 유틸 & 최신 배포 버전 자동 검사 엔진]
   // ==========================================================================
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage(prev => (prev === msg ? null : prev));
     }, 3500);
-  };
+  }, []);
+
+  const { localVersion, isUpdating, newVersionInfo, checkVersion } = useAppVersionCheck({
+    autoCheckOnMount: true,
+    onToast: showToast
+  });
 
   // 최상위 루트 폴더의 실제 선생님 폴더 목록 상태 (구글 드라이브 API v3 직접 조회 기반)
   const [rootTeacherFolders, setRootTeacherFolders] = useState<DriveItem[]>([]);
@@ -906,7 +912,13 @@ export default function App() {
       fetchDriveItems(currentFolder.id);
     } catch (err: any) {
       console.error('QR 수업 생성 오류:', err);
-      showToast(`❌ 수업 생성 실패: ${err.message}`);
+      const isGasPermErr = err.message && (err.message.includes('액세스') || err.message.includes('권한') || err.message.includes('403') || err.message.includes('Google Apps Script'));
+      if (isGasPermErr) {
+        setActiveModal('gas_guide');
+        showToast('⚠️ 구글 드라이브 폴더 생성을 위해 Google Apps Script 배포 권한("모든 사용자") 확인이 필요합니다.');
+      } else {
+        showToast(`❌ 수업 생성 실패: ${err.message}`);
+      }
     } finally {
       setIsProcessingAction(false);
     }
@@ -1563,14 +1575,25 @@ export default function App() {
     );
   }
 
+  // 최신 버전 업데이트 오버레이가 활성화된 경우 전체화면 안내 및 리로드
+  if (isUpdating) {
+    return <VersionUpdateOverlay isOpen={true} newVersionTime={newVersionInfo?.buildTime} />;
+  }
+
   // 첫 화면: 인증 세션이 없으면 통합 포털 로그인 게이트웨이 렌더링
   // (전자칠판에서 1회 입력해 두었다면 영구 인증으로 자동 통과)
   if (!currentSession) {
     return (
-      <PortalLoginView
-        driveTeacherFolders={driveTeacherFolders}
-        onLoginSuccess={handlePortalLoginSuccess}
-      />
+      <>
+        <PortalLoginView
+          driveTeacherFolders={driveTeacherFolders}
+          onLoginSuccess={handlePortalLoginSuccess}
+          appVersion={localVersion.version}
+          buildTime={localVersion.buildTime}
+          onCheckVersion={() => checkVersion(true)}
+        />
+        <VersionUpdateOverlay isOpen={isUpdating} newVersionTime={newVersionInfo?.buildTime} />
+      </>
     );
   }
 
@@ -1677,6 +1700,31 @@ export default function App() {
 
         {/* 헤더 우측 메뉴 */}
         <div className="gdrive-header-actions" onClick={(e) => e.stopPropagation()}>
+          {/* 최신 버전 확인 및 앱 버전 배지 */}
+          <button
+            type="button"
+            className="g-btn"
+            onClick={() => checkVersion(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '6px 11px',
+              borderRadius: '20px',
+              border: '1px solid rgba(255, 255, 255, 0.16)',
+              background: 'rgba(255, 255, 255, 0.06)',
+              color: '#cbd5e1',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              marginRight: '6px'
+            }}
+            title={`현재 버전: v${localVersion.version} (${localVersion.buildTime})\n클릭 시 최신 배포 버전을 확인하여 자동 업데이트합니다.`}
+          >
+            <span>🔄</span>
+            <span>v{localVersion.version}</span>
+          </button>
+
           {/* PWA 앱 설치 버튼 (이미 설치된 경우 자동 숨김) */}
           <PwaInstallButton style={{ marginRight: '6px' }} />
 
@@ -3672,6 +3720,8 @@ export default function App() {
         aria-hidden="true" 
         title="gdrive-download-iframe"
       />
+      {/* 최신 버전 자동 업데이트 전체화면 오버레이 */}
+      <VersionUpdateOverlay isOpen={isUpdating} newVersionTime={newVersionInfo?.buildTime} />
     </div>
   );
 }

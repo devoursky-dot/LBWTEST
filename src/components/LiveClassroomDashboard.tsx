@@ -127,7 +127,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     // 3) 구글 드라이브 lesson_config.json에서 공식 등록된 첨부자료 보충 확인
     if (materialsMap.size === 0 && currentLessonId) {
       try {
-        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&fields=files(id,name)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
         const cRes = await fetch(directUrl);
         if (cRes.ok) {
           const cData = await cRes.json();
