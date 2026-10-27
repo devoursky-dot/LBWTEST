@@ -390,10 +390,16 @@ export default function App() {
   const loadWhiteboardTeacherLessons = async () => {
     setIsLoadingWhiteboardLessons(true);
     try {
-      const teachers = await classroomRealtime.fetchAllTeacherLessons();
+      const teachers = await classroomRealtime.fetchAllTeacherLessons({
+        rootFolderId,
+        googleApiKey,
+        apiBase
+      });
       setWhiteboardTeachersList(teachers);
-      if (teachers.length > 0 && !selectedTeacherNameForBoard) {
-        setSelectedTeacherNameForBoard(teachers[0].teacherName);
+      if (teachers.length > 0) {
+        if (!selectedTeacherNameForBoard || !teachers.some(t => t.teacherName === selectedTeacherNameForBoard)) {
+          setSelectedTeacherNameForBoard(teachers[0].teacherName);
+        }
       }
     } catch (err) {
       console.warn('전자칠판 수업 목록 로드 오류:', err);

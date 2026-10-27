@@ -73,6 +73,15 @@ export interface RealtimeSignalPayload {
 
 type SignalListener = (signal: RealtimeSignalPayload) => void;
 
+export const DEFAULT_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
+export const DEFAULT_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
+
+export interface FetchTeacherLessonsOptions {
+  rootFolderId?: string;
+  googleApiKey?: string;
+  apiBase?: string;
+}
+
 class ClassroomRealtimeManager {
   private activeChannel: any = null;
   private currentLessonId: string | null = null;
@@ -225,39 +234,160 @@ class ClassroomRealtimeManager {
     }
   }
 
+
   /**
-   * 학생앱: 선생님별로 개설되어 있는 모든 수업 목록 가져오기
-   * - 현재 실시간 수업 중인 경우 `isLive: true` (초록색 🟢 아이콘)
-   * - 오프라인/대기 중인 수업인 경우 `isLive: false` (공책 📓 아이콘)
-   * - 연결된 구글 드라이브 학습지/자료 목록(`attachedFiles`) 포함
+   * 학생앱 & 전자칠판: 구글 드라이브의 실제 교사 폴더 및 [QR수업] 폴더와 Supabase 실시간 세션 100% 통합 조회
+   * - 구글 드라이브 최상위 루트 폴더 내 등록된 모든 교사 폴더 자동 인식
+   * - 각 교사 폴더 내 [QR수업] 폴더 및 연결된 학습지 자동 추출
+   * - Supabase class_notes 실시간 세션과 대조하여 현재 수업 중인 경우 `isLive: true` (🟢 진행 중)
+   * - 대기/오프라인 수업인 경우 `isLive: false` (📓 수업 대기)
    */
-  public async fetchAllTeacherLessons(): Promise<ActiveTeacherLesson[]> {
-    if (!supabase || !isSupabaseConfigured) return [];
+  public async fetchAllTeacherLessons(options?: FetchTeacherLessonsOptions): Promise<ActiveTeacherLesson[]> {
+    const rootFolderId = options?.rootFolderId || (typeof localStorage !== 'undefined' ? localStorage.getItem('lbw_root_folder_id') : null) || DEFAULT_ROOT_FOLDER_ID;
+    const googleApiKey = options?.googleApiKey || (typeof localStorage !== 'undefined' ? localStorage.getItem('lbw_google_api_key') : null) || DEFAULT_GOOGLE_API_KEY;
+
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // 1. Supabase 실시간 세션 데이터 병렬 조회
+    let supabaseRows: any[] = [];
+    if (supabase && isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('class_notes')
+          .select('*')
+          .eq('student_grade', '_TEACHER_SESSION_')
+          .order('updated_at', { ascending: false });
+        if (!error && data) {
+          supabaseRows = data;
+        }
+      } catch (sbErr) {
+        console.warn('[Realtime] Supabase session fetch warning:', sbErr);
+      }
+    }
+
+    const sbSessionMap = new Map<string, any>();
+    for (const row of supabaseRows) {
+      sbSessionMap.set(row.lesson_id, row);
+    }
+
+    // 2. 구글 드라이브 API v3로 실제 등록된 모든 선생님 및 수업 폴더 실시간 조회
+    const teacherMap = new Map<string, TeacherLessonInfo[]>();
 
     try {
-      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-      const now = Date.now();
+      if (googleApiKey && rootFolderId) {
+        // 2-1. 최상위 루트 폴더의 교사 폴더 목록 조회 (공유드라이브 supportsAllDrives 필수 포함)
+        const rootUrl = `https://www.googleapis.com/drive/v3/files?q='${rootFolderId}'+in+parents+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&orderBy=name&key=${googleApiKey}&_t=${Date.now()}`;
+        const rootRes = await fetch(rootUrl);
 
-      // 선생님이 개설한 모든 수업 조회 (student_grade === '_TEACHER_SESSION_')
-      const { data, error } = await supabase
-        .from('class_notes')
-        .select('*')
-        .eq('student_grade', '_TEACHER_SESSION_')
-        .order('updated_at', { ascending: false });
+        if (rootRes.ok) {
+          const rootData = await rootRes.json();
+          const teacherFolders: Array<{ id: string; name: string }> = (rootData.files || []).filter(
+            (f: any) => !f.name.startsWith('[QR수업]') && f.name !== '내 드라이브'
+          );
 
-      if (error || !data) return [];
+          // 2-2. 각 교사 폴더 내부의 [QR수업] 폴더들 병렬 조회
+          await Promise.all(
+            teacherFolders.map(async (tFolder) => {
+              const cleanTeacherName = tFolder.name.replace(' 선생님', '').trim();
+              if (!teacherMap.has(cleanTeacherName)) {
+                teacherMap.set(cleanTeacherName, []);
+              }
 
-      const teacherMap = new Map<string, TeacherLessonInfo[]>();
+              try {
+                const subUrl = `https://www.googleapis.com/drive/v3/files?q='${tFolder.id}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,modifiedTime)&key=${googleApiKey}&_t=${Date.now()}`;
+                const subRes = await fetch(subUrl);
+                if (subRes.ok) {
+                  const subData = await subRes.json();
+                  const qrFolders: any[] = (subData.files || []).filter(
+                    (f: any) => f.mimeType === 'application/vnd.google-apps.folder' && (f.name.startsWith('[QR수업]') || f.name.includes('[QR수업]'))
+                  );
 
-      for (const row of data) {
-        const lastTouched = row.strokes_data?.lastTouched || (row.updated_at ? new Date(row.updated_at).getTime() : 0);
-        // 전자칠판에서 [수업 개시] 상태('ACTIVE')이고 2시간 이내 활동이 있으면 실시간 진행 중(🟢)으로 판정
-        const isLive = row.student_num === 'ACTIVE' && (now - lastTouched <= TWO_HOURS_MS);
+                  // 2-3. 각 [QR수업] 폴더 내의 첨부 학습지 파일 병렬 확인
+                  const lessonList = await Promise.all(
+                    qrFolders.map(async (qFolder) => {
+                      const lessonId = qFolder.id;
+                      const cleanTitle = qFolder.name.replace('[QR수업]', '').trim();
 
-        const teacherName = row.student_class || '선생님';
+                      let attachedFiles: AttachedFileItem[] = [];
+                      let pdfId: string | undefined;
+                      let pdfName: string | undefined;
+
+                      try {
+                        const filesUrl = `https://www.googleapis.com/drive/v3/files?q='${lessonId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size)&key=${googleApiKey}&_t=${Date.now()}`;
+                        const filesRes = await fetch(filesUrl);
+                        if (filesRes.ok) {
+                          const filesData = await filesRes.json();
+                          const foundFiles: any[] = (filesData.files || []).filter((f: any) => f.name !== 'lesson_config.json');
+
+                          attachedFiles = foundFiles.map(f => ({
+                            id: f.id,
+                            name: f.name,
+                            downloadUrl: `https://drive.google.com/uc?export=download&id=${f.id}`,
+                            mimeType: f.mimeType
+                          }));
+
+                          const pdfDoc = attachedFiles.find(f => f.mimeType === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+                          if (pdfDoc) {
+                            pdfId = pdfDoc.id;
+                            pdfName = pdfDoc.name;
+                          }
+                        }
+                      } catch {}
+
+                      // Supabase 실시간 세션 정보 대조
+                      const sbRow = sbSessionMap.get(lessonId);
+                      const lastTouched = sbRow?.strokes_data?.lastTouched || (sbRow?.updated_at ? new Date(sbRow.updated_at).getTime() : 0);
+                      const isLive = sbRow?.student_num === 'ACTIVE' && (now - lastTouched <= TWO_HOURS_MS);
+
+                      if (sbRow?.strokes_data?.attachedFiles && attachedFiles.length === 0) {
+                        attachedFiles = sbRow.strokes_data.attachedFiles;
+                      }
+                      if (!pdfId && sbRow?.strokes_data?.pdfId) {
+                        pdfId = sbRow.strokes_data.pdfId;
+                        pdfName = sbRow.strokes_data.pdfName;
+                      }
+
+                      return {
+                        lessonId,
+                        title: cleanTitle,
+                        isLive,
+                        pdfId,
+                        pdfName,
+                        attachedFiles,
+                        startedAt: sbRow?.strokes_data?.startedAt || qFolder.modifiedTime || new Date().toISOString(),
+                        lastTouched: isLive ? lastTouched : (qFolder.modifiedTime ? new Date(qFolder.modifiedTime).getTime() : 0)
+                      };
+                    })
+                  );
+
+                  teacherMap.get(cleanTeacherName)!.push(...lessonList);
+                }
+              } catch (subErr) {
+                console.warn(`[Realtime] 교사 '${tFolder.name}' 하위 폴더 조회 예외:`, subErr);
+              }
+            })
+          );
+        }
+      }
+    } catch (driveErr) {
+      console.warn('[Realtime] 구글 드라이브 수업 통합 조회 예외:', driveErr);
+    }
+
+    // 3. Supabase에 등록된 세션 중 드라이브에서 아직 매칭되지 않은 수업도 안전하게 보존
+    for (const row of supabaseRows) {
+      const lessonId = row.lesson_id;
+      const teacherName = (row.student_class || '선생님').replace(' 선생님', '').trim();
+      const lastTouched = row.strokes_data?.lastTouched || (row.updated_at ? new Date(row.updated_at).getTime() : 0);
+      const isLive = row.student_num === 'ACTIVE' && (now - lastTouched <= TWO_HOURS_MS);
+
+      if (!teacherMap.has(teacherName)) {
+        teacherMap.set(teacherName, []);
+      }
+
+      const existingLessons = teacherMap.get(teacherName)!;
+      if (!existingLessons.some(l => l.lessonId === lessonId)) {
         const attachedFiles = row.strokes_data?.attachedFiles || [];
-
-        // 단일 PDF 레거시 호환
         if (row.strokes_data?.pdfId && !attachedFiles.some((f: any) => f.id === row.strokes_data.pdfId)) {
           attachedFiles.unshift({
             id: row.strokes_data.pdfId,
@@ -267,8 +397,8 @@ class ClassroomRealtimeManager {
           });
         }
 
-        const lessonInfo: TeacherLessonInfo = {
-          lessonId: row.lesson_id,
+        existingLessons.push({
+          lessonId,
           title: row.student_name || '수업',
           isLive,
           pdfId: row.strokes_data?.pdfId,
@@ -276,37 +406,29 @@ class ClassroomRealtimeManager {
           attachedFiles,
           startedAt: row.strokes_data?.startedAt || row.updated_at || new Date().toISOString(),
           lastTouched
-        };
-
-        if (!teacherMap.has(teacherName)) {
-          teacherMap.set(teacherName, []);
-        }
-        teacherMap.get(teacherName)!.push(lessonInfo);
-      }
-
-      // 각 선생님별로 실시간 진행 중인 수업(isLive === true)을 최상단으로 우선 정렬
-      return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => {
-        lessons.sort((a, b) => {
-          if (a.isLive && !b.isLive) return -1;
-          if (!a.isLive && b.isLive) return 1;
-          return b.lastTouched - a.lastTouched;
         });
-        return {
-          teacherName,
-          lessons
-        };
-      });
-    } catch (err) {
-      console.warn('[Realtime] fetchAllTeacherLessons exception:', err);
-      return [];
+      }
     }
+
+    // 4. 교사별 수업 목록 정렬: 실시간 진행 중(🟢)을 최상단, 최신 활동순
+    return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => {
+      lessons.sort((a, b) => {
+        if (a.isLive && !b.isLive) return -1;
+        if (!a.isLive && b.isLive) return 1;
+        return b.lastTouched - a.lastTouched;
+      });
+      return {
+        teacherName,
+        lessons
+      };
+    });
   }
 
   /**
    * 하위 호환용 래퍼: fetchAllTeacherLessons 호출
    */
-  public async fetchActiveTeacherLessons(): Promise<ActiveTeacherLesson[]> {
-    return this.fetchAllTeacherLessons();
+  public async fetchActiveTeacherLessons(options?: FetchTeacherLessonsOptions): Promise<ActiveTeacherLesson[]> {
+    return this.fetchAllTeacherLessons(options);
   }
 
   // ==========================================================================
