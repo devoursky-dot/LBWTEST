@@ -34,7 +34,7 @@ const DEFAULT_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
 const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
 const ADMIN_ID = 'admin';
 
-type AuthMode = 'guest' | 'teacher' | 'admin';
+type AuthMode = 'guest' | 'teacher' | 'admin' | 'whiteboard';
 
 // 1분 Google Apps Script 표준 코드 템플릿 (업로드, 새 폴더, 이름 변경, 삭제 통합 지원)
 const GAS_CODE_TEMPLATE = `function doPost(e) {
@@ -125,6 +125,7 @@ export default function App() {
     const initialSession = getCurrentSession();
     if (initialSession?.role === 'admin') return 'admin';
     if (initialSession?.role === 'teacher') return 'teacher';
+    if (initialSession?.role === 'whiteboard') return 'whiteboard';
     return 'guest';
   });
 
@@ -179,12 +180,10 @@ export default function App() {
 
   // --- QR 수업 관리 상태 ---
   const [qrLessonTitle, setQrLessonTitle] = useState<string>('');
-  const [qrLessonPin, setQrLessonPin] = useState<string>('1234');
   const [qrLessonPdfFile, setQrLessonPdfFile] = useState<File | null>(null);
   const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<string[]>([]);
   const [editingQrLesson, setEditingQrLesson] = useState<DriveItem | null>(null);
   const [editLessonTitle, setEditLessonTitle] = useState<string>('');
-  const [editLessonPin, setEditLessonPin] = useState<string>('1234');
   const [editSelectedDriveFileIds, setEditSelectedDriveFileIds] = useState<string[]>([]);
   const [existingAttachedFiles, setExistingAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [activeQrLesson, setActiveQrLesson] = useState<DriveItem | null>(null);
@@ -200,6 +199,17 @@ export default function App() {
   const [_isRefreshingSubmissions, setIsRefreshingSubmissions] = useState<boolean>(false);
   const [isLoadingNoteDetail] = useState<boolean>(false);
   const [isQrLessonInitialClear, setIsQrLessonInitialClear] = useState<boolean>(false);
+
+  // --- 🖥️ 전자칠판 라이브 수업 센터 전용 상태 ---
+  const [whiteboardTeachersList, setWhiteboardTeachersList] = useState<any[]>([]);
+  const [isLoadingWhiteboardLessons, setIsLoadingWhiteboardLessons] = useState<boolean>(false);
+  const [selectedTeacherNameForBoard, setSelectedTeacherNameForBoard] = useState<string | null>(null);
+  const [whiteboardViewMode, setWhiteboardViewMode] = useState<'hub' | 'drive'>('hub');
+  const [whiteboardSessionPrompt, setWhiteboardSessionPrompt] = useState<{
+    lesson: any;
+    teacherName: string;
+    hasExistingLive: boolean;
+  } | null>(null);
 
   // --- 통합 PDF 모음집 생성 상태 ---
   const [pdfCompilationTitle, setPdfCompilationTitle] = useState<string>('');
@@ -248,6 +258,84 @@ export default function App() {
     return items.filter(item => item.type === 'document' && !item.name.endsWith('.json'));
   }, [items]);
 
+  // 🖥️ 전자칠판 모드: 현재 선택된 선생님 데이터 (수업 목록 표시용)
+  const selectedTeacherForWhiteboard = useMemo(() => {
+    if (!whiteboardTeachersList.length) return null;
+    return whiteboardTeachersList.find(t => t.teacherName === selectedTeacherNameForBoard) || whiteboardTeachersList[0];
+  }, [whiteboardTeachersList, selectedTeacherNameForBoard]);
+
+  // 선생님 폴더 탐색 및 자동 진입 헬퍼 (루트 폴더에서 정확히 해당 교사 이름 폴더를 탐색하여 진입)
+  const findAndEnterTeacherFolder = async (rawName: string) => {
+    const cleanTeacherName = rawName.replace('tch_', '').replace(' 선생님', '').trim();
+    if (!cleanTeacherName) return;
+
+    try {
+      // 1. 구글 Drive API로 루트 폴더의 하위 폴더들을 직접 조회
+      let rootFolders: DriveItem[] = [];
+      if (googleApiKey) {
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${rootFolderId}'+in+parents+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false&fields=files(id,name,mimeType)&key=${googleApiKey}&_t=${Date.now()}`;
+        const res = await fetch(directUrl);
+        if (res.ok) {
+          const data = await res.json();
+          rootFolders = (data.files || []).map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            type: 'folder' as const,
+            folderId: f.id,
+            updatedAt: '',
+            viewUrl: '',
+            downloadUrl: ''
+          }));
+        }
+      }
+
+      if (rootFolders.length === 0) {
+        // 프록시 API 대체
+        const res = await fetch(`${apiBase}/api/drive?action=list&folderId=${rootFolderId}&_t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          rootFolders = (data.items || []).filter((i: any) => i.type === 'folder');
+        }
+      }
+
+      // 2. 해당 선생님 이름이 포함된 폴더 검색 (예: '이병우', '이병우 선생님')
+      const matched = rootFolders.find(f => f.name.includes(cleanTeacherName) || cleanTeacherName.includes(f.name.replace(' 선생님', '')));
+      if (matched) {
+        setFolderHistory([{ id: matched.id, name: `${cleanTeacherName} 선생님 드라이브` }]);
+        fetchDriveItems(matched.id);
+      } else {
+        console.warn(`선생님 폴더를 찾지 못했습니다: ${cleanTeacherName}`);
+      }
+    } catch (err) {
+      console.warn('선생님 폴더 자동 진입 오류:', err);
+    }
+  };
+
+  // 🖥️ 전자칠판 모드: 전체 선생님 목록 및 개설 수업 실시간 로드
+  const loadWhiteboardTeacherLessons = async () => {
+    setIsLoadingWhiteboardLessons(true);
+    try {
+      const teachers = await classroomRealtime.fetchAllTeacherLessons();
+      setWhiteboardTeachersList(teachers);
+      if (teachers.length > 0 && !selectedTeacherNameForBoard) {
+        setSelectedTeacherNameForBoard(teachers[0].teacherName);
+      }
+    } catch (err) {
+      console.warn('전자칠판 수업 목록 로드 오류:', err);
+    } finally {
+      setIsLoadingWhiteboardLessons(false);
+    }
+  };
+
+  // 마운트 시 세션 상태에 따라 해당 화면으로 자동 진입
+  useEffect(() => {
+    if (currentSession?.role === 'teacher') {
+      findAndEnterTeacherFolder(currentSession.name || currentSession.id);
+    } else if (currentSession?.role === 'whiteboard') {
+      loadWhiteboardTeacherLessons();
+    }
+  }, [currentSession?.id, currentSession?.role]);
+
   const handlePortalLoginSuccess = (session: UserSession) => {
     setCurrentSessionState(session);
     if (session.role === 'admin') {
@@ -256,12 +344,11 @@ export default function App() {
     } else if (session.role === 'teacher') {
       setAuthMode('teacher');
       localStorage.setItem('lbw_auth_mode', 'teacher');
-      const teacherName = session.id.replace('tch_', '').trim();
-      const matchedFolder = items.find(i => i.type === 'folder' && i.name.includes(teacherName));
-      if (matchedFolder) {
-        setFolderHistory([{ id: matchedFolder.id, name: `${teacherName} 선생님 드라이브` }]);
-        fetchDriveItems(matchedFolder.id);
-      }
+      findAndEnterTeacherFolder(session.name || session.id);
+    } else if (session.role === 'whiteboard') {
+      setAuthMode('whiteboard');
+      localStorage.setItem('lbw_auth_mode', 'whiteboard');
+      loadWhiteboardTeacherLessons();
     } else {
       setAuthMode('guest');
       localStorage.setItem('lbw_auth_mode', 'guest');
@@ -678,26 +765,17 @@ export default function App() {
         lessonId,
         title: cleanTitle,
         folderId: lessonFolderId,
-        teacherPin: qrLessonPin.trim() || '1234',
+        teacherPin: '1234',
         createdAt: new Date().toISOString(),
         pdfFileId: attachedFilesList[0]?.id,
         pdfFileName: attachedFilesList[0]?.name,
         attachedFiles: attachedFilesList
       };
 
-      const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
-      await executeDriveAction({
-        action: 'upload',
-        folderId: lessonFolderId,
-        name: 'lesson_config.json',
-        mimeType: 'application/json',
-        base64: configJsonBase64
-      });
-
-      // 5. Supabase에 수업 세션(학생앱 실시간 및 오프라인 공책 목록 노출용) 등록
+      // 5. [최우선] Supabase에 수업 세션(학생앱 실시간 및 오프라인 공책 목록 노출용) 즉시 등록
       const rawTeacherName = currentSession?.name || '선생님';
       const cleanTeacherName = rawTeacherName.replace(' 선생님', '').trim();
-      classroomRealtime.registerTeacherSession({
+      await classroomRealtime.registerTeacherSession({
         lessonId: lessonFolderId,
         teacherName: cleanTeacherName,
         lessonTitle: cleanTitle,
@@ -705,12 +783,23 @@ export default function App() {
         pdfName: attachedFilesList[0]?.name,
         attachedFiles: attachedFilesList,
         isLive: false // 생성 초기에는 오프라인 상태 (전자칠판에서 수업 개시 시 활성화)
-      }).catch(() => {});
+      }).catch((sbErr) => console.warn('Supabase register error:', sbErr));
+
+      // 6. 구글 드라이브 lesson_config.json 업로드 (백그라운드 안전 처리)
+      try {
+        const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
+        await executeDriveAction({
+          action: 'upload',
+          folderId: lessonFolderId,
+          name: 'lesson_config.json',
+          mimeType: 'application/json',
+          base64: configJsonBase64
+        }).catch(() => {});
+      } catch {}
 
       showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다! (자료 ${attachedFilesList.length}개 첨부됨)`);
       setActiveModal(null);
       setQrLessonTitle('');
-      setQrLessonPin('1234');
       setQrLessonPdfFile(null);
       setSelectedDriveFileIds([]);
       fetchDriveItems(currentFolder.id);
@@ -728,7 +817,6 @@ export default function App() {
   const handleOpenEditQrLesson = async (item: DriveItem) => {
     setEditingQrLesson(item);
     setEditLessonTitle(item.name.replace('[QR수업]', '').trim());
-    setEditLessonPin((item as any).teacherPin || '1234');
     setActiveModal('edit_qr_lesson');
 
     const lessonFolderId = item.folderId || item.id;
@@ -772,16 +860,7 @@ export default function App() {
     const newFolderName = `[QR수업] ${cleanTitle}`;
 
     try {
-      // 1. 폴더 이름 변경 (수업 제목 변경 시)
-      if (editingQrLesson.name !== newFolderName) {
-        await executeDriveAction({
-          action: 'rename',
-          id: lessonFolderId,
-          name: newFolderName
-        });
-      }
-
-      // 2. 다중 선택된 구글 드라이브 파일 목록 조합
+      // 1. 다중 선택된 구글 드라이브 파일 목록 완벽 조합
       const newAttachedFiles: AttachedFileItem[] = [];
 
       // A) 현재 폴더의 파일 중 선택된 것들
@@ -803,27 +882,7 @@ export default function App() {
         }
       }
 
-      // 3. lesson_config.json 업데이트 업로드
-      const lessonConfig = {
-        lessonId: lessonFolderId,
-        title: cleanTitle,
-        folderId: lessonFolderId,
-        teacherPin: editLessonPin.trim() || '1234',
-        updatedAt: new Date().toISOString(),
-        pdfFileId: newAttachedFiles[0]?.id,
-        pdfFileName: newAttachedFiles[0]?.name,
-        attachedFiles: newAttachedFiles
-      };
-      const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
-      await executeDriveAction({
-        action: 'upload',
-        folderId: lessonFolderId,
-        name: 'lesson_config.json',
-        mimeType: 'application/json',
-        base64: configJsonBase64
-      });
-
-      // 4. Supabase 세션 정보 갱신
+      // 2. [최우선 실행] Supabase 세션 정보 즉시 저장 (지연/오류 없이 100% 반영!)
       const rawTeacherName = currentSession?.name || '선생님';
       const cleanTeacherName = rawTeacherName.replace(' 선생님', '').trim();
       await classroomRealtime.registerTeacherSession({
@@ -836,7 +895,41 @@ export default function App() {
         isLive: false
       });
 
-      showToast(`🎉 '${cleanTitle}' 수업 정보 및 첨부자료(${newAttachedFiles.length}개)가 성공적으로 수정되었습니다!`);
+      // 3. 구글 드라이브 폴더명 변경 및 lesson_config.json 업로드는 백그라운드 안전 실행
+      (async () => {
+        try {
+          if (editingQrLesson.name !== newFolderName) {
+            await executeDriveAction({
+              action: 'rename',
+              id: lessonFolderId,
+              name: newFolderName
+            }).catch(() => {});
+          }
+
+          const lessonConfig = {
+            lessonId: lessonFolderId,
+            title: cleanTitle,
+            folderId: lessonFolderId,
+            teacherPin: '1234',
+            updatedAt: new Date().toISOString(),
+            pdfFileId: newAttachedFiles[0]?.id,
+            pdfFileName: newAttachedFiles[0]?.name,
+            attachedFiles: newAttachedFiles
+          };
+          const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
+          await executeDriveAction({
+            action: 'upload',
+            folderId: lessonFolderId,
+            name: 'lesson_config.json',
+            mimeType: 'application/json',
+            base64: configJsonBase64
+          }).catch(() => {});
+        } catch (gErr) {
+          console.warn('구글 드라이브 동기화 백그라운드 경고:', gErr);
+        }
+      })();
+
+      showToast(`🎉 '${cleanTitle}' 수업 정보 및 첨부자료(${newAttachedFiles.length}개)가 성공적으로 저장되었습니다!`);
       setActiveModal(null);
       setEditingQrLesson(null);
       fetchDriveItems(currentFolder.id);
@@ -847,6 +940,7 @@ export default function App() {
       setIsProcessingAction(false);
     }
   };
+
 
   // ==========================================================================
   // [QR 수업 대화형 실행: 세션 선택 모달 & 이어하기 / 새로 갱신 분기]
@@ -884,6 +978,57 @@ export default function App() {
 
     // 기존 기록이 없으면 바로 수업 대시보드 열기
     await startQrLessonViewer(item, false);
+  };
+
+  // ==========================================================================
+  // [🖥️ 전자칠판 라이브 수업 센터: 수업 선택 및 중복 진행 세션 분기]
+  // ==========================================================================
+  const handleWhiteboardSelectLesson = async (teacherName: string, lesson: any) => {
+    const anyLive = whiteboardTeachersList.some(t => t.lessons.some((l: any) => l.isLive));
+    const thisLessonLive = !!lesson.isLive;
+
+    if (anyLive || thisLessonLive) {
+      setWhiteboardSessionPrompt({
+        lesson,
+        teacherName,
+        hasExistingLive: true
+      });
+      return;
+    }
+
+    await handleLaunchWhiteboardLesson(teacherName, lesson, false);
+  };
+
+  const handleLaunchWhiteboardLesson = async (teacherName: string, lesson: any, terminatePrevious: boolean) => {
+    if (terminatePrevious) {
+      await classroomRealtime.closeAllOtherActiveSessions(lesson.lessonId);
+      showToast('🔄 이전 수업을 종료하고 새 수업을 개시합니다.');
+    }
+
+    const driveItem: DriveItem = {
+      id: lesson.lessonId,
+      name: `[QR수업] ${lesson.title}`,
+      type: 'folder',
+      folderId: lesson.lessonId,
+      updatedAt: lesson.createdAt || new Date().toISOString(),
+      viewUrl: '',
+      downloadUrl: ''
+    };
+
+    setWhiteboardSessionPrompt(null);
+    await startQrLessonViewer(driveItem, terminatePrevious);
+
+    await classroomRealtime.registerTeacherSession({
+      lessonId: lesson.lessonId,
+      teacherName: teacherName,
+      lessonTitle: lesson.title,
+      pdfId: lesson.pdfId,
+      pdfName: lesson.pdfName,
+      attachedFiles: lesson.attachedFiles,
+      isLive: true
+    });
+
+    loadWhiteboardTeacherLessons();
   };
 
   // 실제 QR 수업 대시보드 진입 실행 함수
@@ -1389,6 +1534,32 @@ export default function App() {
             <span>수업 QR 찍기</span>
           </button>
 
+          {/* 전자칠판 모드 전용: 수업 센터 vs 드라이브 탐색기 원클릭 스위처 */}
+          {authMode === 'whiteboard' && (
+            <button
+              type="button"
+              className="g-btn"
+              onClick={() => setWhiteboardViewMode(prev => prev === 'hub' ? 'drive' : 'hub')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '6px 12px',
+                borderRadius: '20px',
+                border: '1.5px solid #3b82f6',
+                background: whiteboardViewMode === 'hub' ? 'linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(37, 99, 235, 0.3) 100%)' : 'rgba(255,255,255,0.08)',
+                color: '#93c5fd',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                marginRight: '6px'
+              }}
+              title={whiteboardViewMode === 'hub' ? '구글 드라이브 파일 탐색기로 전환' : '전자칠판 라이브 수업 센터로 복귀'}
+            >
+              <span>{whiteboardViewMode === 'hub' ? '📁 드라이브 탐색기' : '🖥️ 수업 센터'}</span>
+            </button>
+          )}
+
           <button 
             className="gdrive-icon-btn" 
             title="새로고침"
@@ -1486,7 +1657,6 @@ export default function App() {
                     onClick={() => {
                       setIsNewMenuOpen(false);
                       setQrLessonTitle('');
-                      setQrLessonPin('1234');
                       setQrLessonPdfFile(null);
                       setActiveModal('new_qr_lesson');
                     }}
@@ -1590,8 +1760,217 @@ export default function App() {
 
         {/* 메인 뷰 */}
         <main className="gdrive-main" onClick={() => setSelectedItemId(null)}>
-          {/* 상단 툴바 & 브레드크럼 */}
-          <div className="gdrive-main-toolbar" onClick={(e) => e.stopPropagation()}>
+          {authMode === 'whiteboard' && whiteboardViewMode === 'hub' ? (
+            /* 🖥️ [전자칠판 라이브 수업 센터] 전면 렌더링 */
+            <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto', width: '100%', boxSizing: 'border-box' }} onClick={(e) => e.stopPropagation()}>
+              {/* 상단 안내 배너 */}
+              <div style={{
+                background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.18) 0%, rgba(30, 41, 59, 0.7) 100%)',
+                border: '1px solid rgba(59, 130, 246, 0.35)',
+                borderRadius: '16px',
+                padding: '20px 24px',
+                marginBottom: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
+                boxShadow: '0 8px 30px rgba(0, 0, 0, 0.4)'
+              }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '28px' }}>🖥️</span>
+                    <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#ffffff' }}>
+                      전자칠판 라이브 수업 센터
+                    </h2>
+                  </div>
+                  <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8' }}>
+                    선생님을 선택하고 개설된 수업을 터치하면 전자칠판 실시간 수업이 즉시 시작됩니다.
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={loadWhiteboardTeacherLessons}
+                    className="g-btn g-btn-text"
+                    style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--g-border)', padding: '8px 14px', borderRadius: '8px', color: '#ffffff', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer' }}
+                    title="수업 목록 새로고침"
+                  >
+                    🔄 목록 새로고침
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWhiteboardViewMode('drive')}
+                    className="g-btn g-btn-text"
+                    style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)', padding: '8px 14px', borderRadius: '8px', color: '#93c5fd', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer' }}
+                    title="구글 드라이브 파일 탐색기로 전환"
+                  >
+                    📁 드라이브 탐색기
+                  </button>
+                </div>
+              </div>
+
+              {/* 1. 선생님 선택 탭 / 카드 섹션 */}
+              <div style={{ marginBottom: '24px' }}>
+                <div style={{ fontSize: '13.5px', color: '#cbd5e1', fontWeight: 700, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>👨‍🏫 담당 선생님 선택</span>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>({whiteboardTeachersList.length}명 등록됨)</span>
+                </div>
+
+                {isLoadingWhiteboardLessons ? (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#94a3b8', fontSize: '13px' }}>
+                    <span style={{ fontSize: '24px', display: 'block', marginBottom: '8px' }}>🔄</span>
+                    선생님 목록 및 개설 수업을 불러오는 중입니다...
+                  </div>
+                ) : whiteboardTeachersList.length === 0 ? (
+                  <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', border: '1px dashed #30363d', padding: '36px', textAlign: 'center', color: '#94a3b8' }}>
+                    <span style={{ fontSize: '32px', display: 'block', marginBottom: '8px' }}>🏫</span>
+                    <p style={{ margin: '0 0 6px 0', color: '#ffffff', fontWeight: 600 }}>개설된 선생님 수업이 없습니다.</p>
+                    <p style={{ margin: 0, fontSize: '12px' }}>선생님 로그인 후 수업을 개설하시면 여기에 자동으로 표시됩니다.</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: '12px' }}>
+                    {whiteboardTeachersList.map(teacher => {
+                      const isSelected = (selectedTeacherNameForBoard || whiteboardTeachersList[0]?.teacherName) === teacher.teacherName;
+                      const liveCount = teacher.lessons.filter((l: any) => l.isLive).length;
+                      return (
+                        <div
+                          key={teacher.teacherName}
+                          onClick={() => setSelectedTeacherNameForBoard(teacher.teacherName)}
+                          style={{
+                            background: isSelected ? 'linear-gradient(135deg, rgba(37, 99, 235, 0.3) 0%, rgba(30, 41, 59, 0.85) 100%)' : 'rgba(30, 41, 59, 0.5)',
+                            border: isSelected ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.08)',
+                            borderRadius: '14px',
+                            padding: '14px 16px',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            boxShadow: isSelected ? '0 4px 16px rgba(37, 99, 235, 0.3)' : 'none'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '24px' }}>👨‍🏫</span>
+                            {liveCount > 0 ? (
+                              <span style={{ fontSize: '11px', color: '#4ade80', background: 'rgba(74, 222, 128, 0.18)', border: '1px solid rgba(74, 222, 128, 0.35)', padding: '2px 8px', borderRadius: '10px', fontWeight: 700 }}>
+                                🟢 {liveCount}개 진행 중
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: '#94a3b8', background: 'rgba(255, 255, 255, 0.06)', padding: '2px 8px', borderRadius: '10px' }}>
+                                {teacher.lessons.length}개 개설됨
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '16px', fontWeight: 700, color: '#ffffff' }}>
+                            {teacher.teacherName} 선생님
+                          </div>
+                          <div style={{ fontSize: '12px', color: isSelected ? '#93c5fd' : '#64748b', marginTop: '4px' }}>
+                            {isSelected ? '선택됨 (수업 목록 표시 중)' : '터치하여 수업 보기 ▶'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* 2. 선택된 선생님의 개설 수업 카드 목록 */}
+              {selectedTeacherForWhiteboard && (
+                <div>
+                  <div style={{ fontSize: '14px', color: '#ffffff', fontWeight: 700, marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>📚 {selectedTeacherForWhiteboard.teacherName} 선생님이 개설한 수업 목록</span>
+                    <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 400 }}>({selectedTeacherForWhiteboard.lessons.length}개)</span>
+                  </div>
+
+                  {selectedTeacherForWhiteboard.lessons.length === 0 ? (
+                    <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '30px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                      해당 선생님이 개설한 수업이 아직 없습니다.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+                      {selectedTeacherForWhiteboard.lessons.map((lesson: any) => {
+                        const isLive = !!lesson.isLive;
+                        const hasFiles = lesson.attachedFiles && lesson.attachedFiles.length > 0;
+                        return (
+                          <div
+                            key={lesson.lessonId}
+                            style={{
+                              background: isLive ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(30, 41, 59, 0.85) 100%)' : 'rgba(30, 41, 59, 0.65)',
+                              border: isLive ? '1.5px solid rgba(52, 211, 153, 0.5)' : '1px solid rgba(255, 255, 255, 0.1)',
+                              borderRadius: '16px',
+                              padding: '18px 20px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              justifyContent: 'space-between',
+                              boxShadow: isLive ? '0 8px 24px rgba(16, 185, 129, 0.2)' : 'none'
+                            }}
+                          >
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                                <span style={{ fontSize: '12px', color: isLive ? '#4ade80' : '#94a3b8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <span>{isLive ? '🟢' : '📓'}</span>
+                                  <span>{isLive ? '실시간 수업 진행 중' : '수업 대기 (오프라인)'}</span>
+                                </span>
+                                {lesson.createdAt && (
+                                  <span style={{ fontSize: '11px', color: '#64748b' }}>
+                                    {new Date(lesson.createdAt).toLocaleDateString('ko-KR')}
+                                  </span>
+                                )}
+                              </div>
+
+                              <h3 style={{ margin: '0 0 10px 0', fontSize: '17px', fontWeight: 700, color: '#ffffff', lineHeight: 1.3 }}>
+                                {lesson.title}
+                              </h3>
+
+                              <div style={{ fontSize: '12px', color: '#94a3b8', background: 'rgba(0,0,0,0.25)', padding: '6px 10px', borderRadius: '8px', marginBottom: '16px' }}>
+                                {hasFiles ? (
+                                  <span>📎 학습 자료 {lesson.attachedFiles.length}개 연결됨</span>
+                                ) : lesson.pdfName ? (
+                                  <span>📄 {lesson.pdfName}</span>
+                                ) : (
+                                  <span>자유 필기 공책</span>
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleWhiteboardSelectLesson(selectedTeacherForWhiteboard.teacherName, lesson)}
+                              style={{
+                                width: '100%',
+                                padding: '12px',
+                                borderRadius: '10px',
+                                border: 'none',
+                                background: isLive
+                                  ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                                  : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                                color: '#ffffff',
+                                fontSize: '14px',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '8px',
+                                boxShadow: isLive
+                                  ? '0 4px 14px rgba(16, 185, 129, 0.4)'
+                                  : '0 4px 14px rgba(37, 99, 235, 0.4)'
+                              }}
+                            >
+                              <span>▶️</span>
+                              <span>{isLive ? '수업 이어서 진행하기' : '전자칠판 수업 시작하기'}</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* 상단 툴바 & 브레드크럼 */}
+              <div className="gdrive-main-toolbar" onClick={(e) => e.stopPropagation()}>
             {/* 좌측: 선택된 항목 액션 바 OR 브레드크럼 */}
             {selectedItem ? (
               <div className="gdrive-selection-actions">
@@ -2037,8 +2416,79 @@ export default function App() {
               </h3>
             </div>
           )}
+            </>
+          )}
         </main>
       </div>
+
+      {/* ====================================================================
+          모달 0: 🖥️ 전자칠판 라이브 수업 센터 - 중복 진행 세션 확인 및 새로 개설 모달
+          ==================================================================== */}
+      {whiteboardSessionPrompt && (
+        <div className="modal-backdrop" onClick={() => setWhiteboardSessionPrompt(null)}>
+          <div className="modal-box" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px' }}>
+                <span>⚠️</span> 수업 개설 및 전환 확인
+              </h2>
+              <button className="modal-close-btn" onClick={() => setWhiteboardSessionPrompt(null)}>✕</button>
+            </div>
+
+            <div style={{ padding: '8px 0 16px 0' }}>
+              <p style={{ fontSize: '14.5px', color: '#ffffff', fontWeight: 600, lineHeight: 1.5, margin: '0 0 10px 0' }}>
+                현재 다른 수업이 진행 중이거나 이전 세션 기록이 있습니다.
+              </p>
+              <div style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '10px', padding: '12px 14px', fontSize: '12.5px', color: '#fca5a5', lineHeight: 1.5 }}>
+                <strong>[새로 개설]</strong>을 누르시면 이전 진행 수업은 <strong>자동 종료</strong>되며, 학생들에게 <strong>'{whiteboardSessionPrompt.lesson.title}'</strong> 새 수업이 즉시 열립니다.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="g-btn g-btn-text"
+                onClick={() => setWhiteboardSessionPrompt(null)}
+                style={{ color: '#94a3b8' }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLaunchWhiteboardLesson(whiteboardSessionPrompt.teacherName, whiteboardSessionPrompt.lesson, false)}
+                style={{
+                  background: 'rgba(59, 130, 246, 0.2)',
+                  border: '1px solid rgba(59, 130, 246, 0.4)',
+                  color: '#93c5fd',
+                  padding: '9px 14px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                ▶️ 이어서 계속하기
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLaunchWhiteboardLesson(whiteboardSessionPrompt.teacherName, whiteboardSessionPrompt.lesson, true)}
+                style={{
+                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                  border: 'none',
+                  color: '#ffffff',
+                  padding: '9px 16px',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(239, 68, 68, 0.4)'
+                }}
+              >
+                🔄 이전 수업 종료 후 새로 개설
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ====================================================================
           모달 1: 새 폴더 만들기
@@ -2104,23 +2554,7 @@ export default function App() {
                 />
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
-                  선생님 PIN 번호 (4자리)
-                </label>
-                <input 
-                  type="text" 
-                  maxLength={4}
-                  className="g-form-input" 
-                  value={qrLessonPin}
-                  onChange={(e) => setQrLessonPin(e.target.value)}
-                  placeholder="1234"
-                  required
-                />
-                <span style={{ fontSize: '11.5px', color: 'var(--g-text-muted)', marginTop: '4px', display: 'block' }}>
-                  전자칠판에서 수업 대시보드 관리 시 본인 확인용으로 사용됩니다.
-                </span>
-              </div>
+
 
               {/* 구글 드라이브 폴더 내 파일 다중 선택 영역 */}
               <div>
@@ -2272,20 +2706,7 @@ export default function App() {
                 />
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
-                  선생님 PIN 번호 (4자리)
-                </label>
-                <input 
-                  type="text" 
-                  maxLength={4}
-                  className="g-form-input" 
-                  value={editLessonPin}
-                  onChange={(e) => setEditLessonPin(e.target.value)}
-                  placeholder="1234"
-                  required
-                />
-              </div>
+
 
               {/* 연결 학습자료 다중 선택 영역 */}
               <div>

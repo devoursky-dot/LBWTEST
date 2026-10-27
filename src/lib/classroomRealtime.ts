@@ -202,6 +202,30 @@ class ClassroomRealtimeManager {
   }
 
   /**
+   * 전자칠판: 이전의 모든 진행 중 세션을 종료하고 새 수업 시작 준비
+   */
+  public async closeAllOtherActiveSessions(currentLessonId?: string): Promise<void> {
+    if (!supabase || !isSupabaseConfigured) return;
+    try {
+      let query = supabase
+        .from('class_notes')
+        .update({
+          student_num: 'REGISTERED',
+          updated_at: new Date().toISOString()
+        })
+        .eq('student_grade', '_TEACHER_SESSION_')
+        .eq('student_num', 'ACTIVE');
+
+      if (currentLessonId) {
+        query = query.neq('lesson_id', currentLessonId);
+      }
+      await query;
+    } catch (err) {
+      console.warn('[Realtime] closeAllOtherActiveSessions error:', err);
+    }
+  }
+
+  /**
    * 학생앱: 선생님별로 개설되어 있는 모든 수업 목록 가져오기
    * - 현재 실시간 수업 중인 경우 `isLive: true` (초록색 🟢 아이콘)
    * - 오프라인/대기 중인 수업인 경우 `isLive: false` (공책 📓 아이콘)
