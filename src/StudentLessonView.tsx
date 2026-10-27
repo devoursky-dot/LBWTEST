@@ -312,13 +312,13 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   });
 
-  // 선 끝 유지(0.46초) 시 직선/원/타원 자동 스냅 퀵셰이프 ON/OFF (기본값 true)
+  // 선 끝 유지(0.85초) 시 직선/원 자동 스냅 퀵셰이프 ON/OFF (기본값 false: 자연스러운 필기 보장)
   const [quickShapeEnabled, setQuickShapeEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('lbw_quick_shape');
-      return saved !== null ? saved === 'true' : true;
+      return saved !== null ? saved === 'true' : false;
     } catch {
-      return true;
+      return false;
     }
   });
 

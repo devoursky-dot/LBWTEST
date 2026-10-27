@@ -51,99 +51,123 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'auto' | 'scroll'>('auto');
 
-  // 수업자료 목록 및 다운로드 모달 상태
-  // 수업자료 목록 및 다운로드 모달 상태
-  const [lessonMaterials, setLessonMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string; updatedAt?: string; sourceTag?: string }>>([]);
-  const [driveAllMaterials, setDriveAllMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string; updatedAt?: string; modifiedTime?: string; sourceTag?: string }>>([]);
-  const [isLoadingDriveMaterials, setIsLoadingDriveMaterials] = useState<boolean>(false);
+  // 수업자료 목록 및 다운로드 모달 상태 (본 수업에 공식 등록된 자료만 엄격히 관리)
+  const [lessonMaterials, setLessonMaterials] = useState<Array<{ id: string; name: string; mimeType?: string; size?: string; updatedAt?: string; sourceTag?: string; modifiedTime?: string; viewUrl?: string }>>([]);
+  const [isLoadingMaterials, setIsLoadingMaterials] = useState<boolean>(false);
   const [materialSearchTerm, setMaterialSearchTerm] = useState<string>('');
   const [isMaterialModalOpen, setIsMaterialModalOpen] = useState<boolean>(false);
 
-  // 구글 드라이브 전체 수업자료 파일 실시간 조회 (PDF, 활동지, 교과서 문서 등)
-  const fetchDriveMaterials = useCallback(async () => {
-    setIsLoadingDriveMaterials(true);
-    const combinedFiles = new Map<string, any>();
+  // 본 수업에 공식 등록된 수업자료(대표 PDF 및 첨부 학습지)만 엄격히 동기화 (학생 필기 파일 원천 차단)
+  const fetchRegisteredLessonMaterials = useCallback(async () => {
+    setIsLoadingMaterials(true);
+    const materialsMap = new Map<string, any>();
     const apiBase = getApiBaseUrl();
 
-    // 1. 현재 수업 폴더(currentLessonId) 내 보관 파일 조회
-    if (currentLessonId) {
+    // 1) lesson prop에 이미 등록된 attachedFiles 및 pdfFileId 최우선 수집
+    if ((lesson as any).attachedFiles && Array.isArray((lesson as any).attachedFiles)) {
+      (lesson as any).attachedFiles.forEach((f: any) => {
+        if (f && f.id) {
+          materialsMap.set(f.id, {
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType || 'application/pdf',
+            size: f.size,
+            sourceTag: '수업 등록 자료'
+          });
+        }
+      });
+    }
+    if ((lesson as any).pdfFileId) {
+      materialsMap.set((lesson as any).pdfFileId, {
+        id: (lesson as any).pdfFileId,
+        name: (lesson as any).pdfFileName || `${cleanLessonTitle}.pdf`,
+        mimeType: 'application/pdf',
+        sourceTag: '수업 대표 교재'
+      });
+    }
+
+    // 2) Supabase 교사 세션 row에서 공식 등록된 첨부자료 동기화
+    if (supabase && isSupabaseConfigured && currentLessonId) {
       try {
-        const res = await fetch(`${apiBase}/api/drive?action=list&folderId=${currentLessonId}&_t=${Date.now()}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.items)) {
-            data.items
-              .filter((i: any) => i.type !== 'folder' && !i.name.endsWith('.json'))
-              .forEach((f: any) => {
-                combinedFiles.set(f.id, {
+        const { data: sessData } = await supabase
+          .from('class_notes')
+          .select('strokes_data')
+          .eq('lesson_id', currentLessonId)
+          .eq('student_grade', '_TEACHER_SESSION_')
+          .maybeSingle();
+
+        if (sessData?.strokes_data) {
+          if (sessData.strokes_data.attachedFiles && Array.isArray(sessData.strokes_data.attachedFiles)) {
+            sessData.strokes_data.attachedFiles.forEach((f: any) => {
+              if (f && f.id && !materialsMap.has(f.id)) {
+                materialsMap.set(f.id, {
                   id: f.id,
                   name: f.name,
                   mimeType: f.mimeType || 'application/pdf',
                   size: f.size,
-                  updatedAt: f.updatedAt,
-                  sourceTag: '수업 폴더'
+                  sourceTag: '수업 등록 자료'
                 });
-              });
+              }
+            });
+          }
+          if (sessData.strokes_data.pdfId && !materialsMap.has(sessData.strokes_data.pdfId)) {
+            materialsMap.set(sessData.strokes_data.pdfId, {
+              id: sessData.strokes_data.pdfId,
+              name: sessData.strokes_data.pdfName || `${cleanLessonTitle}.pdf`,
+              mimeType: 'application/pdf',
+              sourceTag: '수업 대표 교재'
+            });
           }
         }
-      } catch (e) {
-        console.warn('Lesson folder materials error:', e);
+      } catch (err) {
+        console.warn('Supabase registered materials fetch error:', err);
       }
     }
 
-    // 2. 선생님 드라이브 폴더 탐색 (루트 폴더 조회 후 교사 폴더 내 학습자료 로드)
-    try {
-      const rootRes = await fetch(`${apiBase}/api/drive?action=list&_t=${Date.now()}`);
-      if (rootRes.ok) {
-        const rootData = await rootRes.json();
-        if (Array.isArray(rootData.items)) {
-          const teacherFolders = rootData.items.filter((i: any) => i.type === 'folder');
-
-          // 담당 교사 폴더 우선, 없으면 모든 교사 폴더의 수업자료 탐색
-          const targetTeacherName = ((lesson as any).teacherName || '').replace(' 선생님', '').trim();
-          const targetFolders = targetTeacherName
-            ? teacherFolders.filter((tf: any) => tf.name.includes(targetTeacherName) || targetTeacherName.includes(tf.name.replace(' 선생님', '')))
-            : teacherFolders;
-
-          const foldersToScan = targetFolders.length > 0 ? targetFolders : teacherFolders;
-
-          await Promise.all(
-            foldersToScan.map(async (tf: any) => {
-              try {
-                const tfRes = await fetch(`${apiBase}/api/drive?action=list&folderId=${tf.id}&_t=${Date.now()}`);
-                if (tfRes.ok) {
-                  const tfData = await tfRes.json();
-                  if (Array.isArray(tfData.items)) {
-                    tfData.items
-                      .filter((i: any) => i.type !== 'folder' && !i.name.endsWith('.json'))
-                      .forEach((f: any) => {
-                        if (!combinedFiles.has(f.id)) {
-                          combinedFiles.set(f.id, {
-                            id: f.id,
-                            name: f.name,
-                            mimeType: f.mimeType || 'application/pdf',
-                            size: f.size,
-                            updatedAt: f.updatedAt,
-                            sourceTag: `${tf.name} 드라이브`
-                          });
-                        }
-                      });
+    // 3) 구글 드라이브 lesson_config.json에서 공식 등록된 첨부자료 보충 확인
+    if (materialsMap.size === 0 && currentLessonId) {
+      try {
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&fields=files(id,name)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
+        const cRes = await fetch(directUrl);
+        if (cRes.ok) {
+          const cData = await cRes.json();
+          const cfgFile = (cData.files || [])[0];
+          if (cfgFile) {
+            const dlRes = await fetch(`${apiBase}/api/drive?action=download&fileId=${cfgFile.id}&fileName=lesson_config.json`);
+            if (dlRes.ok) {
+              const cfgJson = await dlRes.json();
+              if (cfgJson.attachedFiles && Array.isArray(cfgJson.attachedFiles)) {
+                cfgJson.attachedFiles.forEach((f: any) => {
+                  if (f && f.id && !materialsMap.has(f.id)) {
+                    materialsMap.set(f.id, {
+                      id: f.id,
+                      name: f.name,
+                      mimeType: f.mimeType || 'application/pdf',
+                      size: f.size,
+                      sourceTag: '수업 등록 자료'
+                    });
                   }
-                }
-              } catch (subErr) {
-                console.warn(`Error fetching teacher folder ${tf.name}:`, subErr);
+                });
               }
-            })
-          );
+              if (cfgJson.pdfId && !materialsMap.has(cfgJson.pdfId)) {
+                materialsMap.set(cfgJson.pdfId, {
+                  id: cfgJson.pdfId,
+                  name: cfgJson.pdfName || `${cleanLessonTitle}.pdf`,
+                  mimeType: 'application/pdf',
+                  sourceTag: '수업 대표 교재'
+                });
+              }
+            }
+          }
         }
+      } catch (cfgErr) {
+        console.warn('lesson_config.json fetch error:', cfgErr);
       }
-    } catch (e) {
-      console.warn('Teacher materials fetch error:', e);
     }
 
-    setDriveAllMaterials(Array.from(combinedFiles.values()));
-    setIsLoadingDriveMaterials(false);
-  }, [currentLessonId, (lesson as any).teacherName]);
+    setLessonMaterials(Array.from(materialsMap.values()));
+    setIsLoadingMaterials(false);
+  }, [currentLessonId, cleanLessonTitle, (lesson as any).attachedFiles, (lesson as any).pdfFileId, (lesson as any).pdfFileName]);
 
   // 전자칠판 수업자료 스트리밍 다운로드 엔진 (구글 로그인/바이러스 경고 0%)
   const handleDownloadMaterial = (file: { id: string; name: string }) => {
@@ -193,92 +217,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       console.error('QR 생성 실패:', err);
     });
 
-    // 1-2. 수업자료 초기 수집: lesson prop의 attachedFiles 및 pdfFileId 등록
-    const initialFiles: Array<{ id: string; name: string; mimeType?: string; size?: string; sourceTag?: string }> = [];
-    if ((lesson as any).attachedFiles && Array.isArray((lesson as any).attachedFiles)) {
-      initialFiles.push(...(lesson as any).attachedFiles.map((f: any) => ({ ...f, sourceTag: '수업 등록 자료' })));
-    }
-    if ((lesson as any).pdfFileId && !initialFiles.some(f => f.id === (lesson as any).pdfFileId)) {
-      initialFiles.push({
-        id: (lesson as any).pdfFileId,
-        name: (lesson as any).pdfFileName || `${cleanLessonTitle}.pdf`,
-        mimeType: 'application/pdf',
-        sourceTag: '수업 대표 교재'
-      });
-    }
-    setLessonMaterials(initialFiles);
-
-    // 1-3. 구글 드라이브 전체 파일 백그라운드 탐색
-    fetchDriveMaterials();
-
-    // 1-4. Supabase 세션 row에서 첨부자료 및 PDF 보충 조회
-    if (supabase && isSupabaseConfigured) {
-      supabase
-        .from('class_notes')
-        .select('strokes_data')
-        .eq('lesson_id', currentLessonId)
-        .eq('student_grade', '_TEACHER_SESSION_')
-        .maybeSingle()
-        .then(({ data: sessData }) => {
-          if (sessData?.strokes_data) {
-            const filesFromDb: any[] = [];
-            if (sessData.strokes_data.attachedFiles && Array.isArray(sessData.strokes_data.attachedFiles)) {
-              filesFromDb.push(...sessData.strokes_data.attachedFiles.map((f: any) => ({ ...f, sourceTag: '수업 등록 자료' })));
-            }
-            if (sessData.strokes_data.pdfId) {
-              filesFromDb.push({
-                id: sessData.strokes_data.pdfId,
-                name: sessData.strokes_data.pdfName || `${cleanLessonTitle}.pdf`,
-                mimeType: 'application/pdf',
-                sourceTag: '수업 대표 교재'
-              });
-            }
-            if (filesFromDb.length > 0) {
-              setLessonMaterials(prev => {
-                const map = new Map<string, any>();
-                prev.forEach(f => map.set(f.id, f));
-                filesFromDb.forEach(f => map.set(f.id, f));
-                return Array.from(map.values());
-              });
-            }
-          }
-        }, () => {});
-    }
-
-    // 1-5. 폴더 내 모든 파일 비동기 탐색하여 수업자료 목록 보강
-    (async () => {
-      try {
-        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType,size)&key=AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw&_t=${Date.now()}`;
-        const res = await fetch(directUrl);
-        if (res.ok) {
-          const data = await res.json();
-          const files = (data.files || []).filter((f: any) => f.mimeType !== 'application/vnd.google-apps.folder');
-          if (files.length > 0) {
-            setLessonMaterials(prev => {
-              const map = new Map<string, any>();
-              prev.forEach(f => map.set(f.id, f));
-              files.forEach((f: any) => map.set(f.id, f));
-              return Array.from(map.values());
-            });
-
-            // 대표 PDF가 아직 없다면 첫 번째 PDF로 QR 주소 보강
-            if (!(lesson as any).pdfFileId) {
-              const pdfFile = files.find((f: any) => f.mimeType === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
-              if (pdfFile) {
-                const enrichedUrl = `${baseOrigin}/?lessonId=${currentLessonId}&title=${encodeURIComponent(cleanLessonTitle)}&pdfId=${encodeURIComponent(pdfFile.id)}&pdfName=${encodeURIComponent(pdfFile.name)}`;
-                setStudentUrl(enrichedUrl);
-                QRCode.toDataURL(enrichedUrl, { width: 400, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
-                  .then(setQrCodeDataUrl)
-                  .catch(() => {});
-              }
-            }
-          }
-        }
-      } catch (fErr) {
-        console.warn('수업자료 목록 탐색 실패:', fErr);
-      }
-    })();
-  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName, (lesson as any).attachedFiles, fetchDriveMaterials]);
+    // 1-2. 본 수업에 공식 등록된 수업자료 즉시 동기화
+    fetchRegisteredLessonMaterials();
+  }, [currentLessonId, cleanLessonTitle, (lesson as any).pdfFileId, (lesson as any).pdfFileName, (lesson as any).attachedFiles, fetchRegisteredLessonMaterials]);
 
   // 2. 초기 DB 제출 목록 조회 (Vercel 클라우드 릴레이 + Supabase 1.5초 가드)
   const fetchSubmissionsFromDb = async () => {
@@ -945,15 +886,15 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             }}
             onClick={() => {
               setIsMaterialModalOpen(true);
-              fetchDriveMaterials();
+              fetchRegisteredLessonMaterials();
             }}
-            title="구글 드라이브 및 본 수업에 연결된 학습자료(PDF, 활동지 등)를 전자칠판 기기에 다운로드합니다."
+            title="본 수업에 등록된 학습자료(PDF, 활동지 등)를 전자칠판 기기에 다운로드합니다."
           >
             <span style={{ fontSize: '15px' }}>📥</span>
             <span>수업자료 다운로드</span>
-            {(lessonMaterials.length > 0 || driveAllMaterials.length > 0) && (
+            {lessonMaterials.length > 0 && (
               <span style={{ fontSize: '11px', background: '#0284c7', color: '#ffffff', padding: '1px 7px', borderRadius: '10px', fontWeight: 800 }}>
-                {lessonMaterials.length > 0 ? lessonMaterials.length : driveAllMaterials.length}
+                {lessonMaterials.length}
               </span>
             )}
           </button>
@@ -1525,8 +1466,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
               />
               <button
                 type="button"
-                onClick={fetchDriveMaterials}
-                disabled={isLoadingDriveMaterials}
+                onClick={fetchRegisteredLessonMaterials}
+                disabled={isLoadingMaterials}
                 style={{
                   background: '#21262d',
                   border: '1px solid #30363d',
@@ -1540,35 +1481,25 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   alignItems: 'center',
                   gap: '6px'
                 }}
-                title="구글 드라이브 최신 목록 새로고침"
+                title="수업자료 목록 새로고침"
               >
-                {isLoadingDriveMaterials ? '🔄 조회 중...' : '🔄 새로고침'}
+                {isLoadingMaterials ? '🔄 확인 중...' : '🔄 새로고침'}
               </button>
             </div>
 
-            {/* 3. 파일 목록 컨테이너 */}
+            {/* 3. 파일 목록 컨테이너 (본 수업 공식 등록 자료만 표시) */}
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
               {(() => {
-                // 통합 자료 맵 (lessonMaterials 우선 + driveAllMaterials 병합)
-                const mergedMap = new Map<string, any>();
-                lessonMaterials.forEach(f => mergedMap.set(f.id, { ...f, isLessonAttached: true }));
-                driveAllMaterials.forEach(f => {
-                  if (!mergedMap.has(f.id)) {
-                    mergedMap.set(f.id, { ...f, isLessonAttached: false });
-                  }
-                });
-                const allList = Array.from(mergedMap.values());
-
-                // 검색 필터링
-                const filtered = allList.filter(f =>
+                // 본 수업에 공식 등록된 자료 목록 필터링
+                const filtered = lessonMaterials.filter(f =>
                   f.name.toLowerCase().includes(materialSearchTerm.trim().toLowerCase())
                 );
 
-                if (isLoadingDriveMaterials && filtered.length === 0) {
+                if (isLoadingMaterials && filtered.length === 0) {
                   return (
                     <div style={{ padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
                       <span style={{ fontSize: '28px', display: 'block', marginBottom: '8px' }}>🔄</span>
-                      구글 드라이브에서 수업자료를 불러오는 중입니다...
+                      등록된 수업자료를 확인하는 중입니다...
                     </div>
                   );
                 }
@@ -1577,11 +1508,13 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   return (
                     <div style={{ padding: '36px 16px', textAlign: 'center', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '12px', border: '1px dashed #30363d' }}>
                       <span style={{ fontSize: '32px', display: 'block', marginBottom: '8px' }}>📂</span>
-                      <p style={{ margin: '0 0 6px', fontSize: '14px', fontWeight: 600, color: '#ffffff' }}>
-                        {materialSearchTerm ? `'${materialSearchTerm}' 검색 결과가 없습니다.` : '조회된 구글 드라이브 수업자료가 없습니다.'}
+                      <p style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: 700, color: '#ffffff' }}>
+                        {materialSearchTerm ? `'${materialSearchTerm}' 검색 결과가 없습니다.` : '본 수업에 등록된 수업자료가 없습니다.'}
                       </p>
-                      <p style={{ margin: 0, fontSize: '12px', color: '#8b949e' }}>
-                        선생님 구글 드라이브 폴더에 PDF나 문서를 업로드하시면 여기에 자동으로 표시됩니다.
+                      <p style={{ margin: 0, fontSize: '12.5px', color: '#8b949e', lineHeight: 1.6 }}>
+                        {materialSearchTerm
+                          ? '검색어를 변경하여 다시 시도해 주세요.'
+                          : '선생님 드라이브 포털의 [✏️ 자료 수정] 메뉴에서 수업에 사용할 교재나 학습지(PDF/문서)를 등록해 주세요.'}
                       </p>
                     </div>
                   );
@@ -1602,8 +1535,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                         justifyContent: 'space-between',
                         padding: '12px 16px',
                         borderRadius: '12px',
-                        background: file.isLessonAttached ? 'rgba(56, 189, 248, 0.08)' : 'rgba(255, 255, 255, 0.03)',
-                        border: file.isLessonAttached ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid rgba(255, 255, 255, 0.08)',
+                        background: 'rgba(56, 189, 248, 0.08)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
                         transition: 'all 0.15s ease'
                       }}
                     >
@@ -1614,16 +1547,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                             <span style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {file.name}
                             </span>
-                            {file.isLessonAttached && (
-                              <span style={{ fontSize: '10.5px', background: 'rgba(56, 189, 248, 0.25)', color: '#7dd3fc', border: '1px solid rgba(56, 189, 248, 0.45)', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                                📌 현재 수업 등록 자료
-                              </span>
-                            )}
-                            {file.sourceTag && !file.isLessonAttached && (
-                              <span style={{ fontSize: '10.5px', background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
-                                🏷️ {file.sourceTag}
-                              </span>
-                            )}
+                            <span style={{ fontSize: '10.5px', background: 'rgba(56, 189, 248, 0.25)', color: '#7dd3fc', border: '1px solid rgba(56, 189, 248, 0.45)', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>
+                              📌 {file.sourceTag || '수업 등록 자료'}
+                            </span>
                           </div>
                           <div style={{ fontSize: '11.5px', color: '#8b949e', marginTop: '3px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span>
@@ -1634,7 +1560,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                                 : '구글 드라이브 문서'}
                             </span>
                             {(file.updatedAt || file.modifiedTime) && (
-                              <span>• {file.updatedAt || new Date(file.modifiedTime).toLocaleDateString('ko-KR')}</span>
+                              <span>• {file.updatedAt || (file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('ko-KR') : '')}</span>
                             )}
                           </div>
                         </div>
