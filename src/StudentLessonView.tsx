@@ -274,9 +274,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 교실 통일성을 위해 항상 검정색 칠판 다크 모드(#131314)로 고정
   const paperTheme = 'dark';
 
-  const [tool, setTool] = useState<'pen' | 'highlighter' | 'eraser' | 'text' | 'image' | 'lasso'>('pen');
+  const [tool, setTool] = useState<'pen' | 'shapePen' | 'highlighter' | 'eraser' | 'text' | 'image' | 'lasso'>('pen');
   const [penColor, setPenColor] = useState<string>('#ffffff'); // 기본값: 칠판에 가장 선명한 흰색 분필
   const [penSize, setPenSize] = useState<number>(3);
+  const [shapePenColor, setShapePenColor] = useState<string>('#38bdf8'); // 도형/제도 펜 기본 색상: 또렷한 시안 블루
+  const [shapePenSize, setShapePenSize] = useState<number>(3);
   const [highlighterColor, setHighlighterColor] = useState<string>('#fde047');
   const [highlighterSize, setHighlighterSize] = useState<number>(18);
   const [eraserSize, setEraserSize] = useState<number>(24);
@@ -310,7 +312,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   });
 
-  const [activePopup, setActivePopup] = useState<'pen' | 'highlighter' | 'eraser' | 'settings' | 'image' | 'menu' | null>(null);
+  const [activePopup, setActivePopup] = useState<'pen' | 'shapePen' | 'highlighter' | 'eraser' | 'settings' | 'image' | 'menu' | null>(null);
 
   // --- 4-1. 페이지별 전체 배경 & 임베드 이미지(스티커) 상태 ---
   const [fullPageBackground, setFullPageBackground] = useState<string | null>(null);
@@ -512,6 +514,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       } else if (e.key === 'p' || e.key === 'P') {
         setTool('pen');
         showToast('✏️ 펜 모드');
+      } else if (e.key === 's' || e.key === 'S') {
+        setTool('shapePen');
+        showToast('📐 도형/제도 펜 모드');
       } else if (e.key === 'h' || e.key === 'H') {
         setTool('highlighter');
         showToast('🖍️ 형광펜 모드');
@@ -3010,6 +3015,50 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             />
           </button>
 
+          {/* 3-1. [📐 도형/제도 펜 (직선·원·호·자석 연결)] */}
+          <button
+            id="btn-tool-shape-pen"
+            type="button"
+            className={`student-tool-btn ${tool === 'shapePen' ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (tool !== 'shapePen') {
+                setTool('shapePen');
+                showToast('📐 도형/제도 펜 활성화: 직선, 원, 호, 자석 연결 제도를 그릴 수 있습니다.');
+              } else {
+                setActivePopup(prev => prev === 'shapePen' ? null : 'shapePen');
+              }
+            }}
+            style={{
+              width: '36px',
+              height: '34px',
+              padding: 0,
+              borderRadius: '8px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: tool === 'shapePen' ? 'rgba(168, 85, 247, 0.25)' : 'transparent',
+              border: tool === 'shapePen' ? '1px solid rgba(168, 85, 247, 0.6)' : '1px solid transparent',
+              color: tool === 'shapePen' ? '#c084fc' : '#e2e8f0',
+              gap: '2px',
+              flexShrink: 0
+            }}
+            title="도형/제도 펜 (직선, 원, 호 자동 정렬 및 끝점 자석 연결, 'S' 단축키, 다시 클릭 시 굵기 및 색상 설정)"
+          >
+            <span style={{ fontSize: '15px', lineHeight: 1 }}>📐</span>
+            <div
+              style={{
+                width: '14px',
+                height: `${Math.min(4, Math.max(2, shapePenSize))}px`,
+                borderRadius: '2px',
+                backgroundColor: shapePenColor,
+                boxShadow: '0 0 4px rgba(0,0,0,0.4)',
+                border: shapePenColor === '#000000' ? '1px solid #777' : undefined
+              }}
+            />
+          </button>
+
           {/* 4. [/ 형광펜] */}
           <button
             id="btn-tool-highlighter"
@@ -3140,32 +3189,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             </button>
           )}
 
-          {/* 6. [□ PDF/이미지] */}
-          <button
-            id="btn-tool-image"
-            type="button"
-            className={`student-tool-btn ${activePopup === 'image' ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setActivePopup(prev => prev === 'image' ? null : 'image');
-            }}
-            style={{
-              width: '36px',
-              height: '34px',
-              padding: 0,
-              borderRadius: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: activePopup === 'image' ? 'rgba(99, 102, 241, 0.25)' : 'transparent',
-              border: activePopup === 'image' ? '1px solid rgba(99, 102, 241, 0.6)' : '1px solid transparent',
-              color: activePopup === 'image' ? '#a5b4fc' : '#e2e8f0',
-              flexShrink: 0
-            }}
-            title="PDF 및 이미지 삽입 (학습지, 문제 사진 배경/스티커 추가)"
-          >
-            <IconImageDoc size={18} color={activePopup === 'image' ? '#a5b4fc' : '#e2e8f0'} />
-          </button>
 
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.15)', margin: '0 2px', flexShrink: 0 }} />
 
@@ -3643,6 +3666,41 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             </div>
           </div>
 
+          {/* [툴바에서 이전된 학습지 및 이미지 삽입 도구] */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>
+              🖼️ 학습지 / 문제 사진 삽입
+            </div>
+            <button
+              id="menu-btn-image-tool"
+              type="button"
+              className="student-tool-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setActivePopup('image');
+              }}
+              style={{
+                width: '100%',
+                justifyContent: 'center',
+                padding: '9px 12px',
+                fontSize: '12.5px',
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(139, 92, 246, 0.25) 100%)',
+                border: '1px solid rgba(139, 92, 246, 0.5)',
+                color: '#c7d2fe',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+              title="PDF 학습지 및 문제 사진을 배경 또는 스티커로 삽입합니다"
+            >
+              <IconImageDoc size={18} color="#c7d2fe" />
+              <span>PDF 및 이미지 삽입 도구 열기</span>
+            </button>
+          </div>
+
           <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
 
           {/* 3. 공책 파일 저장 관리 (.qrdocs & PDF) */}
@@ -4105,6 +4163,152 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     {quickShapeEnabled ? 'ON' : 'OFF'}
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ====================================================================
+            [팝오버 1-1] 📐 도형/제도 펜 설정 팝오버
+            ==================================================================== */}
+        {activePopup === 'shapePen' && (
+          <div
+            id="popup-shape-pen-settings"
+            className="samsung-tool-popup"
+            onClick={(e) => e.stopPropagation()}
+            style={{ position: 'absolute', top: popupTop, left: '44px', zIndex: 1000, width: '280px', maxWidth: 'calc(100vw - 16px)' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '15px' }}>📐</span>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#ffffff' }}>도형 / 제도 펜 설정</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActivePopup(null)}
+                style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: '14px', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', lineHeight: 1.4 }}>
+              직선, 원, 호를 깔끔하게 정돈하고, 꼭짓점이 자석처럼 달라붙어 다각형과 그래프를 쉽게 그립니다.
+            </p>
+
+            {/* 실시간 굵기 미리보기 */}
+            <div className="samsung-preview-box">
+              <svg width="170" height="32" viewBox="0 0 170 32" style={{ overflow: 'visible' }}>
+                <line
+                  x1="10"
+                  y1="16"
+                  x2="160"
+                  y2="16"
+                  stroke={shapePenColor}
+                  strokeWidth={shapePenSize}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: '#c084fc' }}>{shapePenSize}px</span>
+            </div>
+
+            {/* 굵기 슬라이더 */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '5px' }}>
+                <span>제도선 굵기</span>
+                <span>1px ~ 24px</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="24"
+                value={shapePenSize}
+                onChange={(e) => setShapePenSize(Number(e.target.value))}
+                className="samsung-range-slider"
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
+                {[1, 2, 3, 5, 8, 14].map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    className={`size-dot-btn ${shapePenSize === sz ? 'selected' : ''}`}
+                    onClick={() => setShapePenSize(sz)}
+                    style={{ width: '28px', height: '28px' }}
+                    title={`${sz}px`}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.min(18, Math.max(3, sz))}px`,
+                        height: `${Math.min(18, Math.max(3, sz))}px`,
+                        borderRadius: '50%',
+                        background: shapePenSize === sz ? '#ffffff' : 'rgba(255, 255, 255, 0.7)'
+                      }}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ height: '1px', background: 'var(--g-border-subtle)' }} />
+
+            {/* 색상 팔레트 */}
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--g-text-secondary)', marginBottom: '6px', fontWeight: 600 }}>
+                도형 선 색상
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '6px' }}>
+                {[
+                  '#38bdf8', '#a855f7', '#ffffff', '#ef4444', '#f59e0b', '#10b981',
+                  '#60a5fa', '#ec4899', '#94a3b8', '#000000', '#f43f5e', '#6366f1'
+                ].map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    className={`color-dot-btn ${shapePenColor === color ? 'selected' : ''}`}
+                    style={{
+                      backgroundColor: color,
+                      width: '26px',
+                      height: '26px',
+                      border: color === '#000000' ? '1px solid #555' : undefined,
+                      margin: '0 auto'
+                    }}
+                    onClick={() => setShapePenColor(color)}
+                  />
+                ))}
+              </div>
+
+              {/* 커스텀 색상 선택기 */}
+              <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '11px', color: 'var(--g-text-secondary)' }}>직접 색상 지정</span>
+                <label
+                  style={{
+                    position: 'relative',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '3px 8px',
+                    background: 'rgba(255,255,255,0.08)',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '11.5px',
+                    color: '#ffffff'
+                  }}
+                >
+                  <input
+                    type="color"
+                    value={shapePenColor}
+                    onChange={(e) => setShapePenColor(e.target.value)}
+                    style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' }}
+                  />
+                  <span style={{
+                    width: '14px',
+                    height: '14px',
+                    borderRadius: '50%',
+                    background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
+                    display: 'inline-block'
+                  }} />
+                  <span>팔레트 🎨</span>
+                </label>
               </div>
             </div>
           </div>
@@ -5063,7 +5267,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onUpdateImage={handleUpdateEmbeddedImage}
             onDeleteImage={handleDeleteEmbeddedImage}
             onEditCrop={handleEditCrop}
-            isDrawingToolActive={tool === 'pen' || tool === 'highlighter' || tool === 'eraser'}
+            isDrawingToolActive={tool === 'pen' || tool === 'shapePen' || tool === 'highlighter' || tool === 'eraser'}
             A4_WIDTH={A4_WIDTH}
             A4_HEIGHT={A4_HEIGHT}
           />
@@ -5075,8 +5279,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             onStrokesChange={handleStrokesChange}
             onUndoSnapshot={handleUndoSnapshot}
             tool={tool}
-            penColor={penColor}
-            penSize={penSize}
+            penColor={tool === 'shapePen' ? shapePenColor : penColor}
+            penSize={tool === 'shapePen' ? shapePenSize : penSize}
             highlighterColor={highlighterColor}
             highlighterSize={highlighterSize}
             eraserSize={eraserSize}

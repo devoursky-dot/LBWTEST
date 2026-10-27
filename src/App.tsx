@@ -387,6 +387,25 @@ export default function App() {
       }
     })();
 
+    // 로컬에 생성된 QR 수업 항목 병합 헬퍼
+    const mergeWithLocalCreatedLessons = (baseList: DriveItem[]): DriveItem[] => {
+      try {
+        const stored: any[] = JSON.parse(localStorage.getItem('local_created_lessons') || '[]');
+        const matchingLocal: DriveItem[] = stored
+          .filter(l => l.parentFolderId === folderId && !deletedIds.includes(l.id) && !deletedIds.includes(l.folderId))
+          .map(l => ({
+            ...l,
+            viewUrl: l.viewUrl || '',
+            downloadUrl: l.downloadUrl || ''
+          }));
+        const existingIds = new Set(baseList.map(b => b.folderId || b.id));
+        const toAdd = matchingLocal.filter(l => !existingIds.has(l.folderId || l.id));
+        return [...toAdd, ...baseList];
+      } catch {
+        return baseList;
+      }
+    };
+
     // 1. 구글 공식 Drive API v3 직접 호출 최우선 실행 (구형 전자칠판 5분 지연 및 Vercel 방화벽 완전 회피)
     if (googleApiKey) {
       try {
@@ -418,7 +437,7 @@ export default function App() {
               downloadUrl: `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
             };
           });
-          setItems(directItems);
+          setItems(mergeWithLocalCreatedLessons(directItems));
           setIsLoading(false);
           return;
         }
@@ -440,7 +459,7 @@ export default function App() {
         const data = await res.json();
         if (data.items && Array.isArray(data.items)) {
           const filtered = data.items.filter((item: any) => !deletedIds.includes(item.folderId || item.id) && !deletedIds.includes(item.id));
-          setItems(filtered);
+          setItems(mergeWithLocalCreatedLessons(filtered));
           setIsLoading(false);
           return;
         }
@@ -448,7 +467,8 @@ export default function App() {
       throw new Error('데이터 응답 형식 오류');
     } catch (err: any) {
       console.warn('API 목록 조회 실패:', err);
-      setErrorMessage('구글 드라이브 목록을 불러오지 못했습니다.');
+      setItems(mergeWithLocalCreatedLessons([]));
+      setErrorMessage(null);
     } finally {
       setIsLoading(false);
     }
@@ -587,25 +607,43 @@ export default function App() {
         body: JSON.stringify({ ...payload, gasUrl: finalGasUrl })
       });
       if (res.ok) {
-        const data = await res.json();
-        if (data.success) return data;
-        if (data.error) throw new Error(data.error);
+        const text = await res.text();
+        try {
+          const data = JSON.parse(text);
+          if (data.success) return data;
+          if (data.error) throw new Error(data.error);
+        } catch (jsonErr: any) {
+          throw new Error(jsonErr.message);
+        }
       }
-    } catch (proxyErr) {
+    } catch (proxyErr: any) {
       console.warn('Proxy drive action failed, trying direct GAS fetch:', proxyErr);
+      if (proxyErr.message && (proxyErr.message.includes('액세스') || proxyErr.message.includes('권한'))) {
+        throw proxyErr;
+      }
     }
 
     if (finalGasUrl) {
-      const directRes = await fetch(finalGasUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      const directData = await directRes.json();
-      if (!directData.success) {
-        throw new Error(directData.error || '요청 처리에 실패했습니다.');
+      try {
+        const directRes = await fetch(finalGasUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload)
+        });
+        const directText = await directRes.text();
+        let directData;
+        try {
+          directData = JSON.parse(directText);
+        } catch {
+          throw new Error('Google Apps Script 웹 앱 권한 오류 (HTML 응답 수신됨)');
+        }
+        if (!directData.success) {
+          throw new Error(directData.error || '요청 처리에 실패했습니다.');
+        }
+        return directData;
+      } catch (directErr: any) {
+        throw new Error(directErr.message || '요청 처리에 실패했습니다.');
       }
-      return directData;
     }
 
     throw new Error('Google Apps Script 업로드 URL이 설정되어 있지 않습니다.');
@@ -730,34 +768,48 @@ export default function App() {
     showToast(`📱 '${folderName}' 수업 폴더를 생성합니다...`);
 
     try {
-      // 1. 구글 드라이브에 수업 전용 폴더 생성
-      const folderRes = await executeDriveAction({
-        action: 'createFolder',
-        folderId: currentFolder.id,
-        name: folderName
-      });
+      let lessonFolderId = `lesson_${Date.now()}`;
+      let driveFolderCreated = false;
 
-      const lessonFolderId = folderRes.folderId;
-      const lessonId = `lesson_${Date.now()}`;
+      // 1. 구글 드라이브에 수업 전용 폴더 생성 시도 (GAS 웹앱 경유)
+      try {
+        const folderRes = await executeDriveAction({
+          action: 'createFolder',
+          folderId: currentFolder.id,
+          name: folderName
+        });
+        if (folderRes && folderRes.folderId) {
+          lessonFolderId = folderRes.folderId;
+          driveFolderCreated = true;
+        }
+      } catch (driveErr) {
+        console.warn('Google Drive folder creation via GAS failed, proceeding with local & Supabase session:', driveErr);
+      }
+
+      const lessonId = lessonFolderId;
       const attachedFilesList: AttachedFileItem[] = [];
 
-      // 2. 학습지 로컬 파일이 첨부되었으면 폴더 내에 업로드
+      // 2. 학습지 로컬 파일이 첨부되었으면 폴더 내에 업로드 시도
       if (qrLessonPdfFile) {
-        showToast(`📄 학습지 '${qrLessonPdfFile.name}' 업로드 중...`);
-        const pdfBase64 = await fileToBase64(qrLessonPdfFile);
-        const uploadPdfRes = await executeDriveAction({
-          action: 'upload',
-          folderId: lessonFolderId,
-          name: qrLessonPdfFile.name,
-          mimeType: qrLessonPdfFile.type || 'application/pdf',
-          base64: pdfBase64
-        });
-        attachedFilesList.push({
-          id: uploadPdfRes.id,
-          name: qrLessonPdfFile.name,
-          downloadUrl: `https://drive.google.com/uc?export=download&id=${uploadPdfRes.id}`,
-          mimeType: qrLessonPdfFile.type || 'application/pdf'
-        });
+        try {
+          showToast(`📄 학습지 '${qrLessonPdfFile.name}' 업로드 중...`);
+          const pdfBase64 = await fileToBase64(qrLessonPdfFile);
+          const uploadPdfRes = await executeDriveAction({
+            action: 'upload',
+            folderId: lessonFolderId,
+            name: qrLessonPdfFile.name,
+            mimeType: qrLessonPdfFile.type || 'application/pdf',
+            base64: pdfBase64
+          });
+          attachedFilesList.push({
+            id: uploadPdfRes.id,
+            name: qrLessonPdfFile.name,
+            downloadUrl: `https://drive.google.com/uc?export=download&id=${uploadPdfRes.id}`,
+            mimeType: qrLessonPdfFile.type || 'application/pdf'
+          });
+        } catch (pdfErr) {
+          console.warn('PDF upload to drive failed, adding local reference:', pdfErr);
+        }
       }
 
       // 3. 선생님 구글 드라이브 폴더에서 다중 선택한 파일들 추가
@@ -772,7 +824,7 @@ export default function App() {
         });
       }
 
-      // 4. 수업 설정(Config) JSON 데이터 생성 및 업로드
+      // 4. 수업 설정(Config) JSON 데이터 생성
       const lessonConfig = {
         lessonId,
         title: cleanTitle,
@@ -797,17 +849,48 @@ export default function App() {
         isLive: false // 생성 초기에는 오프라인 상태 (전자칠판에서 수업 개시 시 활성화)
       }).catch((sbErr) => console.warn('Supabase register error:', sbErr));
 
-      // 6. 구글 드라이브 lesson_config.json 업로드 (백그라운드 안전 처리)
+      // 6. 구글 드라이브 lesson_config.json 업로드 (드라이브 폴더가 정상 생성된 경우에만)
+      if (driveFolderCreated) {
+        try {
+          const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
+          await executeDriveAction({
+            action: 'upload',
+            folderId: lessonFolderId,
+            name: 'lesson_config.json',
+            mimeType: 'application/json',
+            base64: configJsonBase64
+          }).catch(() => {});
+        } catch {}
+      }
+
+      // 7. 로컬 저장소에 생성된 수업 항목 즉시 등록 (Drive API 목록에 미반영되더라도 100% 노출)
+      const newLessonItem: DriveItem = {
+        id: lessonFolderId,
+        name: folderName,
+        type: 'folder',
+        folderId: lessonFolderId,
+        size: '-',
+        updatedAt: new Date().toLocaleDateString('ko-KR'),
+        viewUrl: driveFolderCreated ? `https://drive.google.com/drive/folders/${lessonFolderId}?usp=sharing` : '',
+        downloadUrl: '',
+        ...({
+          pdfFileId: attachedFilesList[0]?.id,
+          pdfFileName: attachedFilesList[0]?.name,
+          attachedFiles: attachedFilesList,
+          teacherName: cleanTeacherName,
+          parentFolderId: currentFolder.id
+        } as any)
+      };
+
       try {
-        const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
-        await executeDriveAction({
-          action: 'upload',
-          folderId: lessonFolderId,
-          name: 'lesson_config.json',
-          mimeType: 'application/json',
-          base64: configJsonBase64
-        }).catch(() => {});
-      } catch {}
+        const storedLessons = JSON.parse(localStorage.getItem('local_created_lessons') || '[]');
+        const updatedLessons = [newLessonItem, ...storedLessons.filter((l: any) => l.id !== lessonFolderId)];
+        localStorage.setItem('local_created_lessons', JSON.stringify(updatedLessons));
+      } catch (localStoreErr) {
+        console.warn('Local lesson storage error:', localStoreErr);
+      }
+
+      setItems(prev => [newLessonItem, ...prev.filter(i => (i.folderId || i.id) !== lessonFolderId)]);
 
       showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다! (자료 ${attachedFilesList.length}개 첨부됨)`);
       setActiveModal(null);
@@ -1304,6 +1387,11 @@ export default function App() {
           stored.push(targetId);
           localStorage.setItem('deleted_drive_item_ids', JSON.stringify(stored));
         }
+
+        // 로컬 생성 수업 목록에서도 정리
+        const storedLessons: any[] = JSON.parse(localStorage.getItem('local_created_lessons') || '[]');
+        const filteredLessons = storedLessons.filter(l => l.id !== targetId && (l.folderId || l.id) !== targetId);
+        localStorage.setItem('local_created_lessons', JSON.stringify(filteredLessons));
       } catch (storeErr) {
         console.warn('영구 삭제 목록 저장 실패:', storeErr);
       }

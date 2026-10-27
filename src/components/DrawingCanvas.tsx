@@ -10,6 +10,8 @@ import {
   recognizeShape,
   generateLinePoints,
   generateCirclePoints,
+  updateCircularArcPoints,
+  updateBezierPoints,
   type RecognizedShape
 } from '../lib/shapeRecognizer';
 
@@ -18,7 +20,7 @@ export interface DrawingCanvasProps {
   onStrokeComplete: (stroke: Stroke) => void;
   onStrokesChange: (strokes: Stroke[]) => void;
   onUndoSnapshot: () => void;
-  tool: 'pen' | 'highlighter' | 'eraser' | 'text' | 'image' | 'lasso';
+  tool: 'pen' | 'highlighter' | 'eraser' | 'text' | 'image' | 'lasso' | 'shapePen';
   penColor: string;
   penSize: number;
   highlighterColor: string;
@@ -38,6 +40,40 @@ export interface DrawingCanvasProps {
   paperTheme?: 'white' | 'dark' | 'ivory';
   enablePressure?: boolean;
   enableQuickShape?: boolean;
+}
+
+/**
+ * 획들의 끝점(시작점과 끝점) 중 좌표 (x, y)와 가장 가까운 앵커 탐색 (자석 연결)
+ */
+function findNearestAnchor(
+  x: number,
+  y: number,
+  strokes: Stroke[],
+  excludeStrokeId?: string,
+  maxDist: number = 26
+): { x: number; y: number } | null {
+  let nearest: { x: number; y: number } | null = null;
+  let minDist = maxDist;
+
+  for (const s of strokes) {
+    if (s.id === excludeStrokeId || !s.points || s.points.length === 0) continue;
+    const startPt = s.points[0];
+    const endPt = s.points[s.points.length - 1];
+
+    const dStart = Math.hypot(x - startPt.x, y - startPt.y);
+    if (dStart < minDist) {
+      minDist = dStart;
+      nearest = { x: startPt.x, y: startPt.y };
+    }
+
+    const dEnd = Math.hypot(x - endPt.x, y - endPt.y);
+    if (dEnd < minDist) {
+      minDist = dEnd;
+      nearest = { x: endPt.x, y: endPt.y };
+    }
+  }
+
+  return nearest;
 }
 
 /**
@@ -285,18 +321,34 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         return;
       }
 
-      // [6. 일반 필기 / 형광펜 / 픽셀 지우개 시작]:
+      // [6. 일반 필기 / 도형 펜 / 형광펜 / 픽셀 지우개 시작]:
       p.onUndoSnapshot();
 
-      const currentSize = p.tool === 'pen' ? p.penSize : p.tool === 'highlighter' ? p.highlighterSize : p.eraserSize;
+      const currentSize = (p.tool === 'pen' || p.tool === 'shapePen')
+        ? p.penSize
+        : p.tool === 'highlighter'
+          ? p.highlighterSize
+          : p.eraserSize;
       const currentColor = p.tool === 'highlighter' ? p.highlighterColor : p.penColor;
+
+      let startX = x;
+      let startY = y;
+
+      // [도형 펜 전용]: 획 시작점이 다른 도형 선분의 끝점 근처면 자석처럼 달라붙어 연결 제도
+      if (p.tool === 'shapePen') {
+        const anchor = findNearestAnchor(x, y, p.strokes, undefined, 26);
+        if (anchor) {
+          startX = anchor.x;
+          startY = anchor.y;
+        }
+      }
 
       const newStroke: Stroke = {
         id: `stroke_${Date.now()}_${Math.random()}`,
-        tool: p.tool as 'pen' | 'highlighter' | 'eraser',
+        tool: p.tool as 'pen' | 'highlighter' | 'eraser' | 'shapePen',
         color: currentColor,
         size: currentSize,
-        points: [{ x, y, pressure: initialPressure }]
+        points: [{ x: startX, y: startY, pressure: initialPressure }]
       };
 
       currentStrokeRef.current = newStroke;
@@ -367,10 +419,29 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       if (isHoldSnappedRef.current && snappedShapeRef.current) {
         const shape = snappedShapeRef.current;
         const lastEv = eventsToProcess[eventsToProcess.length - 1];
-        const { x, y } = getCanvasCoords(lastEv.clientX, lastEv.clientY);
+        let { x, y } = getCanvasCoords(lastEv.clientX, lastEv.clientY);
         const fixedStart = shape.startPoint || currentStroke.points[0];
 
+        // 도형 펜인 경우 끝점도 기존 꼭짓점 또는 시작점에 자석 스냅!
+        if (p.tool === 'shapePen') {
+          const anchor = findNearestAnchor(x, y, p.strokes, currentStroke.id, 26);
+          if (anchor) {
+            x = anchor.x;
+            y = anchor.y;
+          } else if (fixedStart && Math.hypot(x - fixedStart.x, y - fixedStart.y) < 24 && Math.hypot(x - fixedStart.x, y - fixedStart.y) > 0) {
+            x = fixedStart.x;
+            y = fixedStart.y;
+          }
+        }
+
         if (shape.type === 'line') {
+          if (p.tool === 'shapePen') {
+            if (Math.abs(y - fixedStart.y) < 14 && Math.hypot(x - fixedStart.x, y - fixedStart.y) > 25) {
+              y = fixedStart.y;
+            } else if (Math.abs(x - fixedStart.x) < 14 && Math.hypot(x - fixedStart.x, y - fixedStart.y) > 25) {
+              x = fixedStart.x;
+            }
+          }
           currentStroke.points = generateLinePoints(fixedStart, { x, y }, 0.5);
         } else if (shape.type === 'circle') {
           const pivot = shape.oppositePoint || fixedStart;
@@ -379,11 +450,25 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           const cx = (pivot.x + x) / 2;
           const cy = (pivot.y + y) / 2;
           currentStroke.points = generateCirclePoints(cx, cy, radius, 0.5);
+        } else if (shape.type === 'circular_arc' || shape.type === 'elliptic_arc') {
+          currentStroke.points = updateCircularArcPoints(shape, fixedStart, { x, y });
+        } else if (shape.type === 'bezier') {
+          currentStroke.points = updateBezierPoints(shape.points, fixedStart, { x, y });
         }
 
         // 화면 1회 리렌더링
         renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
         drawSingleStroke(ctx, currentStroke, false);
+
+        if (p.tool === 'shapePen') {
+          ctx.save();
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, 6, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
         return;
       }
 
@@ -447,9 +532,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         }
       }
 
-      // [C] 퀵셰이프 홀드 감지 (직선이나 원을 그리고 끝에서 0.85초 이상 가만히 멈출 때만 스냅)
-      // 글씨 필기 중 미세 멈춤에 의한 글씨 말림/호 왜곡을 방지하기 위해 오직 line/circle만 허용
-      if (p.enableQuickShape && !isHoldSnappedRef.current && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter')) {
+      // [C] 퀵셰이프 홀드 감지:
+      // 1) 도형 펜(shapePen)은 항상 활성화 (기민한 400ms 반응, 모든 기하학적 형태 지원)
+      // 2) 일반 펜(pen)은 오직 p.enableQuickShape가 명시적으로 켜져 있을 때만 동작 (기본값 false: 손글씨 100% 보장)
+      const shouldCheckQuickShape = (p.tool === 'shapePen') || (p.enableQuickShape && (currentStroke.tool === 'pen' || currentStroke.tool === 'highlighter'));
+      if (shouldCheckQuickShape && !isHoldSnappedRef.current) {
         const pts = currentStroke.points;
         const lastPt = pts[pts.length - 1];
 
@@ -463,31 +550,51 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
             holdTimerRef.current = null;
           }
 
-          if (pts.length >= 8) {
+          if (pts.length >= 6) {
+            const holdDelay = p.tool === 'shapePen' ? 400 : 850;
             holdTimerRef.current = setTimeout(() => {
               if (!isDrawingRef.current || !currentStrokeRef.current) return;
               const strokeSize = currentStrokeRef.current.size || 3;
               const shape = recognizeShape(currentStrokeRef.current.points, strokeSize);
-              if (shape && (shape.type === 'line' || shape.type === 'circle')) {
-                if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                  try { navigator.vibrate(20); } catch {}
+              if (shape) {
+                const isAllowedShape = p.tool === 'shapePen'
+                  ? true
+                  : (shape.type === 'line' || shape.type === 'circle');
+
+                if (isAllowedShape) {
+                  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                    try { navigator.vibrate(20); } catch {}
+                  }
+
+                  isHoldSnappedRef.current = true;
+                  snappedShapeRef.current = shape;
+
+                  const fixedStart = shape.startPoint || currentStrokeRef.current.points[0];
+
+                  if (shape.type === 'line' && shape.endPoint) {
+                    let ex = shape.endPoint.x;
+                    let ey = shape.endPoint.y;
+                    if (p.tool === 'shapePen') {
+                      const endAnchor = findNearestAnchor(ex, ey, p.strokes, currentStrokeRef.current.id, 26);
+                      if (endAnchor) {
+                        ex = endAnchor.x;
+                        ey = endAnchor.y;
+                      } else if (Math.abs(ey - fixedStart.y) < 14 && Math.hypot(ex - fixedStart.x, ey - fixedStart.y) > 25) {
+                        ey = fixedStart.y;
+                      } else if (Math.abs(ex - fixedStart.x) < 14 && Math.hypot(ex - fixedStart.x, ey - fixedStart.y) > 25) {
+                        ex = fixedStart.x;
+                      }
+                    }
+                    currentStrokeRef.current.points = generateLinePoints(fixedStart, { x: ex, y: ey }, 0.5);
+                  } else {
+                    currentStrokeRef.current.points = shape.points;
+                  }
+
+                  renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+                  drawSingleStroke(ctx, currentStrokeRef.current, false);
                 }
-
-                isHoldSnappedRef.current = true;
-                snappedShapeRef.current = shape;
-
-                const fixedStart = shape.startPoint || currentStrokeRef.current.points[0];
-
-                if (shape.type === 'line' && shape.endPoint) {
-                  currentStrokeRef.current.points = generateLinePoints(fixedStart, shape.endPoint, 0.5);
-                } else if (shape.type === 'circle') {
-                  currentStrokeRef.current.points = shape.points;
-                }
-
-                renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
-                drawSingleStroke(ctx, currentStrokeRef.current, false);
               }
-            }, 850);
+            }, holdDelay);
           }
         }
       }
@@ -572,6 +679,36 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
 
         const finishedStroke = currentStrokeRef.current;
         if (finishedStroke && finishedStroke.points.length > 0) {
+          // [도형 펜 shapePen 전용 모듈화]:
+          // 홀드하지 않고 슥 그었더라도, 직선/원/호 형태이면 즉시 CAD 스타일 정형화 및 자석 연결
+          if (p.tool === 'shapePen' && !isHoldSnappedRef.current && finishedStroke.points.length >= 5) {
+            const shape = recognizeShape(finishedStroke.points, finishedStroke.size || 3);
+            if (shape) {
+              const startPt = finishedStroke.points[0];
+              let endPt = finishedStroke.points[finishedStroke.points.length - 1];
+
+              const endAnchor = findNearestAnchor(endPt.x, endPt.y, p.strokes, finishedStroke.id, 26);
+              if (endAnchor) {
+                endPt = { x: endAnchor.x, y: endAnchor.y, pressure: 0.5 };
+              } else if (Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y) < 24 && Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y) > 0) {
+                endPt = { x: startPt.x, y: startPt.y, pressure: 0.5 };
+              }
+
+              if (shape.type === 'line') {
+                let ex = endPt.x;
+                let ey = endPt.y;
+                if (Math.abs(ey - startPt.y) < 14 && Math.hypot(ex - startPt.x, ey - startPt.y) > 20) {
+                  ey = startPt.y;
+                } else if (Math.abs(ex - startPt.x) < 14 && Math.hypot(ex - startPt.x, ey - startPt.y) > 20) {
+                  ex = startPt.x;
+                }
+                finishedStroke.points = generateLinePoints(startPt, { x: ex, y: ey }, 0.5);
+              } else if (shape.type === 'circle' || shape.type === 'circular_arc' || shape.type === 'elliptic_arc') {
+                finishedStroke.points = shape.points;
+              }
+            }
+          }
+
           isInternalStrokeAddRef.current = true;
           p.onStrokeComplete({ ...finishedStroke, points: [...finishedStroke.points] });
         }

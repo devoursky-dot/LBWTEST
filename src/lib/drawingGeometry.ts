@@ -11,7 +11,7 @@ export interface StrokePoint {
 
 export interface Stroke {
   id: string;
-  tool: 'pen' | 'highlighter' | 'eraser';
+  tool: 'pen' | 'highlighter' | 'eraser' | 'shapePen';
   color: string;
   size: number;
   points: StrokePoint[];

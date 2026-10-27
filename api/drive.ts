@@ -223,7 +223,21 @@ export async function POST(request: Request) {
       body: JSON.stringify(body)
     });
 
-    const data = await gasRes.json();
+    const resText = await gasRes.text();
+    let data;
+    try {
+      data = JSON.parse(resText);
+    } catch {
+      const isAccessDenied = resText.includes('액세스 권한') || resText.includes('액세스 거부') || resText.includes('accounts?continueUrl');
+      const errorMsg = isAccessDenied
+        ? 'Google Apps Script 웹 앱 권한 필요 (액세스 거부됨). 구글 앱스 스크립트 배포 권한 설정을 확인하세요.'
+        : `Google Apps Script 응답 파싱 실패 (HTML 또는 비정상 응답): ${resText.slice(0, 100)}`;
+      return new Response(JSON.stringify({ success: false, error: errorMsg, raw: resText.slice(0, 200) }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' }
+      });
+    }
+
     return new Response(JSON.stringify(data), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' }
