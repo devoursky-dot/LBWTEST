@@ -40,8 +40,12 @@ export const OfflineStatusBadge: React.FC<OfflineStatusBadgeProps> = ({ style })
     await flushPendingSubmissions();
   };
 
-  // 평소 온라인이고 대기열이 없으면 미려한 콤팩트 상태 유지
+  // 평소 온라인이고 대기열이 없으면 툴바에 불필요한 초록 표시를 띄우지 않음 (오프라인/동기화 필요 시에만 알림)
   const isAllGood = status.isOnline && status.pendingCount === 0 && !status.isSyncing;
+
+  if (isAllGood) {
+    return null;
+  }
 
   return (
     <div

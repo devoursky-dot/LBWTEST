@@ -192,7 +192,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   // 학생 학번/비밀번호 인증 모달 상태 (학생 정보가 없으면 수업 진입 시 바로 로그인 모달 오픈)
   const [isChangingStudent, setIsChangingStudent] = useState(() => !getSavedStudentInfo());
-  const [isConfirmStudentOpen, setIsConfirmStudentOpen] = useState(() => Boolean(getSavedStudentInfo()));
 
   const [authStudentId, setAuthStudentId] = useState('');
   const [authStudentName, setAuthStudentName] = useState('');
@@ -487,8 +486,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     onToast: showToast
   });
 
-  // 📲 PWA 설치 상태 및 프롬프트 제어 훅
-  const { isStandalone, canInstall, promptInstall } = usePwaInstall();
+  // 📲 PWA 설치 상태 제어 훅
+  const { isStandalone } = usePwaInstall();
 
   // 펜 <-> 지우개 원터치 토글 (펜 모드 시 손가락 화면 더블탭 톡톡 및 키보드 단축키 E/P)
   const handleTogglePenEraser = useCallback(() => {
@@ -2749,23 +2748,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 boxSizing: 'border-box'
               }}
             >
-              {/* 1-1. 연결 표시 & 수업 제목 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexShrink: 1 }}>
-                <span
-                  style={{
-                    width: '9px',
-                    height: '9px',
-                    borderRadius: '50%',
-                    background: '#22c55e',
-                    boxShadow: '0 0 10px #22c55e',
-                    display: 'inline-block',
-                    flexShrink: 0
-                  }}
-                />
-                <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#4ade80', whiteSpace: 'nowrap' }}>
-                  실시간 연결
-                </span>
-                <span style={{ color: 'rgba(255, 255, 255, 0.25)', fontSize: '11px' }}>|</span>
+              {/* 1-1. 수업 제목 (불필요한 초록 연결 표시 제거 및 깔끔한 수업명 뱃지) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexShrink: 1 }}>
+                <span style={{ fontSize: '14px' }}>📚</span>
                 <span
                   style={{
                     fontSize: '13px',
@@ -2774,7 +2759,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
-                    maxWidth: '260px'
+                    maxWidth: '280px'
                   }}
                   title={activeLessonTitle || '실시간 수업'}
                 >
@@ -2941,20 +2926,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             title="전체 메뉴 (학생 정보, 칠판 등록, PDF 저장, 용지 설정 등)"
           >
             <IconMenu size={18} />
-            {isConnectedToBoard && (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '4px',
-                  right: '4px',
-                  width: '6px',
-                  height: '6px',
-                  borderRadius: '50%',
-                  background: '#22c55e',
-                  boxShadow: '0 0 6px #22c55e'
-                }}
-              />
-            )}
           </button>
 
           {/* [모듈 플러그인]: 메인 툴바 컴팩트 페이지 내비게이션 위젯 */}
@@ -5391,150 +5362,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         onClose={() => setIsPageOverviewOpen(false)}
       />
 
-            {/* 4-0. 시작 시 학생 확인 & 전체화면 진입 팝업 (ModularModal: Portal + 태블릿 터치 스크롤 엔진 내장) */}
-      <ModularModal
-        isOpen={Boolean(isConfirmStudentOpen && studentInfo)}
-        maxWidth="440px"
-        zIndex={10001}
-        showCloseButton={false}
-      >
-        {studentInfo && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', color: '#ffffff' }}>
-            {/* 학교/수업 아이콘 */}
-            <div
-              style={{
-                width: '56px',
-                height: '56px',
-                borderRadius: '16px',
-                background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(99, 102, 241, 0.25) 100%)',
-                border: '1px solid rgba(96, 165, 250, 0.4)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '28px',
-                marginBottom: '14px'
-              }}
-            >
-              🏫
-            </div>
 
-            <span style={{ fontSize: '13px', color: '#93c5fd', fontWeight: 600, letterSpacing: '0.5px' }}>
-              디지털 스마트 노트 수업 참여
-            </span>
-            <h2 style={{ fontSize: '19px', fontWeight: 800, margin: '4px 0 18px 0', color: '#ffffff' }}>
-              {lessonTitle}
-            </h2>
-
-            {/* 학생 신원 확인 카드 */}
-            <div
-              style={{
-                width: '100%',
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                borderRadius: '14px',
-                padding: '14px 16px',
-                marginBottom: '20px',
-                boxSizing: 'border-box'
-              }}
-            >
-              <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '6px' }}>참여 학생 확인</div>
-              <div style={{ fontSize: '17px', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                <span style={{ color: '#60a5fa' }}>{studentInfo.grade}학년 {studentInfo.classNum}반 {studentInfo.studentNum}번</span>
-                <span>{studentInfo.name}</span>
-              </div>
-              <div style={{ fontSize: '11.5px', color: '#34d399', marginTop: '6px' }}>
-                ✓ 본인 정보가 맞으면 아래 버튼을 눌러 전체화면으로 시작하세요.
-              </div>
-            </div>
-
-            {/* 전체화면으로 수업 시작하기 */}
-            <button
-              id="btn-confirm-start-lesson-fullscreen"
-              type="button"
-              className="g-btn g-btn-primary"
-              onClick={() => {
-                requestFullscreenSafe();
-                setIsConfirmStudentOpen(false);
-                showToast(`👋 ${studentInfo.name} 학생, 수업에 오신 것을 환영합니다! (전체화면)`);
-              }}
-              style={{
-                width: '100%',
-                padding: '13px 20px',
-                fontSize: '15px',
-                fontWeight: 800,
-                borderRadius: '12px',
-                background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
-                color: '#ffffff',
-                border: '1px solid #60a5fa',
-                boxShadow: '0 6px 20px rgba(37, 99, 235, 0.45)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                marginBottom: '10px'
-              }}
-            >
-              <span>▶</span>
-              <span>전체화면으로 수업 시작하기</span>
-            </button>
-
-            {/* 홈 화면에 앱 설치하기 버튼 (웹 브라우저 접속 시 노출) */}
-            {!isStandalone && (
-              <button
-                type="button"
-                onClick={async () => {
-                  if (canInstall) {
-                    await promptInstall();
-                  } else {
-                    showToast('💡 브라우저 메뉴(⋮ 또는 공유)에서 [홈 화면에 추가] 또는 [앱 설치]를 선택하세요.');
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: '11px 16px',
-                  fontSize: '13.5px',
-                  fontWeight: 700,
-                  borderRadius: '12px',
-                  background: 'rgba(59, 130, 246, 0.12)',
-                  color: '#93c5fd',
-                  border: '1px solid rgba(59, 130, 246, 0.35)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  marginBottom: '10px',
-                  transition: 'background 0.2s'
-                }}
-              >
-                <span>📲</span>
-                <span>태블릿 홈 화면에 앱 설치</span>
-              </button>
-            )}
-
-            {/* 다른 학생으로 로그인 또는 변경 */}
-            <button
-              type="button"
-              onClick={() => {
-                setIsConfirmStudentOpen(false);
-                setIsChangingStudent(true);
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#94a3b8',
-                fontSize: '12.5px',
-                cursor: 'pointer',
-                textDecoration: 'underline',
-                padding: '6px'
-              }}
-            >
-              내 정보가 아니거나 다른 학생으로 변경하기
-            </button>
-          </div>
-        )}
-      </ModularModal>
 
 {/* 4. 학생 계정 로그인 & 비밀번호 관리 모달 (ModularModal: Portal + 태블릿 터치 스크롤 엔진 내장) */}
       <ModularModal
