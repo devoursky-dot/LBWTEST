@@ -111,7 +111,22 @@ function localDriveApiPlugin(): Plugin {
                     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                     body: JSON.stringify(body)
                   });
-                  const json = await gasRes.json();
+                  const text = await gasRes.text();
+                  let json;
+                  try {
+                    json = JSON.parse(text);
+                  } catch {
+                    const isAccessDenied = text.includes('액세스 권한') || text.includes('액세스 거부') || text.includes('accounts?continueUrl') || gasRes.status === 403;
+                    const errorMsg = isAccessDenied
+                      ? '구글 드라이브(Google Apps Script) 권한(403) 오류: 웹 앱 배포 시 "모든 사용자" 접근 권한이 필요합니다.'
+                      : `구글 드라이브 응답 파싱 실패 (시스템 오류): ${text.slice(0, 100)}`;
+                    res.writeHead(200, {
+                      'Content-Type': 'application/json; charset=utf-8',
+                      'Access-Control-Allow-Origin': '*'
+                    });
+                    res.end(JSON.stringify({ success: false, error: errorMsg }));
+                    return;
+                  }
                   res.writeHead(200, {
                     'Content-Type': 'application/json; charset=utf-8',
                     'Access-Control-Allow-Origin': '*'

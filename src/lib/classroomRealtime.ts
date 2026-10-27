@@ -410,19 +410,6 @@ class ClassroomRealtimeManager {
       }
     }
 
-    // 3-1. 로컬 및 클라우드 등록 교사 목록도 teacherMap에 추가 (개설된 수업이 없어도 교사 탭에 즉시 표시)
-    try {
-      const localRegTeachers: string[] = typeof localStorage !== 'undefined'
-        ? JSON.parse(localStorage.getItem('lbw_registered_teachers_list') || '[]')
-        : [];
-      for (const tName of localRegTeachers) {
-        const clean = tName.replace(' 선생님', '').trim();
-        if (clean && !teacherMap.has(clean)) {
-          teacherMap.set(clean, []);
-        }
-      }
-    } catch {}
-
     // 4. 교사별 수업 목록 정렬: 실시간 진행 중(🟢)을 최상단, 최신 활동순
     return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => {
       lessons.sort((a, b) => {

@@ -5,7 +5,7 @@ import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
 import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
 import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
-import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, registerTeacherToCloud, deleteTeacherFromCloud, parseStudentId, type UserSession } from './lib/auth';
+import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, parseStudentId, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
 import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studentSessionManager';
@@ -311,75 +311,32 @@ export default function App() {
     return rootTeacherFolders.map(item => item.name);
   }, [rootTeacherFolders]);
 
-  // 새 선생님 추가 핸들러: 클라우드(Supabase/로컬) 즉시 영구 등록 + 구글 드라이브 폴더 생성 시도
-  const handleAddTeacher = async (teacherName: string) => {
+  // 새 선생님 추가 핸들러: 구글 드라이브 최상위 폴더에 실제 폴더 생성 시도
+  const handleAddTeacher = async (teacherName: string): Promise<{ success: boolean; error?: string }> => {
     const cleanName = teacherName.trim().replace(' 선생님', '').replace('선생님', '').trim();
-    if (!cleanName) return { success: false, folderCreated: false };
+    if (!cleanName) return { success: false, error: '선생님 이름을 입력해 주세요.' };
 
-    showToast(`📁 [${cleanName} 선생님] 계정 등록 및 구글 드라이브 연동 진행 중...`);
+    showToast(`📁 구글 드라이브에 '${cleanName}' 선생님 폴더 생성을 시도합니다...`);
 
-    // 1. Supabase 클라우드 및 로컬스토리지에 즉시 영구 등록 (기본 비밀번호: 1234)
-    await registerTeacherToCloud(cleanName);
-
-    // 2. 구글 드라이브 최상위 폴더에 실제 폴더 생성 시도
-    let folderCreated = false;
-    let gasErrorMessage = '';
     try {
       const res = await executeDriveAction({
         action: 'createFolder',
         folderId: rootFolderId,
         name: cleanName
       });
+
       if (res && (res.folderId || res.id)) {
-        folderCreated = true;
+        await fetchRootTeacherFolders();
+        loadWhiteboardTeacherLessons();
+        showToast(`🎉 '${cleanName}' 선생님 폴더가 구글 드라이브에 생성되었습니다. (초기 비밀번호: 1234)`);
+        return { success: true };
+      } else {
+        throw new Error(res?.error || '구글 드라이브 폴더 생성 실패');
       }
     } catch (err: any) {
       console.warn('구글 드라이브 선생님 폴더 생성 오류:', err);
-      gasErrorMessage = err.message || '';
+      return { success: false, error: err.message || '구글 드라이브 시스템 권한(403) 오류' };
     }
-
-    // 3. 최신 구글 드라이브 루트 폴더 목록 및 전자칠판 수업 목록 재조회
-    await fetchRootTeacherFolders();
-    loadWhiteboardTeacherLessons();
-
-    if (folderCreated) {
-      showToast(`🎉 '${cleanName}' 선생님 폴더가 구글 드라이브에 정상 생성되었으며, 초기 비밀번호(1234)로 등록되었습니다!`);
-    } else {
-      showToast(`🔑 '${cleanName}' 선생님 계정이 클라우드에 등록되었습니다. (초기 비밀번호: 1234)`);
-    }
-
-    return {
-      success: true,
-      folderCreated,
-      gasErrorMessage,
-      teacherName: cleanName
-    };
-  };
-
-  // 등록된 선생님 계정 삭제 핸들러 (클라우드 및 구글 드라이브 폴더 동기화)
-  const handleDeleteTeacher = async (teacherName: string) => {
-    const cleanName = teacherName.trim().replace(' 선생님', '').replace('선생님', '').trim();
-    if (!cleanName) return;
-
-    await deleteTeacherFromCloud(cleanName);
-
-    // 구글 드라이브에 해당 폴더가 있다면 휴지통 이동 비동기 시도
-    const matchedFolder = rootTeacherFolders.find(f => f.name.replace(' 선생님', '').trim() === cleanName);
-    if (matchedFolder) {
-      try {
-        await executeDriveAction({
-          action: 'delete',
-          id: matchedFolder.id,
-          isFolder: true
-        });
-      } catch (err) {
-        console.warn('구글 드라이브 교사 폴더 삭제 오류:', err);
-      }
-    }
-
-    await fetchRootTeacherFolders();
-    loadWhiteboardTeacherLessons();
-    showToast(`🗑️ '${cleanName}' 선생님 계정이 삭제되었습니다.`);
   };
 
   // 현재 선생님 폴더에 있는 문서 파일 목록 (QR 수업 생성/수정 시 다중 선택 대상)
@@ -479,23 +436,14 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [드라이브 폴더 데이터 실시간 로드]
+  // [드라이브 폴더 데이터 실시간 로드 - 100% 구글 드라이브 실제 목록 연동]
   // ==========================================================================
   const fetchDriveItems = async (folderId: string) => {
     setIsLoading(true);
     setErrorMessage(null);
     setSelectedItemId(null);
 
-    // 영구 삭제된 항목 ID 목록 취득 (로컬 캐시 방어)
-    const deletedIds: string[] = (() => {
-      try {
-        return JSON.parse(localStorage.getItem('deleted_drive_item_ids') || '[]');
-      } catch {
-        return [];
-      }
-    })();
-
-    // 1. 구글 공식 Drive API v3 직접 호출 최우선 실행 (구형 전자칠판 5분 지연 및 Vercel 방화벽 완전 회피)
+    // 1. 구글 공식 Drive API v3 직접 호출 최우선 실행 (100% 실제 데이터)
     if (googleApiKey) {
       try {
         const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}&_t=${Date.now()}`;
@@ -503,7 +451,6 @@ export default function App() {
         if (gRes.ok) {
           const gData = await gRes.json();
           const directItems: DriveItem[] = (gData.files || [])
-            .filter((file: any) => !deletedIds.includes(file.id))
             .map((file: any) => {
             const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
             const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
@@ -547,8 +494,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data.items && Array.isArray(data.items)) {
-          const filtered = data.items.filter((item: any) => !deletedIds.includes(item.folderId || item.id) && !deletedIds.includes(item.id));
-          setItems(filtered);
+          setItems(data.items);
           setIsLoading(false);
           return;
         }
@@ -1436,25 +1382,21 @@ export default function App() {
     const cleanItemName = targetItem.name.replace('[QR수업]', '').trim();
 
     try {
-      // 1. 영구 삭제 목록(localStorage)에 등록 (F5 새로고침 및 재방문 시에도 100% 차단)
-      try {
-        const stored: string[] = JSON.parse(localStorage.getItem('deleted_drive_item_ids') || '[]');
-        if (!stored.includes(targetId)) {
-          stored.push(targetId);
-          localStorage.setItem('deleted_drive_item_ids', JSON.stringify(stored));
-        }
-      } catch (storeErr) {
-        console.warn('영구 삭제 목록 저장 실패:', storeErr);
-      }
+      // 1. 구글 드라이브 실제 휴지통 이동 실행 (GAS 웹앱 경유)
+      await executeDriveAction({
+        action: 'delete',
+        id: targetId,
+        isFolder: targetItem.type === 'folder'
+      });
 
-      // 2. UI 및 로컬 목록에서 즉각 제거 및 모달 닫기 (사용자 화면에서 즉각 삭제 보장!)
+      // 2. 구글 드라이브 삭제 성공 시에만 로컬 UI 및 목록 반영
       setItems(prev => prev.filter(i => (i.folderId || i.id) !== targetId && i.id !== targetId));
       setSelectedItemId(null);
       setActiveModal(null);
       setTargetItem(null);
-      showToast(`🗑️ '${cleanItemName}' 수업/항목이 삭제되었습니다.`);
+      showToast(`🗑️ '${cleanItemName}' 항목이 구글 드라이브에서 삭제되었습니다.`);
 
-      // 3. Supabase 수업 세션 및 모든 학생 필기 레코드 완전 삭제 연동
+      // 3. Supabase 수업 세션 및 모든 학생 필기 레코드 연동 정리
       if (supabase && isSupabaseConfigured) {
         try {
           await supabase.from('class_notes').delete().eq('lesson_id', targetId);
@@ -1464,28 +1406,17 @@ export default function App() {
             body: JSON.stringify({ action: 'reset', lessonId: targetId })
           }).catch(() => {});
         } catch (sbErr) {
-          console.warn('Supabase 수업 세션 삭제 연동 오류:', sbErr);
+          console.warn('Supabase 수업 세션 정리 오류:', sbErr);
         }
       }
 
-      // 4. 구글 드라이브 휴지통 이동 비동기 시도 (GAS 웹앱 백그라운드 실행)
-      executeDriveAction({
-        action: 'delete',
-        id: targetId,
-        isFolder: targetItem.type === 'folder'
-      }).then(() => {
-        // 실제 구글 드라이브에서도 삭제 완료 시 재조회 동기화
-        fetchDriveItems(currentFolder.id);
-      }).catch((gasErr) => {
-        console.warn('구글 드라이브 클라우드 휴지통 이동 경고 (로컬/Supabase는 완전 삭제됨):', gasErr);
-      });
+      // 최신 목록 재조회
+      fetchDriveItems(currentFolder.id);
     } catch (err: any) {
-      console.error('삭제 처리 예외:', err);
-      // 예외 발생 시에도 모달을 반드시 닫고 로컬 목록에서 제거
-      setItems(prev => prev.filter(i => (i.folderId || i.id) !== targetId && i.id !== targetId));
+      console.error('구글 드라이브 삭제 실패:', err);
       setActiveModal(null);
       setTargetItem(null);
-      showToast(`🗑️ '${cleanItemName}' 수업이 삭제되었습니다.`);
+      showToast(`❌ 구글 드라이브 삭제 실패: ${err.message || '구글 드라이브 시스템 권한(403) 오류'}\n(구글 드라이브 웹 화면에서 직접 삭제해 주세요.)`);
     } finally {
       setIsProcessingAction(false);
     }
@@ -1663,7 +1594,6 @@ export default function App() {
           onClose={handlePortalLogout}
           onToast={showToast}
           onAddTeacher={handleAddTeacher}
-          onDeleteTeacher={handleDeleteTeacher}
           onRefreshDriveFolders={fetchRootTeacherFolders}
         />
         {toastMessage && (
@@ -3733,7 +3663,6 @@ export default function App() {
           onClose={() => setIsAdminDashboardOpen(false)}
           onToast={showToast}
           onAddTeacher={handleAddTeacher}
-          onDeleteTeacher={handleDeleteTeacher}
           onRefreshDriveFolders={fetchRootTeacherFolders}
         />
       )}

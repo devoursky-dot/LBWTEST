@@ -9,11 +9,7 @@ import {
   resetTeacherPasswordToDefault,
   changeTeacherPassword,
   getLocalCustomHashes,
-  fetchAllModifiedAccountsFromCloud,
-  getLocalRegisteredTeachers,
-  registerTeacherToCloud,
-  deleteTeacherFromCloud,
-  fetchAllRegisteredTeachersFromCloud
+  fetchAllModifiedAccountsFromCloud
 } from './lib/auth';
 
 interface AdminDashboardModalProps {
@@ -21,7 +17,6 @@ interface AdminDashboardModalProps {
   onClose: () => void;
   onToast: (msg: string) => void;
   onAddTeacher?: (name: string) => Promise<any>;
-  onDeleteTeacher?: (name: string) => Promise<any>;
   onRefreshDriveFolders?: () => Promise<any>;
 }
 
@@ -30,13 +25,9 @@ export function AdminDashboardModal({
   onClose, 
   onToast,
   onAddTeacher,
-  onDeleteTeacher,
   onRefreshDriveFolders
 }: AdminDashboardModalProps) {
   const [activeTab, setActiveTab] = useState<'students' | 'teachers' | 'whiteboard' | 'admin'>('students');
-
-  // 등록된 선생님 목록 상태 (클라우드 + 로컬 영구 등록)
-  const [registeredTeachers, setRegisteredTeachers] = useState<string[]>(() => getLocalRegisteredTeachers());
 
   // 모달 내부 상단 피드백 알림 배너
   const [inModalAlert, setInModalAlert] = useState<{
@@ -90,15 +81,6 @@ export function AdminDashboardModal({
         if (isMounted) setIsCloudSyncing(false);
       });
 
-    fetchAllRegisteredTeachersFromCloud()
-      .then(teachers => {
-        if (!isMounted) return;
-        setRegisteredTeachers(teachers);
-      })
-      .catch(err => {
-        console.warn('Admin fetch cloud registered teachers err:', err);
-      });
-
     return () => {
       isMounted = false;
     };
@@ -109,10 +91,10 @@ export function AdminDashboardModal({
     return getAllStudentAccounts(cloudHashes);
   }, [cloudHashes, refreshKey]);
 
-  // 3. 전체 선생님 계정 (구글 드라이브 폴더 + 클라우드 등록 교사 통합)
+  // 3. 전체 선생님 계정 (구글 드라이브 최상위 실제 폴더 기반 100% 실시간 연동)
   const allTeachers = useMemo(() => {
-    return getTeacherAccounts(driveFolderNames, cloudHashes, registeredTeachers);
-  }, [driveFolderNames, cloudHashes, registeredTeachers, refreshKey]);
+    return getTeacherAccounts(driveFolderNames, cloudHashes);
+  }, [driveFolderNames, cloudHashes, refreshKey]);
 
   // 4. 필터링된 학생 계정 목록
   const filteredStudents = useMemo(() => {
@@ -213,7 +195,7 @@ export function AdminDashboardModal({
     onToast('✅ 관리자 비밀번호가 안전하게 변경되었습니다.');
   };
 
-  // 새 선생님 추가 핸들러 (클라우드 즉시 등록 + 구글 드라이브 폴더 연동 + 1234 비밀번호 셋팅)
+  // 새 선생님 추가 핸들러: 구글 드라이브 최상위 폴더에 실제 폴더 생성 시도
   const handleCreateTeacher = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = newTeacherNameInput.trim().replace(' 선생님', '').replace('선생님', '').trim();
@@ -224,10 +206,10 @@ export function AdminDashboardModal({
       });
       return;
     }
-    if (allTeachers.some(t => t.name.replace(' 선생님', '').trim() === cleanName)) {
+    if (driveFolderNames.some(name => name.trim() === cleanName || name.trim() === `${cleanName} 선생님`)) {
       setInModalAlert({
         type: 'warning',
-        message: `⚠️ 이미 '${cleanName}' 선생님 계정이 등록되어 있습니다.`
+        message: `⚠️ 이미 구글 드라이브에 '${cleanName}' 선생님 폴더가 존재합니다.`
       });
       return;
     }
@@ -235,66 +217,37 @@ export function AdminDashboardModal({
     setIsAddingTeacher(true);
     setInModalAlert(null);
     try {
-      // 1. 클라우드(Supabase) 및 로컬스토리지에 즉시 등록
-      await registerTeacherToCloud(cleanName);
-      setRegisteredTeachers(prev => Array.from(new Set([...prev, cleanName])));
-
-      // 2. 구글 드라이브 폴더 생성 시도 (App.tsx 핸들러 호출)
-      let driveResult: any = null;
       if (onAddTeacher) {
-        driveResult = await onAddTeacher(cleanName);
-      }
-
-      setIsAddingTeacherOpen(false);
-      setNewTeacherNameInput('');
-      setRefreshKey(k => k + 1);
-
-      if (driveResult?.folderCreated) {
-        setInModalAlert({
-          type: 'success',
-          message: `🎉 [${cleanName} 선생님] 계정이 등록되었으며 구글 드라이브 폴더가 정상 생성되었습니다!`,
-          subtext: '초기 비밀번호는 1234이며 즉시 로그인 및 수업 개설이 가능합니다.'
-        });
-        onToast(`🎉 [${cleanName} 선생님] 계정 등록 및 드라이브 폴더 생성 완료! (초기 비밀번호: 1234)`);
-      } else {
-        setInModalAlert({
-          type: 'info',
-          message: `🔑 [${cleanName} 선생님] 계정이 클라우드 및 시스템에 즉시 등록되었습니다! (초기 비밀번호: 1234)`,
-          subtext: '구글 드라이브 폴더 자동 생성을 원하시면 Google Apps Script 배포 설정에서 [액세스할 수 있는 사용자: 모든 사용자(Anyone)] 권한이 필요합니다. (또는 구글 드라이브 최상위 폴더에 직접 동일한 이름의 폴더를 생성하시면 100% 자동 연동됩니다)'
-        });
-        onToast(`🔑 [${cleanName} 선생님] 계정이 등록되었습니다. (초기 비밀번호: 1234)`);
+        const result = await onAddTeacher(cleanName);
+        if (result && result.success) {
+          setIsAddingTeacherOpen(false);
+          setNewTeacherNameInput('');
+          setRefreshKey(k => k + 1);
+          setInModalAlert({
+            type: 'success',
+            message: `🎉 [${cleanName} 선생님] 구글 드라이브 폴더가 정상 생성되었습니다!`,
+            subtext: '초기 비밀번호는 1234이며 지금 바로 연동되었습니다.'
+          });
+          onToast(`🎉 [${cleanName} 선생님] 드라이브 폴더 생성 완료! (초기 비밀번호: 1234)`);
+        } else {
+          // 구글 드라이브 폴더 생성이 실패한 경우 억지로 등록하지 않고 정직하게 안내
+          setInModalAlert({
+            type: 'error',
+            message: `❌ 구글 드라이브 폴더 자동 생성 실패 (시스템 연동 오류)`,
+            subtext: `구글 드라이브 시스템 권한/통신 오류(403)로 인해 폴더를 자동 생성하지 못했습니다. 구글 드라이브 시스템 문제가 해결될 때까지, 구글 드라이브 웹 화면에서 직접 '${cleanName}' 폴더를 생성하시고 [새로고침]을 누르시면 100% 정상 연동됩니다.`
+          });
+          onToast(`⚠️ 구글 드라이브 시스템 오류로 폴더를 생성하지 못했습니다.`);
+        }
       }
     } catch (err: any) {
       setInModalAlert({
         type: 'error',
-        message: `❌ 선생님 추가 오류: ${err.message}`
+        message: `❌ 구글 드라이브 폴더 생성 실패: ${err.message}`,
+        subtext: `구글 드라이브 웹에서 직접 '${cleanName}' 폴더를 만드시고 [새로고침]을 누르시면 자동 연동됩니다.`
       });
-      onToast(`❌ 선생님 추가 오류: ${err.message}`);
+      onToast(`❌ 폴더 생성 실패: ${err.message}`);
     } finally {
       setIsAddingTeacher(false);
-    }
-  };
-
-  // 등록된 선생님 계정 삭제 핸들러
-  const handleDeleteTeacherAccount = async (teacherName: string) => {
-    const clean = teacherName.replace(' 선생님', '').trim();
-    if (!window.confirm(`정말로 '[${clean} 선생님]' 계정을 삭제하시겠습니까?\n이 작업은 클라우드 및 계정 목록에서 영구 제거됩니다.`)) {
-      return;
-    }
-    try {
-      await deleteTeacherFromCloud(clean);
-      if (onDeleteTeacher) {
-        await onDeleteTeacher(clean);
-      }
-      setRegisteredTeachers(prev => prev.filter(n => n !== clean));
-      setRefreshKey(k => k + 1);
-      setInModalAlert({
-        type: 'info',
-        message: `🗑️ [${clean} 선생님] 계정이 정상 삭제되었습니다.`
-      });
-      onToast(`🗑️ [${clean} 선생님] 계정이 정상 삭제되었습니다.`);
-    } catch (err: any) {
-      onToast(`❌ 삭제 오류: ${err.message}`);
     }
   };
 
@@ -849,7 +802,7 @@ export function AdminDashboardModal({
                     <th style={{ padding: '10px 14px' }}>선생님 이름 (폴더명)</th>
                     <th style={{ padding: '10px 14px' }}>계정 ID</th>
                     <th style={{ padding: '10px 14px' }}>비밀번호 보안 상태</th>
-                    <th style={{ padding: '10px 14px' }}>연동 상태</th>
+                    <th style={{ padding: '10px 14px' }}>상태</th>
                     <th style={{ padding: '10px 14px', textAlign: 'right' }}>관리 작업</th>
                   </tr>
                 </thead>
@@ -857,7 +810,7 @@ export function AdminDashboardModal({
                   {allTeachers.length === 0 ? (
                     <tr>
                       <td colSpan={5} style={{ padding: '36px', textAlign: 'center', color: '#94a3b8' }}>
-                        등록된 선생님 계정이 없습니다. 위의 <strong>[+ 선생님 추가]</strong> 버튼을 눌러 등록해주세요.
+                        구글 드라이브에 등록된 선생님 폴더가 없습니다.
                       </td>
                     </tr>
                   ) : (
@@ -914,42 +867,19 @@ export function AdminDashboardModal({
                             )}
                           </td>
                           <td style={{ padding: '12px 14px' }}>
-                            {teacher.hasDriveFolder ? (
-                              <span
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  padding: '3px 8px',
-                                  borderRadius: '6px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  background: 'rgba(34, 197, 94, 0.15)',
-                                  color: '#4ade80',
-                                  border: '1px solid rgba(34, 197, 94, 0.3)'
-                                }}
-                              >
-                                📁 드라이브 연동됨
-                              </span>
-                            ) : (
-                              <span
-                                style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                  padding: '3px 8px',
-                                  borderRadius: '6px',
-                                  fontSize: '11px',
-                                  fontWeight: 600,
-                                  background: 'rgba(56, 189, 248, 0.15)',
-                                  color: '#38bdf8',
-                                  border: '1px solid rgba(56, 189, 248, 0.3)'
-                                }}
-                                title="클라우드에 등록되었으며 구글 드라이브 폴더 연동 대기 중입니다"
-                              >
-                                ☁️ 클라우드 등록됨
-                              </span>
-                            )}
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 8px',
+                                borderRadius: '6px',
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                background: teacher.isModified ? 'rgba(234, 179, 8, 0.15)' : 'rgba(255, 255, 255, 0.06)',
+                                color: teacher.isModified ? '#facc15' : '#94a3b8'
+                              }}
+                            >
+                              {teacher.isModified ? '🔑 수정됨' : '초기값'}
+                            </span>
                           </td>
                           <td style={{ padding: '12px 14px', textAlign: 'right' }}>
                             <div style={{ display: 'inline-flex', gap: '6px' }}>
@@ -992,23 +922,6 @@ export function AdminDashboardModal({
                                   🔄 1234 초기화
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteTeacherAccount(teacher.name)}
-                                style={{
-                                  background: 'rgba(239, 68, 68, 0.12)',
-                                  border: '1px solid rgba(239, 68, 68, 0.25)',
-                                  color: '#f87171',
-                                  borderRadius: '6px',
-                                  padding: '5px 8px',
-                                  fontSize: '11.5px',
-                                  cursor: 'pointer',
-                                  fontWeight: 600
-                                }}
-                                title="선생님 계정을 시스템 및 클라우드에서 삭제합니다"
-                              >
-                                🗑️ 삭제
-                              </button>
                             </div>
                           </td>
                         </tr>
