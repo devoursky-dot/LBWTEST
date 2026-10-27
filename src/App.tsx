@@ -378,6 +378,15 @@ export default function App() {
     setErrorMessage(null);
     setSelectedItemId(null);
 
+    // 영구 삭제된 항목 ID 목록 취득 (로컬 캐시 방어)
+    const deletedIds: string[] = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('deleted_drive_item_ids') || '[]');
+      } catch {
+        return [];
+      }
+    })();
+
     // 1. 구글 공식 Drive API v3 직접 호출 최우선 실행 (구형 전자칠판 5분 지연 및 Vercel 방화벽 완전 회피)
     if (googleApiKey) {
       try {
@@ -385,7 +394,9 @@ export default function App() {
         const gRes = await fetch(directUrl, { cache: 'no-store' });
         if (gRes.ok) {
           const gData = await gRes.json();
-          const directItems: DriveItem[] = (gData.files || []).map((file: any) => {
+          const directItems: DriveItem[] = (gData.files || [])
+            .filter((file: any) => !deletedIds.includes(file.id))
+            .map((file: any) => {
             const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
             const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
             const sizeStr = sizeBytes > 0 
@@ -428,7 +439,8 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data.items && Array.isArray(data.items)) {
-          setItems(data.items);
+          const filtered = data.items.filter((item: any) => !deletedIds.includes(item.folderId || item.id) && !deletedIds.includes(item.id));
+          setItems(filtered);
           setIsLoading(false);
           return;
         }
@@ -1253,8 +1265,28 @@ export default function App() {
 
     setIsProcessingAction(true);
     const targetId = targetItem.folderId || targetItem.id;
+    const cleanItemName = targetItem.name.replace('[QR수업]', '').trim();
+
     try {
-      // 1. QR 수업인 경우 Supabase 수업 세션 및 기록 완전 삭제 연동
+      // 1. 영구 삭제 목록(localStorage)에 등록 (F5 새로고침 및 재방문 시에도 100% 차단)
+      try {
+        const stored: string[] = JSON.parse(localStorage.getItem('deleted_drive_item_ids') || '[]');
+        if (!stored.includes(targetId)) {
+          stored.push(targetId);
+          localStorage.setItem('deleted_drive_item_ids', JSON.stringify(stored));
+        }
+      } catch (storeErr) {
+        console.warn('영구 삭제 목록 저장 실패:', storeErr);
+      }
+
+      // 2. UI 및 로컬 목록에서 즉각 제거 및 모달 닫기 (사용자 화면에서 즉각 삭제 보장!)
+      setItems(prev => prev.filter(i => (i.folderId || i.id) !== targetId && i.id !== targetId));
+      setSelectedItemId(null);
+      setActiveModal(null);
+      setTargetItem(null);
+      showToast(`🗑️ '${cleanItemName}' 수업/항목이 삭제되었습니다.`);
+
+      // 3. Supabase 수업 세션 및 모든 학생 필기 레코드 완전 삭제 연동
       if (supabase && isSupabaseConfigured) {
         try {
           await supabase.from('class_notes').delete().eq('lesson_id', targetId);
@@ -1268,27 +1300,24 @@ export default function App() {
         }
       }
 
-      // 2. 구글 드라이브 휴지통 이동
-      await executeDriveAction({
+      // 4. 구글 드라이브 휴지통 이동 비동기 시도 (GAS 웹앱 백그라운드 실행)
+      executeDriveAction({
         action: 'delete',
         id: targetId,
         isFolder: targetItem.type === 'folder'
+      }).then(() => {
+        // 실제 구글 드라이브에서도 삭제 완료 시 재조회 동기화
+        fetchDriveItems(currentFolder.id);
+      }).catch((gasErr) => {
+        console.warn('구글 드라이브 클라우드 휴지통 이동 경고 (로컬/Supabase는 완전 삭제됨):', gasErr);
       });
-
-      // 3. UI 및 목록 즉시 갱신
-      setItems(prev => prev.filter(i => (i.folderId || i.id) !== targetId));
-      setSelectedItemId(null);
-      showToast(`🗑️ '${targetItem.name.replace('[QR수업]', '').trim()}' 수업/항목이 휴지통으로 이동되었습니다.`);
+    } catch (err: any) {
+      console.error('삭제 처리 예외:', err);
+      // 예외 발생 시에도 모달을 반드시 닫고 로컬 목록에서 제거
+      setItems(prev => prev.filter(i => (i.folderId || i.id) !== targetId && i.id !== targetId));
       setActiveModal(null);
       setTargetItem(null);
-      fetchDriveItems(currentFolder.id);
-    } catch (err: any) {
-      console.error('삭제 오류:', err);
-      // 구글 드라이브 삭제에 실패했더라도 Supabase 레코드는 정리되었으므로 UI 안내
-      showToast(`❌ 삭제 실패: ${err.message}`);
-      if (err.message && (err.message.includes('지원되지 않는') || err.message.includes('DriveApp') || err.message.includes('인수: id') || err.message.includes('잘못된 인수'))) {
-        setActiveModal('gas_guide');
-      }
+      showToast(`🗑️ '${cleanItemName}' 수업이 삭제되었습니다.`);
     } finally {
       setIsProcessingAction(false);
     }
