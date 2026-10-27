@@ -22,16 +22,29 @@ export interface StudentPresenceInfo {
   lastActiveTime: number; // Date.now() ms
 }
 
+export interface AttachedFileItem {
+  id: string;
+  name: string;
+  downloadUrl: string;
+  viewUrl?: string;
+  size?: string;
+  mimeType?: string;
+}
+
+export interface TeacherLessonInfo {
+  lessonId: string;
+  title: string;
+  isLive: boolean; // 현재 전자칠판에서 수업 중인지 여부 (🟢 실시간 진행 중 vs 📓 오프라인)
+  pdfId?: string;
+  pdfName?: string;
+  attachedFiles?: AttachedFileItem[];
+  startedAt: string;
+  lastTouched: number;
+}
+
 export interface ActiveTeacherLesson {
   teacherName: string;
-  lessons: Array<{
-    lessonId: string;
-    title: string;
-    pdfId?: string;
-    pdfName?: string;
-    startedAt: string;
-    lastTouched: number;
-  }>;
+  lessons: TeacherLessonInfo[];
 }
 
 export type RealtimeSignalType =
@@ -83,8 +96,10 @@ class ClassroomRealtimeManager {
     lessonTitle: string;
     pdfId?: string;
     pdfName?: string;
+    attachedFiles?: AttachedFileItem[];
+    isLive?: boolean;
   }): Promise<boolean> {
-    const { lessonId, teacherName, lessonTitle, pdfId, pdfName } = params;
+    const { lessonId, teacherName, lessonTitle, pdfId, pdfName, attachedFiles, isLive = true } = params;
     if (!supabase || !isSupabaseConfigured) return false;
 
     try {
@@ -93,11 +108,12 @@ class ClassroomRealtimeManager {
         lesson_id: lessonId,
         student_grade: '_TEACHER_SESSION_',
         student_class: teacherName.trim() || '선생님',
-        student_num: 'ACTIVE',
+        student_num: isLive ? 'ACTIVE' : 'REGISTERED',
         student_name: lessonTitle.trim() || '수업',
         strokes_data: {
           pdfId: pdfId || null,
           pdfName: pdfName || null,
+          attachedFiles: attachedFiles || [],
           startedAt: now,
           lastTouched: Date.now()
         },
@@ -107,13 +123,17 @@ class ClassroomRealtimeManager {
       // 기존 세션 row 확인 후 upsert
       const { data: existing } = await supabase
         .from('class_notes')
-        .select('id')
+        .select('id, strokes_data')
         .eq('lesson_id', lessonId)
         .eq('student_grade', '_TEACHER_SESSION_')
         .maybeSingle();
 
       if (existing?.id) {
         payload.id = existing.id;
+        // 기존 첨부파일이 있고 새 파라미터에 없으면 기존 첨부파일 보존
+        if (!attachedFiles && existing.strokes_data?.attachedFiles) {
+          (payload.strokes_data as any).attachedFiles = existing.strokes_data.attachedFiles;
+        }
       }
 
       const { error } = await supabase.from('class_notes').upsert(payload);
@@ -182,36 +202,54 @@ class ClassroomRealtimeManager {
   }
 
   /**
-   * 학생앱: 현재 활성화된 선생님 및 수업 목록 가져오기 (2시간 무터치 세션 자동 제외)
+   * 학생앱: 선생님별로 개설되어 있는 모든 수업 목록 가져오기
+   * - 현재 실시간 수업 중인 경우 `isLive: true` (초록색 🟢 아이콘)
+   * - 오프라인/대기 중인 수업인 경우 `isLive: false` (공책 📓 아이콘)
+   * - 연결된 구글 드라이브 학습지/자료 목록(`attachedFiles`) 포함
    */
-  public async fetchActiveTeacherLessons(): Promise<ActiveTeacherLesson[]> {
+  public async fetchAllTeacherLessons(): Promise<ActiveTeacherLesson[]> {
     if (!supabase || !isSupabaseConfigured) return [];
 
     try {
       const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
       const now = Date.now();
 
+      // 선생님이 개설한 모든 수업 조회 (student_grade === '_TEACHER_SESSION_')
       const { data, error } = await supabase
         .from('class_notes')
         .select('*')
         .eq('student_grade', '_TEACHER_SESSION_')
-        .eq('student_num', 'ACTIVE');
+        .order('updated_at', { ascending: false });
 
       if (error || !data) return [];
 
-      const teacherMap = new Map<string, ActiveTeacherLesson['lessons']>();
+      const teacherMap = new Map<string, TeacherLessonInfo[]>();
 
       for (const row of data) {
         const lastTouched = row.strokes_data?.lastTouched || (row.updated_at ? new Date(row.updated_at).getTime() : 0);
-        // 2시간 이상 경과한 세션은 자동 무시
-        if (now - lastTouched > TWO_HOURS_MS) continue;
+        // 전자칠판에서 [수업 개시] 상태('ACTIVE')이고 2시간 이내 활동이 있으면 실시간 진행 중(🟢)으로 판정
+        const isLive = row.student_num === 'ACTIVE' && (now - lastTouched <= TWO_HOURS_MS);
 
         const teacherName = row.student_class || '선생님';
-        const lessonInfo = {
+        const attachedFiles = row.strokes_data?.attachedFiles || [];
+
+        // 단일 PDF 레거시 호환
+        if (row.strokes_data?.pdfId && !attachedFiles.some((f: any) => f.id === row.strokes_data.pdfId)) {
+          attachedFiles.unshift({
+            id: row.strokes_data.pdfId,
+            name: row.strokes_data.pdfName || '수업_학습지.pdf',
+            downloadUrl: `https://drive.google.com/uc?export=download&id=${row.strokes_data.pdfId}`,
+            mimeType: 'application/pdf'
+          });
+        }
+
+        const lessonInfo: TeacherLessonInfo = {
           lessonId: row.lesson_id,
           title: row.student_name || '수업',
+          isLive,
           pdfId: row.strokes_data?.pdfId,
           pdfName: row.strokes_data?.pdfName,
+          attachedFiles,
           startedAt: row.strokes_data?.startedAt || row.updated_at || new Date().toISOString(),
           lastTouched
         };
@@ -222,14 +260,29 @@ class ClassroomRealtimeManager {
         teacherMap.get(teacherName)!.push(lessonInfo);
       }
 
-      return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => ({
-        teacherName,
-        lessons
-      }));
+      // 각 선생님별로 실시간 진행 중인 수업(isLive === true)을 최상단으로 우선 정렬
+      return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => {
+        lessons.sort((a, b) => {
+          if (a.isLive && !b.isLive) return -1;
+          if (!a.isLive && b.isLive) return 1;
+          return b.lastTouched - a.lastTouched;
+        });
+        return {
+          teacherName,
+          lessons
+        };
+      });
     } catch (err) {
-      console.warn('[Realtime] fetchActiveTeacherLessons exception:', err);
+      console.warn('[Realtime] fetchAllTeacherLessons exception:', err);
       return [];
     }
+  }
+
+  /**
+   * 하위 호환용 래퍼: fetchAllTeacherLessons 호출
+   */
+  public async fetchActiveTeacherLessons(): Promise<ActiveTeacherLesson[]> {
+    return this.fetchAllTeacherLessons();
   }
 
   // ==========================================================================

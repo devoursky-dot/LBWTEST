@@ -4,12 +4,12 @@ import { StudentLessonView } from './StudentLessonView';
 import { PortalLoginView } from './PortalLoginView';
 import { AdminDashboardModal } from './AdminDashboardModal';
 import { LiveClassroomDashboard } from './components/LiveClassroomDashboard';
+import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
 import { getCurrentSession, setCurrentSession, setWhiteboardPermanentAuth, verifyWhiteboardPassword, verifyAdminPassword, parseStudentId, type UserSession } from './lib/auth';
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './lib/supabase';
 import { generateClassSubmissionPdf } from './lib/pdfGenerator';
-import { StudentNoteFullscreenViewer } from './components/StudentNoteFullscreenViewer';
 import { parseLessonParam, buildLessonUrl, type LessonParam } from './lib/studentSessionManager';
-import { classroomRealtime } from './lib/classroomRealtime';
+import { classroomRealtime, type AttachedFileItem } from './lib/classroomRealtime';
 import { PwaInstallButton } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import './index.css';
@@ -171,7 +171,7 @@ export default function App() {
   const [isDraggingGlobal, setIsDraggingGlobal] = useState<boolean>(false);
 
   // --- 모달 관리 ---
-  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'qr_lesson_viewer' | 'lesson_session_prompt' | 'save_pdf_modal' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
+  const [activeModal, setActiveModal] = useState<'new_folder' | 'new_qr_lesson' | 'edit_qr_lesson' | 'qr_lesson_viewer' | 'lesson_session_prompt' | 'save_pdf_modal' | 'rename' | 'delete' | 'settings' | 'gas_guide' | 'login' | null>(null);
   const [targetItem, setTargetItem] = useState<DriveItem | null>(null);
   const [renameInput, setRenameInput] = useState<string>('');
   const [newFolderName, setNewFolderName] = useState<string>('');
@@ -181,6 +181,12 @@ export default function App() {
   const [qrLessonTitle, setQrLessonTitle] = useState<string>('');
   const [qrLessonPin, setQrLessonPin] = useState<string>('1234');
   const [qrLessonPdfFile, setQrLessonPdfFile] = useState<File | null>(null);
+  const [selectedDriveFileIds, setSelectedDriveFileIds] = useState<string[]>([]);
+  const [editingQrLesson, setEditingQrLesson] = useState<DriveItem | null>(null);
+  const [editLessonTitle, setEditLessonTitle] = useState<string>('');
+  const [editLessonPin, setEditLessonPin] = useState<string>('1234');
+  const [editSelectedDriveFileIds, setEditSelectedDriveFileIds] = useState<string[]>([]);
+  const [existingAttachedFiles, setExistingAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [activeQrLesson, setActiveQrLesson] = useState<DriveItem | null>(null);
   const [_qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
   const [studentSubmissions, setStudentSubmissions] = useState<ClassNoteRecord[]>([]);
@@ -235,6 +241,11 @@ export default function App() {
     return items
       .filter(item => item.type === 'folder' && !item.name.startsWith('[QR수업]'))
       .map(item => item.name);
+  }, [items]);
+
+  // 현재 선생님 폴더에 있는 문서 파일 목록 (QR 수업 생성/수정 시 다중 선택 대상)
+  const teacherDriveDocuments = useMemo(() => {
+    return items.filter(item => item.type === 'document' && !item.name.endsWith('.json'));
   }, [items]);
 
   const handlePortalLoginSuccess = (session: UserSession) => {
@@ -601,7 +612,7 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [QR코드 수업 만들기: 폴더 생성 + lesson_config.json + 선택적 PDF 업로드]
+  // [QR코드 수업 만들기: 폴더 생성 + 다중 파일 첨부 + lesson_config.json + Supabase 등록]
   // ==========================================================================
   const handleCreateQrLesson = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -629,10 +640,9 @@ export default function App() {
 
       const lessonFolderId = folderRes.folderId;
       const lessonId = `lesson_${Date.now()}`;
-      let pdfFileId: string | undefined = undefined;
-      let pdfFileName: string | undefined = undefined;
+      const attachedFilesList: AttachedFileItem[] = [];
 
-      // 2. 학습지 PDF가 첨부되었으면 폴더 내에 업로드
+      // 2. 학습지 로컬 파일이 첨부되었으면 폴더 내에 업로드
       if (qrLessonPdfFile) {
         showToast(`📄 학습지 '${qrLessonPdfFile.name}' 업로드 중...`);
         const pdfBase64 = await fileToBase64(qrLessonPdfFile);
@@ -640,22 +650,39 @@ export default function App() {
           action: 'upload',
           folderId: lessonFolderId,
           name: qrLessonPdfFile.name,
-          mimeType: 'application/pdf',
+          mimeType: qrLessonPdfFile.type || 'application/pdf',
           base64: pdfBase64
         });
-        pdfFileId = uploadPdfRes.id;
-        pdfFileName = qrLessonPdfFile.name;
+        attachedFilesList.push({
+          id: uploadPdfRes.id,
+          name: qrLessonPdfFile.name,
+          downloadUrl: `https://drive.google.com/uc?export=download&id=${uploadPdfRes.id}`,
+          mimeType: qrLessonPdfFile.type || 'application/pdf'
+        });
       }
 
-      // 3. 수업 설정(Config) JSON 데이터 생성 및 업로드
+      // 3. 선생님 구글 드라이브 폴더에서 다중 선택한 파일들 추가
+      const selectedDriveDocs = teacherDriveDocuments.filter(doc => selectedDriveFileIds.includes(doc.id));
+      for (const doc of selectedDriveDocs) {
+        attachedFilesList.push({
+          id: doc.id,
+          name: doc.name,
+          downloadUrl: doc.downloadUrl || `https://drive.google.com/uc?export=download&id=${doc.id}`,
+          viewUrl: doc.viewUrl,
+          size: doc.size
+        });
+      }
+
+      // 4. 수업 설정(Config) JSON 데이터 생성 및 업로드
       const lessonConfig = {
         lessonId,
         title: cleanTitle,
         folderId: lessonFolderId,
         teacherPin: qrLessonPin.trim() || '1234',
         createdAt: new Date().toISOString(),
-        pdfFileId,
-        pdfFileName
+        pdfFileId: attachedFilesList[0]?.id,
+        pdfFileName: attachedFilesList[0]?.name,
+        attachedFiles: attachedFilesList
       };
 
       const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
@@ -667,15 +694,155 @@ export default function App() {
         base64: configJsonBase64
       });
 
-      showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다!`);
+      // 5. Supabase에 수업 세션(학생앱 실시간 및 오프라인 공책 목록 노출용) 등록
+      const rawTeacherName = currentSession?.name || '선생님';
+      const cleanTeacherName = rawTeacherName.replace(' 선생님', '').trim();
+      classroomRealtime.registerTeacherSession({
+        lessonId: lessonFolderId,
+        teacherName: cleanTeacherName,
+        lessonTitle: cleanTitle,
+        pdfId: attachedFilesList[0]?.id,
+        pdfName: attachedFilesList[0]?.name,
+        attachedFiles: attachedFilesList,
+        isLive: false // 생성 초기에는 오프라인 상태 (전자칠판에서 수업 개시 시 활성화)
+      }).catch(() => {});
+
+      showToast(`🎉 '${cleanTitle}' QR 대화형 수업이 성공적으로 개설되었습니다! (자료 ${attachedFilesList.length}개 첨부됨)`);
       setActiveModal(null);
       setQrLessonTitle('');
       setQrLessonPin('1234');
       setQrLessonPdfFile(null);
+      setSelectedDriveFileIds([]);
       fetchDriveItems(currentFolder.id);
     } catch (err: any) {
       console.error('QR 수업 생성 오류:', err);
       showToast(`❌ 수업 생성 실패: ${err.message}`);
+    } finally {
+      setIsProcessingAction(false);
+    }
+  };
+
+  // ==========================================================================
+  // [QR 수업 수정 모달 열기 및 기존 첨부자료 동기화]
+  // ==========================================================================
+  const handleOpenEditQrLesson = async (item: DriveItem) => {
+    setEditingQrLesson(item);
+    setEditLessonTitle(item.name.replace('[QR수업]', '').trim());
+    setEditLessonPin((item as any).teacherPin || '1234');
+    setActiveModal('edit_qr_lesson');
+
+    const lessonFolderId = item.folderId || item.id;
+    if (supabase && isSupabaseConfigured) {
+      try {
+        const { data } = await supabase
+          .from('class_notes')
+          .select('strokes_data')
+          .eq('lesson_id', lessonFolderId)
+          .eq('student_grade', '_TEACHER_SESSION_')
+          .maybeSingle();
+
+        if (data?.strokes_data?.attachedFiles) {
+          const files: AttachedFileItem[] = data.strokes_data.attachedFiles;
+          setExistingAttachedFiles(files);
+          setEditSelectedDriveFileIds(files.map(f => f.id));
+          return;
+        }
+      } catch (err) {
+        console.warn('기존 수업 첨부자료 조회 오류:', err);
+      }
+    }
+    setExistingAttachedFiles([]);
+    setEditSelectedDriveFileIds([]);
+  };
+
+  // ==========================================================================
+  // [QR 수업 수정 저장: 폴더명 변경 + 다중 선택 자료 갱신 + Supabase 갱신]
+  // ==========================================================================
+  const handleSaveEditQrLesson = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingQrLesson) return;
+    const cleanTitle = editLessonTitle.trim();
+    if (!cleanTitle) {
+      showToast('⚠️ 수업 제목을 입력해 주세요.');
+      return;
+    }
+
+    setIsProcessingAction(true);
+    const lessonFolderId = editingQrLesson.folderId || editingQrLesson.id;
+    const newFolderName = `[QR수업] ${cleanTitle}`;
+
+    try {
+      // 1. 폴더 이름 변경 (수업 제목 변경 시)
+      if (editingQrLesson.name !== newFolderName) {
+        await executeDriveAction({
+          action: 'rename',
+          id: lessonFolderId,
+          name: newFolderName
+        });
+      }
+
+      // 2. 다중 선택된 구글 드라이브 파일 목록 조합
+      const newAttachedFiles: AttachedFileItem[] = [];
+
+      // A) 현재 폴더의 파일 중 선택된 것들
+      const selectedDocs = teacherDriveDocuments.filter(doc => editSelectedDriveFileIds.includes(doc.id));
+      for (const doc of selectedDocs) {
+        newAttachedFiles.push({
+          id: doc.id,
+          name: doc.name,
+          downloadUrl: doc.downloadUrl || `https://drive.google.com/uc?export=download&id=${doc.id}`,
+          viewUrl: doc.viewUrl,
+          size: doc.size
+        });
+      }
+
+      // B) 기존에 첨부되어 있던 파일 중 여전히 체크된 것들 보존
+      for (const existing of existingAttachedFiles) {
+        if (editSelectedDriveFileIds.includes(existing.id) && !newAttachedFiles.some(f => f.id === existing.id)) {
+          newAttachedFiles.push(existing);
+        }
+      }
+
+      // 3. lesson_config.json 업데이트 업로드
+      const lessonConfig = {
+        lessonId: lessonFolderId,
+        title: cleanTitle,
+        folderId: lessonFolderId,
+        teacherPin: editLessonPin.trim() || '1234',
+        updatedAt: new Date().toISOString(),
+        pdfFileId: newAttachedFiles[0]?.id,
+        pdfFileName: newAttachedFiles[0]?.name,
+        attachedFiles: newAttachedFiles
+      };
+      const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
+      await executeDriveAction({
+        action: 'upload',
+        folderId: lessonFolderId,
+        name: 'lesson_config.json',
+        mimeType: 'application/json',
+        base64: configJsonBase64
+      });
+
+      // 4. Supabase 세션 정보 갱신
+      const rawTeacherName = currentSession?.name || '선생님';
+      const cleanTeacherName = rawTeacherName.replace(' 선생님', '').trim();
+      await classroomRealtime.registerTeacherSession({
+        lessonId: lessonFolderId,
+        teacherName: cleanTeacherName,
+        lessonTitle: cleanTitle,
+        pdfId: newAttachedFiles[0]?.id,
+        pdfName: newAttachedFiles[0]?.name,
+        attachedFiles: newAttachedFiles,
+        isLive: false
+      });
+
+      showToast(`🎉 '${cleanTitle}' 수업 정보 및 첨부자료(${newAttachedFiles.length}개)가 성공적으로 수정되었습니다!`);
+      setActiveModal(null);
+      setEditingQrLesson(null);
+      fetchDriveItems(currentFolder.id);
+    } catch (err: any) {
+      console.error('수업 수정 오류:', err);
+      showToast(`❌ 수업 수정 실패: ${err.message}`);
     } finally {
       setIsProcessingAction(false);
     }
@@ -1440,6 +1607,14 @@ export default function App() {
                     </button>
                     <button 
                       className="gdrive-action-chip"
+                      style={{ background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.4)', color: '#93c5fd', fontWeight: 600 }}
+                      onClick={() => handleOpenEditQrLesson(selectedItem)}
+                      title="수업 제목, PIN 및 첨부 학습 자료 다중 선택 수정"
+                    >
+                      <span>✏️</span> 자료 수정
+                    </button>
+                    <button 
+                      className="gdrive-action-chip"
                       onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
                     >
                       <span>📁</span> 폴더 열기
@@ -1620,31 +1795,58 @@ export default function App() {
                                 {isQr ? item.name.replace('[QR수업]', '').trim() : item.name}
                               </span>
                               {isQr && (
-                                <button
-                                  type="button"
-                                  className="gdrive-qr-badge"
-                                  style={{
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '5px',
-                                    padding: '4px 10px',
-                                    borderRadius: '6px',
-                                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-                                    color: '#ffffff',
-                                    fontWeight: 700,
-                                    fontSize: '12px',
-                                    boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
-                                  }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenQrLesson(item);
-                                  }}
-                                  title="터치하여 전자칠판 라이브 수업 즉시 실행"
-                                >
-                                  ▶️ 수업 실행
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    className="gdrive-qr-badge"
+                                    style={{
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '5px',
+                                      padding: '4px 10px',
+                                      borderRadius: '6px',
+                                      background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                                      color: '#ffffff',
+                                      fontWeight: 700,
+                                      fontSize: '12px',
+                                      boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenQrLesson(item);
+                                    }}
+                                    title="터치하여 전자칠판 라이브 수업 즉시 실행"
+                                  >
+                                    ▶️ 수업 실행
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="gdrive-qr-badge"
+                                    style={{
+                                      border: '1px solid rgba(255, 255, 255, 0.2)',
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: '4px 8px',
+                                      borderRadius: '6px',
+                                      background: 'rgba(255, 255, 255, 0.08)',
+                                      color: '#93c5fd',
+                                      fontWeight: 600,
+                                      fontSize: '11.5px',
+                                      marginLeft: '6px'
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenEditQrLesson(item);
+                                    }}
+                                    title="수업 제목, PIN 및 첨부 학습 자료 다중 선택 수정"
+                                  >
+                                    ✏️ 자료 수정
+                                  </button>
+                                </>
                               )}
                             </div>
                           </td>
@@ -1746,17 +1948,30 @@ export default function App() {
                               </div>
                             </div>
                             {isQr ? (
-                              <button 
-                                className="gdrive-icon-btn"
-                                style={{ width: '28px', height: '28px', fontSize: '13px', color: 'var(--g-primary-blue)' }}
-                                title="수업 실행"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenQrLesson(folder);
-                                }}
-                              >
-                                ▶️
-                              </button>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <button 
+                                  className="gdrive-icon-btn"
+                                  style={{ width: '28px', height: '28px', fontSize: '13px', color: '#93c5fd' }}
+                                  title="수업 설정 및 첨부자료 수정"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenEditQrLesson(folder);
+                                  }}
+                                >
+                                  ✏️
+                                </button>
+                                <button 
+                                  className="gdrive-icon-btn"
+                                  style={{ width: '28px', height: '28px', fontSize: '13px', color: 'var(--g-primary-blue)' }}
+                                  title="수업 실행"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenQrLesson(folder);
+                                  }}
+                                >
+                                  ▶️
+                                </button>
+                              </div>
                             ) : (
                               canEdit && (
                                 <button 
@@ -1907,6 +2122,83 @@ export default function App() {
                 </span>
               </div>
 
+              {/* 구글 드라이브 폴더 내 파일 다중 선택 영역 */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '12.5px', color: 'var(--g-text-secondary)', fontWeight: 600 }}>
+                    📁 내 구글 드라이브 폴더 학습자료 다중 선택 ({selectedDriveFileIds.length}개 선택됨)
+                  </label>
+                  {teacherDriveDocuments.length > 0 && (
+                    <button
+                      type="button"
+                      style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '11.5px', cursor: 'pointer', fontWeight: 600 }}
+                      onClick={() => {
+                        if (selectedDriveFileIds.length === teacherDriveDocuments.length) {
+                          setSelectedDriveFileIds([]);
+                        } else {
+                          setSelectedDriveFileIds(teacherDriveDocuments.map(d => d.id));
+                        }
+                      }}
+                    >
+                      {selectedDriveFileIds.length === teacherDriveDocuments.length ? '전체 해제' : '전체 선택'}
+                    </button>
+                  )}
+                </div>
+
+                <div style={{
+                  background: 'rgba(15, 23, 42, 0.6)',
+                  border: '1px solid var(--g-border)',
+                  borderRadius: '10px',
+                  maxHeight: '160px',
+                  overflowY: 'auto',
+                  padding: '8px'
+                }}>
+                  {teacherDriveDocuments.length === 0 ? (
+                    <div style={{ padding: '18px 10px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12px' }}>
+                      선생님 드라이브 폴더에 업로드된 문서/학습지 파일이 없습니다.<br/>
+                      아래 [컴퓨터 파일 첨부]를 이용하시거나 먼저 드라이브에 파일을 업로드해 주세요.
+                    </div>
+                  ) : (
+                    teacherDriveDocuments.map(doc => {
+                      const isChecked = selectedDriveFileIds.includes(doc.id);
+                      return (
+                        <label
+                          key={doc.id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            background: isChecked ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                            cursor: 'pointer',
+                            fontSize: '12.5px',
+                            color: isChecked ? '#ffffff' : 'var(--g-text-secondary)',
+                            transition: 'background 0.15s ease'
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              setSelectedDriveFileIds(prev =>
+                                isChecked ? prev.filter(id => id !== doc.id) : [...prev, doc.id]
+                              );
+                            }}
+                            style={{ accentColor: '#3b82f6', width: '15px', height: '15px' }}
+                          />
+                          <span style={{ fontSize: '15px' }}>{doc.name.endsWith('.pdf') ? '📄' : '📎'}</span>
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {doc.name}
+                          </span>
+                          {doc.size && <span style={{ fontSize: '11px', color: 'var(--g-text-muted)' }}>{doc.size}</span>}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
               <div>
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   수업용 학습지 PDF 첨부 (선택 사항)
@@ -1951,8 +2243,176 @@ export default function App() {
       )}
 
       {/* ====================================================================
-          전자칠판용 대화형 QR 수업 실행 전체화면 대시보드
+          모달 1-3: QR코드 수업 및 학습자료 수정 (다중 선택 수정)
           ==================================================================== */}
+      {activeModal === 'edit_qr_lesson' && editingQrLesson && (
+        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+          <div className="modal-box" style={{ maxWidth: '560px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2><span>✏️</span> QR코드 수업 및 학습자료 수정</h2>
+              <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
+            </div>
+            <form onSubmit={handleSaveEditQrLesson} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.25)', padding: '10px 14px', borderRadius: '8px', fontSize: '12.5px', color: '#93c5fd', lineHeight: 1.5 }}>
+                선생님 구글 드라이브 폴더의 파일 목록에서 학생들에게 배부할 자료를 <strong>다중 선택하여 추가/해제</strong>할 수 있습니다.
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                  수업 제목 <span style={{ color: 'var(--g-danger-red)' }}>*</span>
+                </label>
+                <input 
+                  type="text" 
+                  className="g-form-input" 
+                  value={editLessonTitle}
+                  onChange={(e) => setEditLessonTitle(e.target.value)}
+                  placeholder="수업 제목"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
+                  선생님 PIN 번호 (4자리)
+                </label>
+                <input 
+                  type="text" 
+                  maxLength={4}
+                  className="g-form-input" 
+                  value={editLessonPin}
+                  onChange={(e) => setEditLessonPin(e.target.value)}
+                  placeholder="1234"
+                  required
+                />
+              </div>
+
+              {/* 연결 학습자료 다중 선택 영역 */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '12.5px', color: 'var(--g-text-secondary)', fontWeight: 600 }}>
+                    📁 배부할 학습자료 다중 선택 ({editSelectedDriveFileIds.length}개 선택됨)
+                  </label>
+                  {teacherDriveDocuments.length > 0 && (
+                    <button
+                      type="button"
+                      style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '11.5px', cursor: 'pointer', fontWeight: 600 }}
+                      onClick={() => {
+                        if (editSelectedDriveFileIds.length === teacherDriveDocuments.length) {
+                          setEditSelectedDriveFileIds([]);
+                        } else {
+                          setEditSelectedDriveFileIds(teacherDriveDocuments.map(d => d.id));
+                        }
+                      }}
+                    >
+                      {editSelectedDriveFileIds.length === teacherDriveDocuments.length ? '전체 해제' : '전체 선택'}
+                    </button>
+                  )}
+                </div>
+
+                <div style={{
+                  background: 'rgba(15, 23, 42, 0.6)',
+                  border: '1px solid var(--g-border)',
+                  borderRadius: '10px',
+                  maxHeight: '180px',
+                  overflowY: 'auto',
+                  padding: '8px'
+                }}>
+                  {teacherDriveDocuments.length === 0 && existingAttachedFiles.length === 0 ? (
+                    <div style={{ padding: '18px 10px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12px' }}>
+                      선생님 드라이브 폴더에 문서/학습지 파일이 없습니다.
+                    </div>
+                  ) : (
+                    <>
+                      {/* 현재 폴더에 있는 파일들 */}
+                      {teacherDriveDocuments.map(doc => {
+                        const isChecked = editSelectedDriveFileIds.includes(doc.id);
+                        return (
+                          <label
+                            key={doc.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              padding: '6px 10px',
+                              borderRadius: '6px',
+                              background: isChecked ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                              cursor: 'pointer',
+                              fontSize: '12.5px',
+                              color: isChecked ? '#ffffff' : 'var(--g-text-secondary)',
+                              transition: 'background 0.15s ease'
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                setEditSelectedDriveFileIds(prev =>
+                                  isChecked ? prev.filter(id => id !== doc.id) : [...prev, doc.id]
+                                );
+                              }}
+                              style={{ accentColor: '#3b82f6', width: '15px', height: '15px' }}
+                            />
+                            <span style={{ fontSize: '15px' }}>{doc.name.endsWith('.pdf') ? '📄' : '📎'}</span>
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {doc.name}
+                            </span>
+                            {doc.size && <span style={{ fontSize: '11px', color: 'var(--g-text-muted)' }}>{doc.size}</span>}
+                          </label>
+                        );
+                      })}
+                      {/* 기존 첨부파일 중 현재 폴더에 없는 파일 표시 */}
+                      {existingAttachedFiles.filter(ex => !teacherDriveDocuments.some(td => td.id === ex.id)).map(ex => {
+                        const isChecked = editSelectedDriveFileIds.includes(ex.id);
+                        return (
+                          <label
+                            key={ex.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              padding: '6px 10px',
+                              borderRadius: '6px',
+                              background: isChecked ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                              cursor: 'pointer',
+                              fontSize: '12.5px',
+                              color: isChecked ? '#ffffff' : 'var(--g-text-secondary)'
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                setEditSelectedDriveFileIds(prev =>
+                                  isChecked ? prev.filter(id => id !== ex.id) : [...prev, ex.id]
+                                );
+                              }}
+                              style={{ accentColor: '#3b82f6', width: '15px', height: '15px' }}
+                            />
+                            <span style={{ fontSize: '15px' }}>📄</span>
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {ex.name} (이전 첨부됨)
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+                <button type="button" className="g-btn g-btn-text" onClick={() => setActiveModal(null)}>
+                  취소
+                </button>
+                <button type="submit" className="g-btn g-btn-primary" disabled={isProcessingAction}>
+                  {isProcessingAction ? '저장 중...' : '💾 수정사항 저장'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       {activeModal === 'qr_lesson_viewer' && activeQrLesson && (
         <LiveClassroomDashboard
           lesson={activeQrLesson}
@@ -2076,7 +2536,7 @@ export default function App() {
           initialPageIdx={selectedStudentNotePageIdx}
           isLoading={isLoadingNoteDetail}
           onClose={() => setSelectedStudentNote(null)}
-          onSendFeedback={(studentName) => {
+          onSendFeedback={(studentName: string) => {
             showToast(`🌟 ${studentName} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);
           }}
         />
