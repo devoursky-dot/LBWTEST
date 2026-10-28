@@ -522,6 +522,18 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [saveAsFileNameInput, setSaveAsFileNameInput] = useState('');
 
 
+  // [실시간 핑 동기화]: 학생이 현재 보고 있는 쪽수(currentPageIndex)를 칠판에 실시간 전송
+  useEffect(() => {
+    classroomRealtime.setStudentPageInfoGetter(() => ({
+      currentPage: currentPageIndex + 1,
+      totalPages: pages.length
+    }));
+    classroomRealtime.triggerStudentPing();
+    return () => {
+      classroomRealtime.setStudentPageInfoGetter(null);
+    };
+  }, [currentPageIndex, pages.length]);
+
   // DOM 참조
   const containerRef = useRef<HTMLDivElement>(null);
   const paperSheetRef = useRef<HTMLDivElement>(null);
@@ -2584,12 +2596,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [isTeacherLesson, loadLessonMaterials]);
 
-  // 교사 수업 진입 시 실시간 전자칠판 세션 자동 연결 (퇴장 후 자동 재연결 원천 차단)
-  useEffect(() => {
-    if (isTeacherLesson && !isConnectedToBoard && !isUserExitedRef.current) {
-      handleConnectToBoard(lessonId, lessonTitle);
-    }
-  }, [isTeacherLesson, isConnectedToBoard, lessonId, lessonTitle]);
+  // [수업 연결]: 칠판과의 실시간 연결은 학생이 상단 툴바의 [수업 선택]을 눌러 명시적으로 참여할 때만 동작합니다.
 
   // 수업 나가기 처리 (실시간 핑/연결만 해제, 화면의 수업 필기는 유지하여 오프라인 자동저장 지속)
   const handleExitLesson = async () => {
@@ -2846,6 +2853,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       // 선생님이 칠판에서 잘못 접속된 학생을 삭제/해제한 경우
       if (signal.type === 'KICK_STUDENT' && signal.targetStudentKey === myKey) {
+        isUserExitedRef.current = true;
         setIsConnectedToBoard(false);
         submissionIdRef.current = null;
         classroomRealtime.leaveLesson();

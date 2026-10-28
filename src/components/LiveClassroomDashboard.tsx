@@ -349,6 +349,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     lastPingTime: number;
     status: 'connected' | 'checking' | 'disconnected';
     isAway?: boolean;
+    currentPage?: number;
+    totalPages?: number;
   }>>(new Map());
 
   // 1시간 절대 세션 타이머 (수업 시작 기준 60분 후 자동 종료)
@@ -446,7 +448,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             ...signal.student!,
             lastPingTime: now,
             status: 'connected',
-            isAway: Boolean(signal.student?.isAway)
+            isAway: Boolean(signal.student?.isAway),
+            currentPage: signal.student?.currentPage,
+            totalPages: signal.student?.totalPages
           });
 
           // 처음 접속하거나 복귀했을 때만 토스트 알림 1회
@@ -526,6 +530,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       name: string;
       status: 'connected' | 'checking' | 'disconnected';
       isAway?: boolean;
+      currentPage?: number;
+      totalPages?: number;
       submission?: ClassNoteRecord;
     }>();
 
@@ -553,6 +559,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         existing.status = hb.status;
         existing.name = hb.name;
         existing.isAway = hb.isAway;
+        existing.currentPage = hb.currentPage;
+        existing.totalPages = hb.totalPages;
       } else {
         studentMap.set(key, {
           key,
@@ -561,7 +569,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           studentNum: hb.studentNum,
           name: hb.name,
           status: hb.status,
-          isAway: hb.isAway
+          isAway: hb.isAway,
+          currentPage: hb.currentPage,
+          totalPages: hb.totalPages
         });
       }
     }
@@ -601,6 +611,11 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     return sortedStudentRoster.filter(s =>
       (s.status === 'connected' || s.status === 'checking') && s.isAway
     );
+  }, [sortedStudentRoster]);
+
+  // 실시간 미접속 학생 목록 (미니 모니터 경고용)
+  const disconnectedStudents = useMemo(() => {
+    return sortedStudentRoster.filter(s => s.status === 'disconnected');
   }, [sortedStudentRoster]);
 
   // ==========================================================================
@@ -705,7 +720,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   // 5. 학생 타일 클릭 시 온디맨드 필기 상세 열람
   const handleSelectStudent = async (studentItem: typeof sortedStudentRoster[0]) => {
     setIsLoadingDetail(true);
-    setSelectedStudentPageIdx(0);
+    const targetPage = (studentItem.currentPage && studentItem.currentPage > 0)
+      ? studentItem.currentPage - 1
+      : 0;
+    setSelectedStudentPageIdx(targetPage);
     selectedStudentKeyRef.current = studentItem.key;
 
     // 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
@@ -1012,197 +1030,203 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           </div>
         </div>
 
-        {/* 출석 카운터 뱃지 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {/* 우측 글로벌 툴바: 아이콘 중심 초슬림 미니멀 버튼 (설명은 풍부한 툴팁으로 제공) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* 출석 카운터 (숫자는 필수 정보이므로 컴팩트 칩으로 표시) */}
           <div
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
+              gap: '4px',
               background: '#21262d',
-              padding: '6px 14px',
+              padding: '6px 12px',
               borderRadius: '20px',
               border: '1px solid #30363d',
-              fontSize: '12.5px'
+              fontSize: '12px'
             }}
+            title="현재 참여 중인 학생 수 / 전체 등록된 학생 수"
           >
-            <span style={{ color: '#3fb950', fontWeight: 700 }}>● 참여 중: {activeCount}명</span>
-            <span style={{ color: '#8b949e', marginLeft: '6px' }}>
-              / 총 {sortedStudentRoster.length}명
-            </span>
+            <span style={{ color: '#3fb950', fontWeight: 800 }}>● {activeCount}</span>
+            <span style={{ color: '#8b949e' }}>/{sortedStudentRoster.length}</span>
           </div>
 
-          {/* ⏱️ 수업 타이머 배지 & 10분 연장 버튼 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {/* 수업 타이머 & 10분 연장 칩 (남은 분수는 필수 정보) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px',
                 background: '#21262d',
-                padding: '6px 12px',
+                padding: '6px 10px',
                 borderRadius: '20px',
                 border: '1px solid #30363d',
-                fontSize: '12.5px',
+                fontSize: '12px',
                 color: remainingMinutes <= 5 ? '#f87171' : '#cbd5e1'
               }}
-              title="설정된 수업 시간이 경과하면 수업이 안전하게 자동 종료됩니다."
+              title="설정된 수업 시간이 경과하면 수업이 안전하게 자동 종료됩니다"
             >
               <span>⏱️</span>
-              <span style={{ fontWeight: 700 }}>{remainingMinutes}분 남음</span>
+              <span style={{ fontWeight: 700 }}>{remainingMinutes}m</span>
             </div>
 
             <button
               type="button"
               onClick={handleExtendSession}
               style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '10px',
                 background: 'rgba(59, 130, 246, 0.15)',
                 border: '1px solid rgba(59, 130, 246, 0.4)',
                 color: '#93c5fd',
-                padding: '5px 10px',
-                borderRadius: '16px',
-                fontSize: '11.5px',
+                fontSize: '15px',
                 fontWeight: 700,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '3px'
+                justifyContent: 'center',
+                padding: 0
               }}
               title="수업 시간을 10분 연장합니다"
             >
-              <span>➕</span>
-              <span>10분 연장</span>
+              ➕
             </button>
           </div>
 
-          {/* 🖥️ 플로팅 미니 모니터 버튼 (Always-on-Top) */}
+          <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.12)', margin: '0 2px' }} />
+
+          {/* 1. 미니 모니터 토글 아이콘 버튼 */}
           <button
             type="button"
             onClick={toggleMiniMonitor}
             style={{
+              width: '38px',
+              height: '38px',
+              borderRadius: '10px',
               background: pipWindow
-                ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.25) 0%, rgba(22, 163, 74, 0.4) 100%)'
-                : 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(79, 70, 229, 0.4) 100%)',
-              border: pipWindow ? '1.5px solid #22c55e' : '1.5px solid #818cf8',
-              color: '#ffffff',
-              borderRadius: '8px',
-              padding: '8px 16px',
-              fontSize: '13px',
-              fontWeight: 700,
+                ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.3) 0%, rgba(22, 163, 74, 0.45) 100%)'
+                : '#21262d',
+              border: pipWindow ? '1.5px solid #22c55e' : '1px solid #30363d',
+              color: pipWindow ? '#4ade80' : '#c9d1d9',
+              fontSize: '16px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
-              boxShadow: pipWindow
-                ? '0 2px 10px rgba(34, 197, 94, 0.3)'
-                : '0 2px 10px rgba(99, 102, 241, 0.3)'
+              justifyContent: 'center',
+              position: 'relative'
             }}
-            title="수업 중 PPT나 전자칠판 판서 등 다른 앱을 사용할 때도, 학생 출석 및 다른 화면을 보고 있는 학생을 항상 화면 맨 위에 실시간으로 띄워둡니다."
+            title={pipWindow ? '미니 플로팅 모니터 닫기' : '미니 플로팅 모니터 켜기 (다른 앱 위 항상 표시)'}
           >
-            <span style={{ fontSize: '15px' }}>{pipWindow ? '🟢' : '🖥️'}</span>
-            <span>{pipWindow ? '미니 모니터 닫기' : '미니 모니터 (모든 앱 위)'}</span>
+            🖥️
             {awayStudents.length > 0 && (
               <span
                 style={{
-                  fontSize: '11px',
+                  position: 'absolute',
+                  top: '-3px',
+                  right: '-3px',
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
                   background: '#ef4444',
-                  color: '#ffffff',
-                  padding: '1px 7px',
-                  borderRadius: '10px',
-                  fontWeight: 800,
-                  marginLeft: '2px'
+                  boxShadow: '0 0 6px #ef4444'
                 }}
-              >
-                이탈 {awayStudents.length}
-              </span>
+              />
             )}
           </button>
 
-          {/* 수업자료 다운로드 버튼 */}
+          {/* 2. 수업자료 다운로드 아이콘 버튼 (첨부 개수 칩 포함) */}
           <button
             type="button"
             style={{
-              background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.22) 0%, rgba(14, 165, 233, 0.35) 100%)',
-              border: '1.5px solid #38bdf8',
-              color: '#ffffff',
-              borderRadius: '8px',
-              padding: '8px 16px',
-              fontSize: '13px',
-              fontWeight: 700,
+              height: '38px',
+              padding: lessonMaterials.length > 0 ? '0 10px' : '0',
+              width: lessonMaterials.length > 0 ? 'auto' : '38px',
+              borderRadius: '10px',
+              background: 'rgba(56, 189, 248, 0.15)',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              color: '#38bdf8',
+              fontSize: '16px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
-              boxShadow: '0 2px 10px rgba(56, 189, 248, 0.25)'
+              justifyContent: 'center',
+              gap: '4px'
             }}
             onClick={() => {
               setIsMaterialModalOpen(true);
               fetchRegisteredLessonMaterials();
             }}
-            title="본 수업에 등록된 학습자료(PDF, 활동지 등)를 전자칠판 기기에 다운로드합니다."
+            title="본 수업에 등록된 학습자료(PDF, 활동지 등)를 전자칠판에 다운로드합니다"
           >
-            <span style={{ fontSize: '15px' }}>📥</span>
-            <span>수업자료 다운로드</span>
+            <span>📥</span>
             {lessonMaterials.length > 0 && (
-              <span style={{ fontSize: '11px', background: '#0284c7', color: '#ffffff', padding: '1px 7px', borderRadius: '10px', fontWeight: 800 }}>
+              <span style={{ fontSize: '11px', background: '#0284c7', color: '#ffffff', padding: '1px 6px', borderRadius: '8px', fontWeight: 800 }}>
                 {lessonMaterials.length}
               </span>
             )}
           </button>
 
-          {/* 학번순 PDF 저장 버튼 */}
+          {/* 3. 학생 필기 일괄 PDF 저장 아이콘 버튼 */}
           <button
             type="button"
-            className="g-btn g-btn-primary"
             style={{
-              fontSize: '13px',
-              fontWeight: 700,
-              padding: '8px 18px',
-              background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+              width: '38px',
+              height: '38px',
+              borderRadius: '10px',
+              background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.25) 0%, rgba(29, 78, 216, 0.35) 100%)',
               border: '1px solid #3b82f6',
-              boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)'
+              color: '#93c5fd',
+              fontSize: '16px',
+              cursor: isGeneratingPdf ? 'wait' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
             disabled={isGeneratingPdf}
             onClick={handleCompileAndSavePdf}
-            title="현재까지 참여한 모든 학생의 필기를 학번순으로 자동 정렬하여 단일 A4 PDF 파일로 만들어 저장합니다."
+            title="모든 학생의 필기를 학번순 단일 PDF 파일로 일괄 저장합니다"
           >
-            {isGeneratingPdf ? '⏳ PDF 생성 중...' : '📑 학생 필기 PDF 저장'}
+            {isGeneratingPdf ? '⏳' : '📑'}
           </button>
 
-          {/* 수업 초기화 버튼 (원터치 초기화) */}
+          {/* 4. 수업 초기화 아이콘 버튼 */}
           <button
             type="button"
             style={{
-              background: 'rgba(239, 68, 68, 0.1)',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              color: '#f87171',
-              borderRadius: '8px',
-              padding: '8px 14px',
-              fontSize: '13px',
-              fontWeight: 700,
-              cursor: 'pointer'
-            }}
-            onClick={handleResetSession}
-            title="현재 수업의 모든 학생 등록 및 필기 기록을 초기화합니다."
-          >
-            🔄 수업 초기화
-          </button>
-
-          {/* 학생 접속 주소 복사 버튼 */}
-          <button
-            type="button"
-            style={{
-              background: '#21262d',
-              border: '1px solid #30363d',
-              color: '#c9d1d9',
-              borderRadius: '8px',
-              padding: '8px 12px',
-              fontSize: '13px',
-              fontWeight: 600,
+              width: '38px',
+              height: '38px',
+              borderRadius: '10px',
+              background: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              color: '#fca5a5',
+              fontSize: '16px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              justifyContent: 'center'
+            }}
+            onClick={handleResetSession}
+            title="현재 수업의 모든 학생 등록 및 필기 기록을 초기화합니다"
+          >
+            🔄
+          </button>
+
+          {/* 5. 학생 접속 주소 복사 아이콘 버튼 */}
+          <button
+            type="button"
+            style={{
+              width: '38px',
+              height: '38px',
+              borderRadius: '10px',
+              background: '#21262d',
+              border: '1px solid #30363d',
+              color: '#c9d1d9',
+              fontSize: '16px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
             onClick={() => {
               if (studentUrl) {
@@ -1210,32 +1234,31 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 showToast('✅ 학생 접속 URL이 복사되었습니다.');
               }
             }}
-            title="학생 접속 주소를 클립보드에 복사합니다."
+            title="학생 접속 URL 주소를 클립보드에 복사합니다"
           >
-            <span>🔗</span>
-            <span>주소 복사</span>
+            🔗
           </button>
 
-          {/* 수업 나가기 버튼 */}
+          {/* 6. 수업 나가기 아이콘 버튼 */}
           <button
             type="button"
             style={{
-              background: 'transparent',
+              width: '38px',
+              height: '38px',
+              borderRadius: '10px',
+              background: 'rgba(255, 255, 255, 0.06)',
               border: '1px solid #30363d',
-              color: '#c9d1d9',
-              borderRadius: '8px',
-              padding: '8px 14px',
-              fontSize: '13px',
-              fontWeight: 600,
+              color: '#94a3b8',
+              fontSize: '16px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              justifyContent: 'center'
             }}
             onClick={onExit}
-            title="라이브 수업 화면을 종료하고 스마트 드라이브 포털로 돌아갑니다."
+            title="라이브 수업 화면을 종료하고 스마트 드라이브 포털로 나갑니다"
           >
-            <span>✕ 수업 나가기</span>
+            ✕
           </button>
         </div>
       </header>
@@ -1501,9 +1524,11 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                         </div>
                       </div>
 
-                      {/* 필기 작성/제출 여부 */}
-                      <div style={{ fontSize: '10px', color: hasNote ? '#58a6ff' : '#8b949e' }}>
-                        {hasNote ? '📝 필기 있음' : '작성 중...'}
+                      {/* 필기 작성/제출 여부 및 실시간 열람 중인 쪽수 */}
+                      <div style={{ fontSize: '10.5px', color: isOnline ? '#38bdf8' : hasNote ? '#58a6ff' : '#8b949e', fontWeight: isOnline ? 700 : 500 }}>
+                        {isOnline && studentItem.currentPage
+                          ? `📖 ${studentItem.currentPage}${studentItem.totalPages ? `/${studentItem.totalPages}` : ''}쪽 열람 중`
+                          : hasNote ? '📝 필기 있음' : '작성 중...'}
                       </div>
                     </div>
                   );
@@ -1801,6 +1826,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           activeCount={activeCount}
           totalCount={sortedStudentRoster.length}
           awayStudents={awayStudents}
+          disconnectedStudents={disconnectedStudents}
           onClose={() => {
             if (pipWindow && !pipWindow.closed) {
               pipWindow.close();
@@ -1829,6 +1855,13 @@ interface MiniMonitorContentProps {
     studentNum: string;
     name: string;
   }>;
+  disconnectedStudents?: Array<{
+    key: string;
+    grade: string;
+    classNum: string;
+    studentNum: string;
+    name: string;
+  }>;
   onClose: () => void;
 }
 
@@ -1837,6 +1870,7 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
   activeCount,
   totalCount,
   awayStudents,
+  disconnectedStudents = [],
   onClose
 }) => {
   return (
@@ -1893,7 +1927,7 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
           padding: '2px 0'
         }}
       >
-        {awayStudents.length === 0 ? (
+        {awayStudents.length === 0 && disconnectedStudents.length === 0 ? (
           <div
             style={{
               display: 'inline-flex',
@@ -1904,31 +1938,54 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
               fontWeight: 600,
               whiteSpace: 'nowrap'
             }}
-            title="모든 학생이 수업 화면을 보고 있습니다"
+            title="모든 학생이 정상 접속하여 수업 화면을 보고 있습니다"
           >
             <span>✨</span>
-            <span>정상</span>
+            <span>전원 정상</span>
           </div>
         ) : (
-          awayStudents.map(student => (
-            <span
-              key={student.key}
-              style={{
-                background: 'rgba(239, 68, 68, 0.3)',
-                border: '1px solid #ef4444',
-                borderRadius: '4px',
-                padding: '2px 6px',
-                fontSize: '11px',
-                fontWeight: 700,
-                color: '#fee2e2',
-                whiteSpace: 'nowrap',
-                flexShrink: 0
-              }}
-              title={`${student.grade}-${student.classNum} ${student.studentNum}번 ${student.name} (다른 화면 감지)`}
-            >
-              🚨 {student.studentNum}번 {student.name}
-            </span>
-          ))
+          <>
+            {/* 이탈 학생 경고 뱃지 */}
+            {awayStudents.map(student => (
+              <span
+                key={`away-${student.key}`}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.3)',
+                  border: '1px solid #ef4444',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: '#fee2e2',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0
+                }}
+                title={`${student.grade}-${student.classNum} ${student.studentNum}번 ${student.name} (다른 화면 감지)`}
+              >
+                🚨 ${student.studentNum}번 ${student.name} 이탈
+              </span>
+            ))}
+            {/* 미접속 학생 경고 뱃지 */}
+            {disconnectedStudents.map(student => (
+              <span
+                key={`disc-${student.key}`}
+                style={{
+                  background: 'rgba(244, 63, 94, 0.2)',
+                  border: '1px solid rgba(244, 63, 94, 0.5)',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: '#fda4af',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0
+                }}
+                title={`${student.grade}-${student.classNum} ${student.studentNum}번 ${student.name} (미접속)`}
+              >
+                🔴 ${student.studentNum}번 ${student.name} 미접속
+              </span>
+            ))}
+          </>
         )}
       </div>
 

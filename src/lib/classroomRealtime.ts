@@ -78,6 +78,8 @@ export interface RealtimeSignalPayload {
     studentNum: string;
     name: string;
     isAway?: boolean;
+    currentPage?: number;
+    totalPages?: number;
   };
   noteRecord?: ClassNoteRecord;
   timestamp: number; // ms
@@ -104,6 +106,11 @@ class ClassroomRealtimeManager {
   private appVisibilityCleanup: (() => void) | null = null;
   private touchThrottleTimer: any = null;
   private lastTouchRegisteredTime: number = 0;
+  private pageInfoGetter: (() => { currentPage: number; totalPages: number }) | null = null;
+
+  public setStudentPageInfoGetter(getter: (() => { currentPage: number; totalPages: number }) | null): void {
+    this.pageInfoGetter = getter;
+  }
 
   // ==========================================================================
   // [1. 교사 수업 세션 관리 (Supabase class_notes 기반 무결점 저장)]
@@ -573,13 +580,16 @@ class ClassroomRealtimeManager {
 
     const sendPing = () => {
       if (this.currentLessonId !== lessonId) return;
+      const pageInfo = this.pageInfoGetter ? this.pageInfoGetter() : undefined;
       this.sendSignal({
         type: 'STUDENT_PING',
         lessonId,
         sessionKey: this.currentSessionKey || undefined,
         student: {
           ...studentInfo,
-          isAway: getIsAway()
+          isAway: getIsAway(),
+          currentPage: pageInfo?.currentPage,
+          totalPages: pageInfo?.totalPages
         }
       }).catch(() => {});
     };
@@ -666,6 +676,15 @@ class ClassroomRealtimeManager {
   /**
    * 수업 채널 연결 해제 및 핑 중지
    */
+  public triggerStudentPing(): void {
+    if (this.currentRole === 'student' && this.currentLessonId) {
+      // 등록된 visibility 리스너나 이벤트 강제 격발
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('focus'));
+      }
+    }
+  }
+
   public leaveLesson(studentInfo?: { grade: string; classNum: string; studentNum: string; name: string }): void {
     this.stopStudentPing();
 

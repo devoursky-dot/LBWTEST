@@ -951,15 +951,15 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'reset', lessonId: currentLessonId })
-        }).catch(() => {});
-      } catch {}
+        }).catch(() => { });
+      } catch { }
 
       // 2. Supabase 비동기 삭제 (비차단 1.5초 타임아웃 가드)
       if (supabase && isSupabaseConfigured) {
         try {
           const delPromise = supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
           const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
-          Promise.race([delPromise, timeoutPromise]).catch(() => {});
+          Promise.race([delPromise, timeoutPromise]).catch(() => { });
         } catch (e) {
           console.warn('초기화 오류:', e);
         }
@@ -1001,8 +1001,8 @@ export default function App() {
     const currentPath = typeof window !== 'undefined' ? window.location.pathname.replace(/\/$/, '') : '';
     const baseOrigin = typeof window !== 'undefined'
       ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-          ? 'https://devoursky-dot.github.io/LBWTEST'
-          : `${window.location.origin}${currentPath}`)
+        ? 'https://devoursky-dot.github.io/LBWTEST'
+        : `${window.location.origin}${currentPath}`)
       : 'https://devoursky-dot.github.io/LBWTEST';
     const studentUrl = buildLessonUrl(baseOrigin, {
       lessonId: currentLessonId,
@@ -1020,7 +1020,7 @@ export default function App() {
       lessonTitle: cleanTitle,
       pdfId: (item as any).pdfFileId,
       pdfName: (item as any).pdfFileName
-    }).catch(() => {});
+    }).catch(() => { });
 
     try {
       const qrDataUrl = await QRCode.toDataURL(studentUrl, {
@@ -1213,7 +1213,7 @@ export default function App() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'reset', lessonId: targetId })
-          }).catch(() => {});
+          }).catch(() => { });
         } catch (sbErr) {
           console.warn('Supabase 수업 세션 정리 오류:', sbErr);
         }
@@ -1298,7 +1298,7 @@ export default function App() {
   // [검색 및 정렬 필터링]
   // ==========================================================================
   const filteredItems = useMemo(() => {
-    const list = items.filter(item => 
+    const list = items.filter(item =>
       item.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
     return [...list].sort((a, b) => {
@@ -1403,7 +1403,7 @@ export default function App() {
   }
 
   return (
-    <div 
+    <div
       className="gdrive-app"
       onDragOver={(e) => { e.preventDefault(); setIsDraggingGlobal(true); }}
       onDragLeave={() => setIsDraggingGlobal(false)}
@@ -1430,46 +1430,46 @@ export default function App() {
             </span>
           </div>
         ) : (
-          <div 
+          <div
             className="gdrive-logo-group"
             onClick={navigateToHome}
             title="드라이브 홈으로 이동"
           >
-          <div className="gdrive-logo-icon">
-            {/* Google Drive 공식 SVG 아이콘 */}
-            <svg width="34" height="30" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
-              <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
-              <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/>
-              <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
-              <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
-              <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
-              <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
-            </svg>
-          </div>
-          <span className="gdrive-logo-text">Drive</span>
-          <span className="gdrive-logo-sub">전자칠판 허브</span>
+            <div className="gdrive-logo-icon">
+              {/* Google Drive 공식 SVG 아이콘 */}
+              <svg width="34" height="30" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
+                <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da" />
+                <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47" />
+                <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335" />
+                <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d" />
+                <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc" />
+                <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00" />
+              </svg>
+            </div>
+            <span className="gdrive-logo-text">Drive</span>
+            <span className="gdrive-logo-sub">전자칠판 허브</span>
           </div>
         )}
 
         {/* 타원형 검색 바: 전자칠판 모드에서는 숨김 */}
         {authMode !== 'whiteboard' && (
           <div className="gdrive-search-bar" onClick={(e) => e.stopPropagation()}>
-          <span style={{ fontSize: '18px', color: 'var(--g-text-muted)' }}>🔍</span>
-          <input 
-            type="text" 
-            placeholder="드라이브에서 검색" 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          {searchTerm && (
-            <button 
-              onClick={() => setSearchTerm('')}
-              style={{ background: 'none', border: 'none', color: 'var(--g-text-muted)', cursor: 'pointer', fontSize: '16px' }}
-            >
-              ✕
-            </button>
-          )}
-        </div>
+            <span style={{ fontSize: '18px', color: 'var(--g-text-muted)' }}>🔍</span>
+            <input
+              type="text"
+              placeholder="드라이브에서 검색"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                style={{ background: 'none', border: 'none', color: 'var(--g-text-muted)', cursor: 'pointer', fontSize: '16px' }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
         )}
 
         {/* 헤더 우측 메뉴 */}
@@ -1509,119 +1509,119 @@ export default function App() {
           </div>
         ) : (
           <div className="gdrive-header-actions" onClick={(e) => e.stopPropagation()}>
-          {/* 최신 버전 확인 및 앱 버전 배지 */}
-          <button
-            type="button"
-            className="g-btn"
-            onClick={() => checkVersion(true)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '6px 11px',
-              borderRadius: '20px',
-              border: '1px solid rgba(255, 255, 255, 0.16)',
-              background: 'rgba(255, 255, 255, 0.06)',
-              color: '#cbd5e1',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              marginRight: '6px'
-            }}
-            title={`현재 버전: v${localVersion.version} (${localVersion.buildTime})\n클릭 시 최신 배포 버전을 확인하여 자동 업데이트합니다.`}
-          >
-            <span>🔄</span>
-            <span>v{localVersion.version}</span>
-          </button>
-
-          {/* PWA 앱 설치 버튼 (이미 설치된 경우 자동 숨김) */}
-          <PwaInstallButton style={{ marginRight: '6px' }} />
-
-          {/* 칠판 QR코드 스캐너 버튼 */}
-          <button
-            type="button"
-            className="g-btn"
-            onClick={() => setIsQrScannerOpen(true)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '6px 12px',
-              borderRadius: '20px',
-              border: '1.5px solid #a855f7',
-              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.25) 0%, rgba(139, 92, 246, 0.3) 100%)',
-              color: '#d8b4fe',
-              fontSize: '12.5px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              marginRight: '6px'
-            }}
-            title="카메라로 전자칠판 수업 QR코드를 스캔하여 바로 입장"
-          >
-            <span>📷</span>
-            <span>수업 QR 찍기</span>
-          </button>
-
-
-
-          <button 
-            className="gdrive-icon-btn" 
-            title="새로고침"
-            onClick={() => {
-              showToast('🔄 드라이브 목록을 새로고침합니다...');
-              fetchDriveItems(currentFolder.id);
-            }}
-          >
-            🔄
-          </button>
-          {/* 드라이브 시스템 설정 - 최고관리자 대시보드 외 비상 진입 지원 */}
-          {(currentSession as any)?.role === 'admin' && (
-            <button 
-              id="btn-settings-open"
-              className="gdrive-icon-btn" 
-              title="시스템 인프라 설정 (관리자 전용)"
-              onClick={() => {
-                setTempRootFolderId(rootFolderId);
-                setTempApiKey(googleApiKey);
-                setTempGasUrl(gasUploadUrl);
-                setActiveModal('settings');
-              }}
-            >
-              ⚙️
-            </button>
-          )}
-
-          {/* 현재 로그인 프로필 및 로그아웃 버튼 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div
+            {/* 최신 버전 확인 및 앱 버전 배지 */}
+            <button
+              type="button"
+              className="g-btn"
+              onClick={() => checkVersion(true)}
               style={{
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px',
-                padding: '6px 12px',
-                borderRadius: 'var(--radius-full)',
-                background: currentSession?.role === 'teacher' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                border: `1px solid ${currentSession?.role === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
-                color: '#ffffff',
-                fontSize: '12.5px',
-                fontWeight: 600
+                gap: '4px',
+                padding: '6px 11px',
+                borderRadius: '20px',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                background: 'rgba(255, 255, 255, 0.06)',
+                color: '#cbd5e1',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                marginRight: '6px'
               }}
+              title={`현재 버전: v${localVersion.version} (${localVersion.buildTime})\n클릭 시 최신 배포 버전을 확인하여 자동 업데이트합니다.`}
             >
-              <span>{currentSession?.role === 'teacher' ? '👨‍🏫' : '🖥️'}</span>
-              <span>{currentSession?.name || '전자칠판 (기본모드)'}</span>
-            </div>
+              <span>🔄</span>
+              <span>v{localVersion.version}</span>
+            </button>
+
+            {/* PWA 앱 설치 버튼 (이미 설치된 경우 자동 숨김) */}
+            <PwaInstallButton style={{ marginRight: '6px' }} />
+
+            {/* 칠판 QR코드 스캐너 버튼 */}
+            <button
+              type="button"
+              className="g-btn"
+              onClick={() => setIsQrScannerOpen(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '6px 12px',
+                borderRadius: '20px',
+                border: '1.5px solid #a855f7',
+                background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.25) 0%, rgba(139, 92, 246, 0.3) 100%)',
+                color: '#d8b4fe',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                marginRight: '6px'
+              }}
+              title="카메라로 전자칠판 수업 QR코드를 스캔하여 바로 입장"
+            >
+              <span>📷</span>
+              <span>수업 QR 찍기</span>
+            </button>
+
+
 
             <button
-              className="g-btn g-btn-text"
-              style={{ fontSize: '12px', border: '1px solid var(--g-border)', padding: '5px 10px' }}
-              onClick={handlePortalLogout}
-              title="로그아웃하고 첫 화면(로그인 게이트)으로 돌아갑니다."
+              className="gdrive-icon-btn"
+              title="새로고침"
+              onClick={() => {
+                showToast('🔄 드라이브 목록을 새로고침합니다...');
+                fetchDriveItems(currentFolder.id);
+              }}
             >
-              🚪 로그아웃
+              🔄
             </button>
+            {/* 드라이브 시스템 설정 - 최고관리자 대시보드 외 비상 진입 지원 */}
+            {(currentSession as any)?.role === 'admin' && (
+              <button
+                id="btn-settings-open"
+                className="gdrive-icon-btn"
+                title="시스템 인프라 설정 (관리자 전용)"
+                onClick={() => {
+                  setTempRootFolderId(rootFolderId);
+                  setTempApiKey(googleApiKey);
+                  setTempGasUrl(gasUploadUrl);
+                  setActiveModal('settings');
+                }}
+              >
+                ⚙️
+              </button>
+            )}
+
+            {/* 현재 로그인 프로필 및 로그아웃 버튼 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  borderRadius: 'var(--radius-full)',
+                  background: currentSession?.role === 'teacher' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                  border: `1px solid ${currentSession?.role === 'teacher' ? 'var(--g-primary-blue)' : 'var(--g-border)'}`,
+                  color: '#ffffff',
+                  fontSize: '12.5px',
+                  fontWeight: 600
+                }}
+              >
+                <span>{currentSession?.role === 'teacher' ? '👨‍🏫' : '🖥️'}</span>
+                <span>{currentSession?.name || '전자칠판 (기본모드)'}</span>
+              </div>
+
+              <button
+                className="g-btn g-btn-text"
+                style={{ fontSize: '12px', border: '1px solid var(--g-border)', padding: '5px 10px' }}
+                onClick={handlePortalLogout}
+                title="로그아웃하고 첫 화면(로그인 게이트)으로 돌아갑니다."
+              >
+                🚪 로그아웃
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
       </header>
 
       {/* ====================================================================
@@ -1630,110 +1630,110 @@ export default function App() {
       <div className="gdrive-body">
         {/* 좌측 사이드바: 전자칠판 모드에서는 완전 제거 */}
         {authMode !== 'whiteboard' && (
-        <aside className="gdrive-sidebar" onClick={(e) => e.stopPropagation()}>
-          {/* [+ 새로 만들기] 버튼 - 오직 선생님/관리자 모드에서만 활성화! 기본 모드는 다운로드 뱃지 표시 */}
-          {canEdit ? (
-            <div className="gdrive-new-btn-wrapper">
-              <button 
-                className="gdrive-new-btn"
-                onClick={() => setIsNewMenuOpen(prev => !prev)}
-              >
-                <svg width="24" height="24" viewBox="0 0 24 24">
-                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
-                </svg>
-                <span>새로 만들기</span>
-              </button>
+          <aside className="gdrive-sidebar" onClick={(e) => e.stopPropagation()}>
+            {/* [+ 새로 만들기] 버튼 - 오직 선생님/관리자 모드에서만 활성화! 기본 모드는 다운로드 뱃지 표시 */}
+            {canEdit ? (
+              <div className="gdrive-new-btn-wrapper">
+                <button
+                  className="gdrive-new-btn"
+                  onClick={() => setIsNewMenuOpen(prev => !prev)}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor" />
+                  </svg>
+                  <span>새로 만들기</span>
+                </button>
 
-              {/* 새로 만들기 팝업 메뉴 */}
-              {isNewMenuOpen && (
-                <div className="gdrive-dropdown-menu">
-                  <button 
-                    className="gdrive-menu-item"
-                    onClick={() => {
-                      setIsNewMenuOpen(false);
-                      setNewFolderName('새 폴더');
-                      setActiveModal('new_folder');
-                    }}
-                  >
-                    <span style={{ fontSize: '18px' }}>📁</span>
-                    <span>새 폴더</span>
-                  </button>
-                  <button 
-                    className="gdrive-menu-item"
-                    onClick={() => {
-                      setIsNewMenuOpen(false);
-                      setQrLessonTitle('');
-                      setQrLessonPdfFile(null);
-                      setActiveModal('new_qr_lesson');
-                    }}
-                  >
-                    <span style={{ fontSize: '18px' }}>📱</span>
-                    <span>QR코드 수업 만들기</span>
-                  </button>
-                  <div className="gdrive-menu-divider" />
-                  <button 
-                    className="gdrive-menu-item"
-                    onClick={() => {
-                      setIsNewMenuOpen(false);
-                      fileInputRef.current?.click();
-                    }}
-                  >
-                    <span style={{ fontSize: '18px' }}>⬆️</span>
-                    <span>파일 업로드</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ padding: '0 8px 16px 8px' }}>
-              <div 
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '10px 14px',
-                  borderRadius: 'var(--radius-full)',
-                  background: 'rgba(255, 255, 255, 0.04)',
-                  border: '1px solid var(--g-border)',
-                  color: 'var(--g-text-secondary)',
-                  fontSize: '13px',
-                  fontWeight: 500
-                }}
-                title="기본 모드: 다운로드 및 보기만 가능합니다."
-              >
-                <span>📥</span>
-                <span>자료 다운로드 모드</span>
+                {/* 새로 만들기 팝업 메뉴 */}
+                {isNewMenuOpen && (
+                  <div className="gdrive-dropdown-menu">
+                    <button
+                      className="gdrive-menu-item"
+                      onClick={() => {
+                        setIsNewMenuOpen(false);
+                        setNewFolderName('새 폴더');
+                        setActiveModal('new_folder');
+                      }}
+                    >
+                      <span style={{ fontSize: '18px' }}>📁</span>
+                      <span>새 폴더</span>
+                    </button>
+                    <button
+                      className="gdrive-menu-item"
+                      onClick={() => {
+                        setIsNewMenuOpen(false);
+                        setQrLessonTitle('');
+                        setQrLessonPdfFile(null);
+                        setActiveModal('new_qr_lesson');
+                      }}
+                    >
+                      <span style={{ fontSize: '18px' }}>📱</span>
+                      <span>QR코드 수업 만들기</span>
+                    </button>
+                    <div className="gdrive-menu-divider" />
+                    <button
+                      className="gdrive-menu-item"
+                      onClick={() => {
+                        setIsNewMenuOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                    >
+                      <span style={{ fontSize: '18px' }}>⬆️</span>
+                      <span>파일 업로드</span>
+                    </button>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            ) : (
+              <div style={{ padding: '0 8px 16px 8px' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '10px 14px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid var(--g-border)',
+                    color: 'var(--g-text-secondary)',
+                    fontSize: '13px',
+                    fontWeight: 500
+                  }}
+                  title="기본 모드: 다운로드 및 보기만 가능합니다."
+                >
+                  <span>📥</span>
+                  <span>자료 다운로드 모드</span>
+                </div>
+              </div>
+            )}
 
-          {canEdit && (
-            <input 
-              type="file" 
-              multiple 
-              ref={fileInputRef} 
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  handleUploadFiles(Array.from(e.target.files));
-                  e.target.value = '';
-                }
-              }}
-            />
-          )}
+            {canEdit && (
+              <input
+                type="file"
+                multiple
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleUploadFiles(Array.from(e.target.files));
+                    e.target.value = '';
+                  }
+                }}
+              />
+            )}
 
-          {/* 사이드바 메뉴 트리 */}
-          <nav className="gdrive-nav-list">
-            <button 
-              className={`gdrive-nav-item ${folderHistory.length === 1 ? 'active' : ''}`}
-              onClick={navigateToHome}
-              title={authMode === 'teacher' && teacherHomeFolder ? `${currentSession?.name || '내'} 드라이브 폴더로 이동` : '내 드라이브로 이동'}
-            >
-              <span style={{ fontSize: '18px' }}>📁</span>
-              <span>{authMode === 'teacher' && teacherHomeFolder ? `${currentSession?.name || '선생님'} 폴더` : '내 드라이브'}</span>
-            </button>
-          </nav>
-        </aside>
+            {/* 사이드바 메뉴 트리 */}
+            <nav className="gdrive-nav-list">
+              <button
+                className={`gdrive-nav-item ${folderHistory.length === 1 ? 'active' : ''}`}
+                onClick={navigateToHome}
+                title={authMode === 'teacher' && teacherHomeFolder ? `${currentSession?.name || '내'} 드라이브 폴더로 이동` : '내 드라이브로 이동'}
+              >
+                <span style={{ fontSize: '18px' }}>📁</span>
+                <span>{authMode === 'teacher' && teacherHomeFolder ? `${currentSession?.name || '선생님'} 폴더` : '내 드라이브'}</span>
+              </button>
+            </nav>
+          </aside>
         )}
 
         {/* 메인 뷰 */}
@@ -1758,7 +1758,7 @@ export default function App() {
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <span style={{ fontSize: '28px' }}>🖥️</span>
-                    <h2 
+                    <h2
                       style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#ffffff' }}
                       title="선생님을 선택하고 개설된 수업을 터치하면 실시간 수업이 시작됩니다."
                     >
@@ -1938,465 +1938,465 @@ export default function App() {
             <>
               {/* 상단 툴바 & 브레드크럼 */}
               <div className="gdrive-main-toolbar" onClick={(e) => e.stopPropagation()}>
-            {/* 좌측: 선택된 항목 액션 바 OR 브레드크럼 */}
-            {selectedItem ? (
-              <div className="gdrive-selection-actions">
-                <span className="gdrive-selection-count">1개 선택됨</span>
-                {isQrLessonItem(selectedItem) ? (
+                {/* 좌측: 선택된 항목 액션 바 OR 브레드크럼 */}
+                {selectedItem ? (
+                  <div className="gdrive-selection-actions">
+                    <span className="gdrive-selection-count">1개 선택됨</span>
+                    {isQrLessonItem(selectedItem) ? (
+                      <>
+                        <button
+                          className="gdrive-action-chip"
+                          style={{ background: 'var(--g-primary-blue)', color: '#041e49', fontWeight: 700 }}
+                          onClick={() => handleOpenQrLesson(selectedItem)}
+                        >
+                          <span>▶️</span> 수업 실행
+                        </button>
+                        <button
+                          className="gdrive-action-chip"
+                          style={{ background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.4)', color: '#93c5fd', fontWeight: 600 }}
+                          onClick={() => handleOpenEditQrLesson(selectedItem)}
+                          title="수업 제목, PIN 및 첨부 학습 자료 다중 선택 수정"
+                        >
+                          <span>✏️</span> 자료 수정
+                        </button>
+                        <button
+                          className="gdrive-action-chip"
+                          onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
+                        >
+                          <span>📁</span> 폴더 열기
+                        </button>
+                      </>
+                    ) : (
+                      selectedItem.type === 'folder' ? (
+                        <button
+                          className="gdrive-action-chip"
+                          onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
+                        >
+                          <span>📁</span> 열기
+                        </button>
+                      ) : (
+                        <button
+                          className="gdrive-action-chip"
+                          onClick={() => handleDownload(selectedItem)}
+                        >
+                          <span>📥</span> 다운로드
+                        </button>
+                      )
+                    )}
+                    {canEdit && (
+                      <>
+                        <button
+                          className="gdrive-action-chip"
+                          onClick={() => {
+                            setTargetItem(selectedItem);
+                            setRenameInput(selectedItem.name);
+                            setActiveModal('rename');
+                          }}
+                        >
+                          <span>✏️</span> 이름 바꾸기
+                        </button>
+                        <button
+                          className="gdrive-action-chip danger"
+                          onClick={() => {
+                            setTargetItem(selectedItem);
+                            setActiveModal('delete');
+                          }}
+                        >
+                          <span>🗑️</span> 삭제
+                        </button>
+                      </>
+                    )}
+                    <a
+                      href={selectedItem.viewUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="gdrive-action-chip"
+                    >
+                      <span>👁️</span> 구글 드라이브 보기
+                    </a>
+                    <button
+                      className="gdrive-action-chip"
+                      onClick={() => setSelectedItemId(null)}
+                      style={{ color: 'var(--g-text-muted)' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <div className="gdrive-breadcrumb-list">
+                    {folderHistory.map((folder, idx) => {
+                      const isCurrent = idx === folderHistory.length - 1;
+                      return (
+                        <React.Fragment key={folder.id}>
+                          <button
+                            className={`gdrive-crumb-btn ${isCurrent ? 'current' : ''}`}
+                            onClick={() => handleBreadcrumbClick(idx)}
+                          >
+                            {folder.name}
+                          </button>
+                          {!isCurrent && <span style={{ color: 'var(--g-text-muted)', fontSize: '14px' }}>›</span>}
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* 우측: 뷰 모드 전환 버튼 */}
+                <div className="gdrive-toolbar-options">
+                  <button
+                    className={`gdrive-icon-btn ${viewMode === 'list' ? 'active' : ''}`}
+                    title="목록 보기"
+                    onClick={() => setViewMode('list')}
+                  >
+                    ☰
+                  </button>
+                  <button
+                    className={`gdrive-icon-btn ${viewMode === 'grid' ? 'active' : ''}`}
+                    title="그리드 타일 보기"
+                    onClick={() => setViewMode('grid')}
+                  >
+                    🔲
+                  </button>
+                </div>
+              </div>
+
+              {/* 컨텐츠 스크롤 영역 */}
+              <div className="gdrive-content-scroll">
+                {isLoading ? (
+                  <div style={{ textAlign: 'center', padding: '5rem 1rem', color: 'var(--g-primary-blue)' }}>
+                    <p style={{ fontSize: '15px', fontWeight: 500 }}>로딩 중...</p>
+                  </div>
+                ) : errorMessage ? (
+                  <div style={{ textAlign: 'center', padding: '4rem 1rem', color: '#f28b82' }}>
+                    <p style={{ fontSize: '15px', marginBottom: '1rem' }}>{errorMessage}</p>
+                    <button className="g-btn g-btn-primary" onClick={() => fetchDriveItems(currentFolder.id)}>
+                      다시 시도
+                    </button>
+                  </div>
+                ) : filteredItems.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '5rem 1rem', color: 'var(--g-text-muted)' }}>
+                    <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📂</div>
+                    <p style={{ fontSize: '16px', color: '#f1f3f4', fontWeight: 500 }}>폴더가 비어 있습니다</p>
+                    <p style={{ fontSize: '13px', marginTop: '6px' }}>
+                      좌측 상단 [+ 새로 만들기]를 클릭하거나, 파일을 화면으로 끌어다 놓으세요.
+                    </p>
+                  </div>
+                ) : viewMode === 'list' ? (
+                  /* [1. 구글 드라이브 목록 뷰 (Table List)] */
                   <>
-                    <button 
-                      className="gdrive-action-chip"
-                      style={{ background: 'var(--g-primary-blue)', color: '#041e49', fontWeight: 700 }}
-                      onClick={() => handleOpenQrLesson(selectedItem)}
-                    >
-                      <span>▶️</span> 수업 실행
-                    </button>
-                    <button 
-                      className="gdrive-action-chip"
-                      style={{ background: 'rgba(59, 130, 246, 0.2)', border: '1px solid rgba(59, 130, 246, 0.4)', color: '#93c5fd', fontWeight: 600 }}
-                      onClick={() => handleOpenEditQrLesson(selectedItem)}
-                      title="수업 제목, PIN 및 첨부 학습 자료 다중 선택 수정"
-                    >
-                      <span>✏️</span> 자료 수정
-                    </button>
-                    <button 
-                      className="gdrive-action-chip"
-                      onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
-                    >
-                      <span>📁</span> 폴더 열기
-                    </button>
+                    {folderHistory.length === 1 && (
+                      <div style={{
+                        background: 'rgba(59, 130, 246, 0.08)',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
+                        borderRadius: '10px',
+                        padding: '10px 16px',
+                        margin: '8px 16px 14px 16px',
+                        fontSize: '13px',
+                        color: '#93c5fd',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}>
+                        <span style={{ fontSize: '18px' }}>💡</span>
+                        <span>
+                          <strong>전자칠판 수업 실행 안내:</strong> 개설된 수업을 실행하시려면 담당 선생님 폴더(예: <strong>이병우</strong>, <strong>김정희</strong>)를 터치하여 안으로 들어가시면 <strong>[▶️ 수업 실행]</strong> 버튼이 나타납니다.
+                        </span>
+                      </div>
+                    )}
+                    <table className="gdrive-table">
+                      <thead>
+                        <tr>
+                          <th>이름</th>
+                          <th style={{ width: '180px' }}>최종 수정 날짜</th>
+                          <th style={{ width: '130px' }}>파일 크기</th>
+                          <th style={{ width: '150px', textAlign: 'right' }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredItems.map(item => {
+                          const isSelected = selectedItemId === item.id;
+                          const isQr = isQrLessonItem(item);
+                          return (
+                            <tr
+                              key={item.id}
+                              className={`gdrive-row ${item.type} ${isQr ? 'qr-lesson-row' : ''} ${isSelected ? 'selected' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedItemId(item.id);
+                              }}
+                              onDoubleClick={() => {
+                                if (isQr) {
+                                  handleOpenQrLesson(item);
+                                } else if (item.type === 'folder') {
+                                  handleOpenFolder(item.folderId || item.id, item.name);
+                                } else {
+                                  handleDownload(item);
+                                }
+                              }}
+                            >
+                              <td>
+                                <div className="gdrive-name-cell">
+                                  <span className="gdrive-item-icon">{getItemIcon(item)}</span>
+                                  <span className="gdrive-item-name" title={item.name}>
+                                    {isQr ? item.name.replace('[QR수업]', '').trim() : item.name}
+                                  </span>
+                                  {isQr && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="gdrive-qr-badge"
+                                        style={{
+                                          border: 'none',
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '5px',
+                                          padding: '4px 10px',
+                                          borderRadius: '6px',
+                                          background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                                          color: '#ffffff',
+                                          fontWeight: 700,
+                                          fontSize: '12px',
+                                          boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleOpenQrLesson(item);
+                                        }}
+                                        title="터치하여 전자칠판 라이브 수업 즉시 실행"
+                                      >
+                                        ▶️ 수업 실행
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="gdrive-qr-badge"
+                                        style={{
+                                          border: '1px solid rgba(255, 255, 255, 0.2)',
+                                          cursor: 'pointer',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '4px 8px',
+                                          borderRadius: '6px',
+                                          background: 'rgba(255, 255, 255, 0.08)',
+                                          color: '#93c5fd',
+                                          fontWeight: 600,
+                                          fontSize: '11.5px',
+                                          marginLeft: '6px'
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleOpenEditQrLesson(item);
+                                        }}
+                                        title="수업 제목, PIN 및 첨부 학습 자료 다중 선택 수정"
+                                      >
+                                        ✏️ 자료 수정
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                              <td style={{ color: 'var(--g-text-secondary)', fontSize: '13px' }}>
+                                {item.updatedAt}
+                              </td>
+                              <td style={{ color: 'var(--g-text-muted)', fontSize: '13px' }}>
+                                {isQr ? '수업 앱' : item.size}
+                              </td>
+                              <td>
+                                {/* 마우스 호버 시 나타나는 빠른 액션 */}
+                                <div className="gdrive-row-actions" onClick={(e) => e.stopPropagation()}>
+                                  {isQr ? (
+                                    <button
+                                      className="gdrive-icon-btn"
+                                      style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-primary-blue)' }}
+                                      title="수업 실행"
+                                      onClick={() => handleOpenQrLesson(item)}
+                                    >
+                                      ▶️
+                                    </button>
+                                  ) : (
+                                    item.type !== 'folder' && (
+                                      <button
+                                        className="gdrive-icon-btn"
+                                        style={{ width: '32px', height: '32px', fontSize: '15px' }}
+                                        title="다운로드"
+                                        onClick={() => handleDownload(item)}
+                                      >
+                                        📥
+                                      </button>
+                                    )
+                                  )}
+                                  {canEdit && (
+                                    <>
+                                      <button
+                                        className="gdrive-icon-btn"
+                                        style={{ width: '32px', height: '32px', fontSize: '15px' }}
+                                        title="이름 바꾸기"
+                                        onClick={() => {
+                                          setTargetItem(item);
+                                          setRenameInput(item.name);
+                                          setActiveModal('rename');
+                                        }}
+                                      >
+                                        ✏️
+                                      </button>
+                                      <button
+                                        className="gdrive-icon-btn"
+                                        style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-danger-red)' }}
+                                        title="삭제"
+                                        onClick={() => {
+                                          setTargetItem(item);
+                                          setActiveModal('delete');
+                                        }}
+                                      >
+                                        🗑️
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </>
                 ) : (
-                  selectedItem.type === 'folder' ? (
-                    <button 
-                      className="gdrive-action-chip"
-                      onClick={() => handleOpenFolder(selectedItem.folderId || selectedItem.id, selectedItem.name)}
-                    >
-                      <span>📁</span> 열기
-                    </button>
-                  ) : (
-                    <button 
-                      className="gdrive-action-chip" 
-                      onClick={() => handleDownload(selectedItem)}
-                    >
-                      <span>📥</span> 다운로드
-                    </button>
-                  )
-                )}
-                {canEdit && (
-                  <>
-                    <button 
-                      className="gdrive-action-chip"
-                      onClick={() => {
-                        setTargetItem(selectedItem);
-                        setRenameInput(selectedItem.name);
-                        setActiveModal('rename');
-                      }}
-                    >
-                      <span>✏️</span> 이름 바꾸기
-                    </button>
-                    <button 
-                      className="gdrive-action-chip danger"
-                      onClick={() => {
-                        setTargetItem(selectedItem);
-                        setActiveModal('delete');
-                      }}
-                    >
-                      <span>🗑️</span> 삭제
-                    </button>
-                  </>
-                )}
-                <a 
-                  href={selectedItem.viewUrl} 
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="gdrive-action-chip"
-                >
-                  <span>👁️</span> 구글 드라이브 보기
-                </a>
-                <button 
-                  className="gdrive-action-chip" 
-                  onClick={() => setSelectedItemId(null)}
-                  style={{ color: 'var(--g-text-muted)' }}
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <div className="gdrive-breadcrumb-list">
-                {folderHistory.map((folder, idx) => {
-                  const isCurrent = idx === folderHistory.length - 1;
-                  return (
-                    <React.Fragment key={folder.id}>
-                      <button 
-                        className={`gdrive-crumb-btn ${isCurrent ? 'current' : ''}`}
-                        onClick={() => handleBreadcrumbClick(idx)}
-                      >
-                        {folder.name}
-                      </button>
-                      {!isCurrent && <span style={{ color: 'var(--g-text-muted)', fontSize: '14px' }}>›</span>}
-                    </React.Fragment>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* 우측: 뷰 모드 전환 버튼 */}
-            <div className="gdrive-toolbar-options">
-              <button 
-                className={`gdrive-icon-btn ${viewMode === 'list' ? 'active' : ''}`}
-                title="목록 보기"
-                onClick={() => setViewMode('list')}
-              >
-                ☰
-              </button>
-              <button 
-                className={`gdrive-icon-btn ${viewMode === 'grid' ? 'active' : ''}`}
-                title="그리드 타일 보기"
-                onClick={() => setViewMode('grid')}
-              >
-                🔲
-              </button>
-            </div>
-          </div>
-
-          {/* 컨텐츠 스크롤 영역 */}
-          <div className="gdrive-content-scroll">
-            {isLoading ? (
-              <div style={{ textAlign: 'center', padding: '5rem 1rem', color: 'var(--g-primary-blue)' }}>
-                <p style={{ fontSize: '15px', fontWeight: 500 }}>로딩 중...</p>
-              </div>
-            ) : errorMessage ? (
-              <div style={{ textAlign: 'center', padding: '4rem 1rem', color: '#f28b82' }}>
-                <p style={{ fontSize: '15px', marginBottom: '1rem' }}>{errorMessage}</p>
-                <button className="g-btn g-btn-primary" onClick={() => fetchDriveItems(currentFolder.id)}>
-                  다시 시도
-                </button>
-              </div>
-            ) : filteredItems.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '5rem 1rem', color: 'var(--g-text-muted)' }}>
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📂</div>
-                <p style={{ fontSize: '16px', color: '#f1f3f4', fontWeight: 500 }}>폴더가 비어 있습니다</p>
-                <p style={{ fontSize: '13px', marginTop: '6px' }}>
-                  좌측 상단 [+ 새로 만들기]를 클릭하거나, 파일을 화면으로 끌어다 놓으세요.
-                </p>
-              </div>
-            ) : viewMode === 'list' ? (
-              /* [1. 구글 드라이브 목록 뷰 (Table List)] */
-              <>
-                {folderHistory.length === 1 && (
-                  <div style={{
-                    background: 'rgba(59, 130, 246, 0.08)',
-                    border: '1px solid rgba(59, 130, 246, 0.2)',
-                    borderRadius: '10px',
-                    padding: '10px 16px',
-                    margin: '8px 16px 14px 16px',
-                    fontSize: '13px',
-                    color: '#93c5fd',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px'
-                  }}>
-                    <span style={{ fontSize: '18px' }}>💡</span>
-                    <span>
-                      <strong>전자칠판 수업 실행 안내:</strong> 개설된 수업을 실행하시려면 담당 선생님 폴더(예: <strong>이병우</strong>, <strong>김정희</strong>)를 터치하여 안으로 들어가시면 <strong>[▶️ 수업 실행]</strong> 버튼이 나타납니다.
-                    </span>
-                  </div>
-                )}
-                <table className="gdrive-table">
-                  <thead>
-                    <tr>
-                      <th>이름</th>
-                      <th style={{ width: '180px' }}>최종 수정 날짜</th>
-                      <th style={{ width: '130px' }}>파일 크기</th>
-                      <th style={{ width: '150px', textAlign: 'right' }}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredItems.map(item => {
-                      const isSelected = selectedItemId === item.id;
-                      const isQr = isQrLessonItem(item);
-                      return (
-                        <tr 
-                          key={item.id}
-                          className={`gdrive-row ${item.type} ${isQr ? 'qr-lesson-row' : ''} ${isSelected ? 'selected' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedItemId(item.id);
-                          }}
-                          onDoubleClick={() => {
-                            if (isQr) {
-                              handleOpenQrLesson(item);
-                            } else if (item.type === 'folder') {
-                              handleOpenFolder(item.folderId || item.id, item.name);
-                            } else {
-                              handleDownload(item);
-                            }
-                          }}
-                        >
-                          <td>
-                            <div className="gdrive-name-cell">
-                              <span className="gdrive-item-icon">{getItemIcon(item)}</span>
-                              <span className="gdrive-item-name" title={item.name}>
-                                {isQr ? item.name.replace('[QR수업]', '').trim() : item.name}
-                              </span>
-                              {isQr && (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="gdrive-qr-badge"
-                                    style={{
-                                      border: 'none',
-                                      cursor: 'pointer',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '5px',
-                                      padding: '4px 10px',
-                                      borderRadius: '6px',
-                                      background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-                                      color: '#ffffff',
-                                      fontWeight: 700,
-                                      fontSize: '12px',
-                                      boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
-                                    }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleOpenQrLesson(item);
-                                    }}
-                                    title="터치하여 전자칠판 라이브 수업 즉시 실행"
-                                  >
-                                    ▶️ 수업 실행
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="gdrive-qr-badge"
-                                    style={{
-                                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                                      cursor: 'pointer',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '4px 8px',
-                                      borderRadius: '6px',
-                                      background: 'rgba(255, 255, 255, 0.08)',
-                                      color: '#93c5fd',
-                                      fontWeight: 600,
-                                      fontSize: '11.5px',
-                                      marginLeft: '6px'
-                                    }}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleOpenEditQrLesson(item);
-                                    }}
-                                    title="수업 제목, PIN 및 첨부 학습 자료 다중 선택 수정"
-                                  >
-                                    ✏️ 자료 수정
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        <td style={{ color: 'var(--g-text-secondary)', fontSize: '13px' }}>
-                          {item.updatedAt}
-                        </td>
-                        <td style={{ color: 'var(--g-text-muted)', fontSize: '13px' }}>
-                          {isQr ? '수업 앱' : item.size}
-                        </td>
-                        <td>
-                          {/* 마우스 호버 시 나타나는 빠른 액션 */}
-                          <div className="gdrive-row-actions" onClick={(e) => e.stopPropagation()}>
-                            {isQr ? (
-                              <button 
-                                className="gdrive-icon-btn" 
-                                style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-primary-blue)' }}
-                                title="수업 실행"
-                                onClick={() => handleOpenQrLesson(item)}
-                              >
-                                ▶️
-                              </button>
-                            ) : (
-                              item.type !== 'folder' && (
-                                <button 
-                                  className="gdrive-icon-btn" 
-                                  style={{ width: '32px', height: '32px', fontSize: '15px' }}
-                                  title="다운로드"
-                                  onClick={() => handleDownload(item)}
-                                >
-                                  📥
-                                </button>
-                              )
-                            )}
-                            {canEdit && (
-                              <>
-                                <button 
-                                  className="gdrive-icon-btn" 
-                                  style={{ width: '32px', height: '32px', fontSize: '15px' }}
-                                  title="이름 바꾸기"
-                                  onClick={() => {
-                                    setTargetItem(item);
-                                    setRenameInput(item.name);
-                                    setActiveModal('rename');
-                                  }}
-                                >
-                                  ✏️
-                                </button>
-                                <button 
-                                  className="gdrive-icon-btn" 
-                                  style={{ width: '32px', height: '32px', fontSize: '15px', color: 'var(--g-danger-red)' }}
-                                  title="삭제"
-                                  onClick={() => {
-                                    setTargetItem(item);
-                                    setActiveModal('delete');
-                                  }}
-                                >
-                                  🗑️
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              </>
-            ) : (
-              /* [2. 구글 드라이브 타일 그리드 뷰 (Grid)] */
-              <div>
-                {filteredItems.some(i => i.type === 'folder') && (
+                  /* [2. 구글 드라이브 타일 그리드 뷰 (Grid)] */
                   <div>
-                    <div className="gdrive-grid-section-title">폴더</div>
-                    <div className="gdrive-folder-grid">
-                      {filteredItems.filter(i => i.type === 'folder').map(folder => {
-                        const isQr = isQrLessonItem(folder);
-                        return (
-                          <div 
-                            key={folder.id}
-                            className={`gdrive-folder-card ${isQr ? 'qr-lesson-card' : ''} ${selectedItemId === folder.id ? 'selected' : ''}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedItemId(folder.id);
-                            }}
-                            onDoubleClick={() => {
-                              if (isQr) {
-                                handleOpenQrLesson(folder);
-                              } else {
-                                handleOpenFolder(folder.folderId || folder.id, folder.name);
-                              }
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
-                              <span style={{ fontSize: '20px' }}>{isQr ? '📱' : '📁'}</span>
-                              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                                <span className="gdrive-card-title">{isQr ? folder.name.replace('[QR수업]', '').trim() : folder.name}</span>
-                                {isQr && <span style={{ fontSize: '11px', color: 'var(--g-primary-blue)', fontWeight: 600 }}>대화형 수업 앱</span>}
-                              </div>
-                            </div>
-                            {isQr ? (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <button 
-                                  className="gdrive-icon-btn"
-                                  style={{ width: '28px', height: '28px', fontSize: '13px', color: '#93c5fd' }}
-                                  title="수업 설정 및 첨부자료 수정"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenEditQrLesson(folder);
-                                  }}
-                                >
-                                  ✏️
-                                </button>
-                                <button 
-                                  className="gdrive-icon-btn"
-                                  style={{ width: '28px', height: '28px', fontSize: '13px', color: 'var(--g-primary-blue)' }}
-                                  title="수업 실행"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
+                    {filteredItems.some(i => i.type === 'folder') && (
+                      <div>
+                        <div className="gdrive-grid-section-title">폴더</div>
+                        <div className="gdrive-folder-grid">
+                          {filteredItems.filter(i => i.type === 'folder').map(folder => {
+                            const isQr = isQrLessonItem(folder);
+                            return (
+                              <div
+                                key={folder.id}
+                                className={`gdrive-folder-card ${isQr ? 'qr-lesson-card' : ''} ${selectedItemId === folder.id ? 'selected' : ''}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedItemId(folder.id);
+                                }}
+                                onDoubleClick={() => {
+                                  if (isQr) {
                                     handleOpenQrLesson(folder);
-                                  }}
-                                >
-                                  ▶️
-                                </button>
-                                {canEdit && (
-                                  <button 
-                                    className="gdrive-icon-btn"
-                                    style={{ width: '28px', height: '28px', fontSize: '13px', color: '#f87171' }}
-                                    title="수업 삭제"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setTargetItem(folder);
-                                      setActiveModal('delete');
-                                    }}
-                                  >
-                                    🗑️
-                                  </button>
+                                  } else {
+                                    handleOpenFolder(folder.folderId || folder.id, folder.name);
+                                  }
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+                                  <span style={{ fontSize: '20px' }}>{isQr ? '📱' : '📁'}</span>
+                                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                    <span className="gdrive-card-title">{isQr ? folder.name.replace('[QR수업]', '').trim() : folder.name}</span>
+                                    {isQr && <span style={{ fontSize: '11px', color: 'var(--g-primary-blue)', fontWeight: 600 }}>대화형 수업 앱</span>}
+                                  </div>
+                                </div>
+                                {isQr ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <button
+                                      className="gdrive-icon-btn"
+                                      style={{ width: '28px', height: '28px', fontSize: '13px', color: '#93c5fd' }}
+                                      title="수업 설정 및 첨부자료 수정"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenEditQrLesson(folder);
+                                      }}
+                                    >
+                                      ✏️
+                                    </button>
+                                    <button
+                                      className="gdrive-icon-btn"
+                                      style={{ width: '28px', height: '28px', fontSize: '13px', color: 'var(--g-primary-blue)' }}
+                                      title="수업 실행"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenQrLesson(folder);
+                                      }}
+                                    >
+                                      ▶️
+                                    </button>
+                                    {canEdit && (
+                                      <button
+                                        className="gdrive-icon-btn"
+                                        style={{ width: '28px', height: '28px', fontSize: '13px', color: '#f87171' }}
+                                        title="수업 삭제"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setTargetItem(folder);
+                                          setActiveModal('delete');
+                                        }}
+                                      >
+                                        🗑️
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  canEdit && (
+                                    <button
+                                      className="gdrive-icon-btn"
+                                      style={{ width: '28px', height: '28px', fontSize: '13px' }}
+                                      title="이름 바꾸기"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setTargetItem(folder);
+                                        setRenameInput(folder.name);
+                                        setActiveModal('rename');
+                                      }}
+                                    >
+                                      ✏️
+                                    </button>
+                                  )
                                 )}
                               </div>
-                            ) : (
-                              canEdit && (
-                                <button 
-                                  className="gdrive-icon-btn"
-                                  style={{ width: '28px', height: '28px', fontSize: '13px' }}
-                                  title="이름 바꾸기"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setTargetItem(folder);
-                                    setRenameInput(folder.name);
-                                    setActiveModal('rename');
-                                  }}
-                                >
-                                  ✏️
-                                </button>
-                              )
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {filteredItems.some(i => i.type !== 'folder') && (
-                  <div>
-                    <div className="gdrive-grid-section-title">파일</div>
-                    <div className="gdrive-file-grid">
-                      {filteredItems.filter(i => i.type !== 'folder').map(file => (
-                        <div 
-                          key={file.id}
-                          className={`gdrive-file-card ${selectedItemId === file.id ? 'selected' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedItemId(file.id);
-                          }}
-                          onDoubleClick={() => handleDownload(file)}
-                        >
-                          <div className="gdrive-card-preview">
-                            {getItemIcon(file)}
-                          </div>
-                          <div className="gdrive-card-info">
-                            <span style={{ fontSize: '18px' }}>{getItemIcon(file)}</span>
-                            <span className="gdrive-card-title" title={file.name}>{file.name}</span>
-                          </div>
+                            );
+                          })}
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    )}
+
+                    {filteredItems.some(i => i.type !== 'folder') && (
+                      <div>
+                        <div className="gdrive-grid-section-title">파일</div>
+                        <div className="gdrive-file-grid">
+                          {filteredItems.filter(i => i.type !== 'folder').map(file => (
+                            <div
+                              key={file.id}
+                              className={`gdrive-file-card ${selectedItemId === file.id ? 'selected' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedItemId(file.id);
+                              }}
+                              onDoubleClick={() => handleDownload(file)}
+                            >
+                              <div className="gdrive-card-preview">
+                                {getItemIcon(file)}
+                              </div>
+                              <div className="gdrive-card-info">
+                                <span style={{ fontSize: '18px' }}>{getItemIcon(file)}</span>
+                                <span className="gdrive-card-title" title={file.name}>{file.name}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-          </div>
 
-          {/* 전역 드래그 앤 드롭 오버레이 */}
-          {isDraggingGlobal && (
-            <div className="gdrive-drop-overlay">
-              <span style={{ fontSize: '48px' }}>{canEdit ? '⬆️' : '🔒'}</span>
-              <h3>
-                {canEdit 
-                  ? '드라이브에 파일을 업로드하려면 여기에 놓으세요' 
-                  : '기본 모드(다운로드 전용)입니다. 업로드는 선생님 로그인 후 가능합니다.'}
-              </h3>
-            </div>
-          )}
+              {/* 전역 드래그 앤 드롭 오버레이 */}
+              {isDraggingGlobal && (
+                <div className="gdrive-drop-overlay">
+                  <span style={{ fontSize: '48px' }}>{canEdit ? '⬆️' : '🔒'}</span>
+                  <h3>
+                    {canEdit
+                      ? '드라이브에 파일을 업로드하려면 여기에 놓으세요'
+                      : '기본 모드(다운로드 전용)입니다. 업로드는 선생님 로그인 후 가능합니다.'}
+                  </h3>
+                </div>
+              )}
             </>
           )}
         </main>
@@ -2508,9 +2508,9 @@ export default function App() {
               <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
             </div>
             <form onSubmit={handleCreateFolder} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <input 
-                type="text" 
-                className="g-form-input" 
+              <input
+                type="text"
+                className="g-form-input"
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
                 placeholder="제목 없는 폴더"
@@ -2542,7 +2542,7 @@ export default function App() {
             </div>
             <form onSubmit={handleCreateQrLesson} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
               <div style={{ background: 'rgba(168, 199, 250, 0.08)', border: '1px solid rgba(168, 199, 250, 0.25)', padding: '12px 14px', borderRadius: '8px', fontSize: '13px', color: 'var(--g-text-secondary)', lineHeight: 1.5 }}>
-                <strong style={{ color: 'var(--g-primary-blue)' }}>💡 앱시트 스타일 QR 수업</strong><br/>
+                <strong style={{ color: 'var(--g-primary-blue)' }}>💡 앱시트 스타일 QR 수업</strong><br />
                 드라이브에 <strong>[QR수업] 폴더</strong>가 생성되고, 그 안에 수업 설정과 학생들의 필기 누가기록이 자동 보관됩니다. 화면에서는 독립 실행형 수업 앱 카드로 렌더링됩니다.
               </div>
 
@@ -2550,9 +2550,9 @@ export default function App() {
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   수업 제목 <span style={{ color: 'var(--g-danger-red)' }}>*</span>
                 </label>
-                <input 
-                  type="text" 
-                  className="g-form-input" 
+                <input
+                  type="text"
+                  className="g-form-input"
                   value={qrLessonTitle}
                   onChange={(e) => setQrLessonTitle(e.target.value)}
                   placeholder="예: 3학년 1반 수학 삼각비의 활용"
@@ -2596,7 +2596,7 @@ export default function App() {
                 }}>
                   {teacherDriveDocuments.length === 0 ? (
                     <div style={{ padding: '18px 10px', textAlign: 'center', color: 'var(--g-text-muted)', fontSize: '12px' }}>
-                      선생님 드라이브 폴더에 업로드된 문서/학습지 파일이 없습니다.<br/>
+                      선생님 드라이브 폴더에 업로드된 문서/학습지 파일이 없습니다.<br />
                       아래 [컴퓨터 파일 첨부]를 이용하시거나 먼저 드라이브에 파일을 업로드해 주세요.
                     </div>
                   ) : (
@@ -2645,9 +2645,9 @@ export default function App() {
                   수업용 학습지 PDF 첨부 (선택 사항)
                 </label>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <button 
-                    type="button" 
-                    className="g-btn g-btn-text" 
+                  <button
+                    type="button"
+                    className="g-btn g-btn-text"
                     style={{ border: '1px solid var(--g-border)' }}
                     onClick={() => qrPdfInputRef.current?.click()}
                   >
@@ -2657,8 +2657,8 @@ export default function App() {
                     {qrLessonPdfFile ? qrLessonPdfFile.name : '미선택 시 빈 스마트 노트로 진행'}
                   </span>
                 </div>
-                <input 
-                  type="file" 
+                <input
+                  type="file"
                   accept="application/pdf"
                   ref={qrPdfInputRef}
                   style={{ display: 'none' }}
@@ -2702,9 +2702,9 @@ export default function App() {
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   수업 제목 <span style={{ color: 'var(--g-danger-red)' }}>*</span>
                 </label>
-                <input 
-                  type="text" 
-                  className="g-form-input" 
+                <input
+                  type="text"
+                  className="g-form-input"
                   value={editLessonTitle}
                   onChange={(e) => setEditLessonTitle(e.target.value)}
                   placeholder="수업 제목"
@@ -2847,7 +2847,7 @@ export default function App() {
           initialClear={isQrLessonInitialClear}
           onExit={() => {
             const currentLessonId = activeQrLesson.folderId || activeQrLesson.id;
-            classroomRealtime.closeTeacherSession(currentLessonId).catch(() => {});
+            classroomRealtime.closeTeacherSession(currentLessonId).catch(() => { });
             setActiveModal(null);
           }}
           onOpenFolder={handleOpenFolder}
@@ -3114,9 +3114,9 @@ export default function App() {
               <button className="modal-close-btn" onClick={() => setActiveModal(null)}>✕</button>
             </div>
             <form onSubmit={handleRename} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <input 
-                type="text" 
-                className="g-form-input" 
+              <input
+                type="text"
+                className="g-form-input"
                 value={renameInput}
                 onChange={(e) => setRenameInput(e.target.value)}
                 autoFocus
@@ -3153,9 +3153,9 @@ export default function App() {
                 <button type="button" className="g-btn g-btn-text" onClick={() => setActiveModal(null)}>
                   취소
                 </button>
-                <button 
-                  type="button" 
-                  className="g-btn g-btn-danger" 
+                <button
+                  type="button"
+                  className="g-btn g-btn-danger"
                   onClick={handleDelete}
                   disabled={isProcessingAction}
                 >
@@ -3189,7 +3189,7 @@ export default function App() {
                 color: 'var(--g-text-secondary)',
                 lineHeight: 1.5
               }}>
-                <span style={{ color: 'var(--g-primary-blue)', fontWeight: 600 }}>💡 현재 전자칠판 기본 모드 (다운로드 전용)</span><br/>
+                <span style={{ color: 'var(--g-primary-blue)', fontWeight: 600 }}>💡 현재 전자칠판 기본 모드 (다운로드 전용)</span><br />
                 기본 모드에서는 자료 열람 및 다운로드만 가능합니다. 파일 수정/삭제/업로드 또는 새 폴더 생성이 필요하시면 선생님 모드로 로그인해주세요.
               </div>
             )}
@@ -3328,9 +3328,9 @@ export default function App() {
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   📂 루트 폴더 ID
                 </label>
-                <input 
-                  type="text" 
-                  className="g-form-input" 
+                <input
+                  type="text"
+                  className="g-form-input"
                   value={tempRootFolderId}
                   onChange={(e) => setTempRootFolderId(e.target.value)}
                   placeholder="1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM"
@@ -3341,9 +3341,9 @@ export default function App() {
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   🔑 Google API 키 (Drive v3)
                 </label>
-                <input 
-                  type="text" 
-                  className="g-form-input" 
+                <input
+                  type="text"
+                  className="g-form-input"
                   value={tempApiKey}
                   onChange={(e) => setTempApiKey(e.target.value)}
                   placeholder="AIzaSy..."
@@ -3354,9 +3354,9 @@ export default function App() {
                 <label style={{ display: 'block', fontSize: '12.5px', color: 'var(--g-text-secondary)', marginBottom: '6px' }}>
                   🚀 Apps Script 업로더 URL
                 </label>
-                <input 
-                  type="text" 
-                  className="g-form-input" 
+                <input
+                  type="text"
+                  className="g-form-input"
                   value={tempGasUrl}
                   onChange={(e) => setTempGasUrl(e.target.value)}
                   placeholder="https://script.google.com/macros/s/.../exec"
@@ -3388,8 +3388,8 @@ export default function App() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '13.5px', color: 'var(--g-text-secondary)', lineHeight: 1.6 }}>
               <div style={{ background: 'rgba(234, 67, 53, 0.12)', border: '1px solid rgba(234, 67, 53, 0.3)', padding: '12px 16px', borderRadius: '8px', color: '#f28b82' }}>
-                <strong>⚠️ 왜 지금 삭제가 차단되었나요?</strong><br/>
-                현재 등록된 구글 스크립트 웹앱은 최초의 <strong>'업로드 전용(15줄)'</strong> 스크립트 버전으로 동작하고 있습니다.<br/>
+                <strong>⚠️ 왜 지금 삭제가 차단되었나요?</strong><br />
+                현재 등록된 구글 스크립트 웹앱은 최초의 <strong>'업로드 전용(15줄)'</strong> 스크립트 버전으로 동작하고 있습니다.<br />
                 구글 정책상 파일 삭제/이름변경/새폴더 명령을 처리하려면 아래의 <strong>통합 스크립트</strong>로 코드를 업데이트해 주셔야 합니다!
               </div>
 
@@ -3406,8 +3406,8 @@ export default function App() {
 
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 600, color: '#f1f3f4' }}>📋 복사할 최신 통합 스크립트:</span>
-                <button 
-                  className="g-btn g-btn-primary" 
+                <button
+                  className="g-btn g-btn-primary"
                   style={{ height: '32px', padding: '0 12px', fontSize: '12.5px' }}
                   onClick={() => {
                     navigator.clipboard.writeText(GAS_CODE_TEMPLATE);
@@ -3426,15 +3426,15 @@ export default function App() {
                   🔗 새로 발급된 웹앱 URL 등록 (URL이 변경된 경우에만):
                 </label>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <input 
-                    type="text" 
-                    className="g-form-input" 
+                  <input
+                    type="text"
+                    className="g-form-input"
                     style={{ flex: 1 }}
                     value={tempGasUrl}
                     onChange={(e) => setTempGasUrl(e.target.value)}
                     placeholder="https://script.google.com/macros/s/.../exec"
                   />
-                  <button 
+                  <button
                     className="g-btn g-btn-primary"
                     onClick={() => {
                       if (tempGasUrl.trim()) {
@@ -3487,10 +3487,10 @@ export default function App() {
       />
 
       {/* 구형 전자칠판 내장브라우저 전용 백그라운드 다운로드 숨김 iframe (화면 이탈 및 먹통 100% 방지) */}
-      <iframe 
-        id="gdrive-download-iframe" 
-        style={{ display: 'none', width: 0, height: 0, border: 0 }} 
-        aria-hidden="true" 
+      <iframe
+        id="gdrive-download-iframe"
+        style={{ display: 'none', width: 0, height: 0, border: 0 }}
+        aria-hidden="true"
         title="gdrive-download-iframe"
       />
       {/* 최신 버전 자동 업데이트 전체화면 오버레이 */}
