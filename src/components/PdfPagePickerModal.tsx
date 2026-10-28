@@ -208,17 +208,17 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   const [selectedSinglePage, setSelectedSinglePage] = useState<number | null>(null);
   const [processingPage, setProcessingPage] = useState<number | null>(null);
 
-  // 범위 지정 상태
+  // 범위 지정 상태 (사용자가 자유롭게 숫자를 지우고 입력할 수 있도록 string 상태로 관리)
   const [isRangeOpen, setIsRangeOpen] = useState<boolean>(false);
-  const [rangeStart, setRangeStart] = useState<number>(1);
-  const [rangeEnd, setRangeEnd] = useState<number>(Math.min(5, totalPageCount));
+  const [rangeStart, setRangeStart] = useState<string>('1');
+  const [rangeEnd, setRangeEnd] = useState<string>(String(totalPageCount));
 
   // 단일 페이지 상세 미리보기 팝업 상태 (온디맨드)
   const [previewPage, setPreviewPage] = useState<number | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
 
-  // 모달 오픈 시 초기화
+  // 모달 오픈 시 초기화 (전체 페이지 수 기준으로 안전하게 초기화)
   useEffect(() => {
     if (isOpen) {
       setIsSelectionMode(false);
@@ -228,8 +228,8 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
       setIsRangeOpen(false);
       setPreviewPage(null);
       setPreviewDataUrl(null);
-      setRangeStart(1);
-      setRangeEnd(Math.min(5, totalPageCount));
+      setRangeStart('1');
+      setRangeEnd(String(totalPageCount));
     }
   }, [isOpen, totalPageCount]);
 
@@ -334,10 +334,12 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
   // 핸들러: 범위 지정 일괄 생성 실행
   // --------------------------------------------------------------------------
   const handleApplyRange = () => {
-    const start = Math.max(1, Math.min(rangeStart, rangeEnd));
-    const end = Math.min(totalPageCount, Math.max(rangeStart, rangeEnd));
+    const start = Math.max(1, Math.min(totalPageCount, parseInt(rangeStart, 10) || 1));
+    const end = Math.max(1, Math.min(totalPageCount, parseInt(rangeEnd, 10) || totalPageCount));
+    const minP = Math.min(start, end);
+    const maxP = Math.max(start, end);
     const pagesToBatch: number[] = [];
-    for (let p = start; p <= end; p++) {
+    for (let p = minP; p <= maxP; p++) {
       pagesToBatch.push(p);
     }
     if (onBatchInsertPages && pagesToBatch.length > 0) {
@@ -545,82 +547,118 @@ export const PdfPagePickerModal: React.FC<PdfPagePickerModalProps> = ({
               flexWrap: 'wrap'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#e2e8f0', fontWeight: 600 }}>
-              <span>🔢 범위 설정:</span>
-              <input
-                type="number"
-                min={1}
-                max={totalPageCount}
-                value={rangeStart}
-                onChange={(e) => setRangeStart(Math.max(1, parseInt(e.target.value) || 1))}
-                style={{
-                  width: '60px',
-                  padding: '4px 8px',
-                  background: '#0f172a',
-                  border: '1px solid #6366f1',
-                  borderRadius: '6px',
-                  color: '#ffffff',
-                  fontSize: '13px',
-                  textAlign: 'center',
-                  fontWeight: 700
-                }}
-              />
-              <span>쪽부터</span>
-              <input
-                type="number"
-                min={1}
-                max={totalPageCount}
-                value={rangeEnd}
-                onChange={(e) => setRangeEnd(Math.min(totalPageCount, parseInt(e.target.value) || 1))}
-                style={{
-                  width: '60px',
-                  padding: '4px 8px',
-                  background: '#0f172a',
-                  border: '1px solid #6366f1',
-                  borderRadius: '6px',
-                  color: '#ffffff',
-                  fontSize: '13px',
-                  textAlign: 'center',
-                  fontWeight: 700
-                }}
-              />
-              <span>쪽까지 (총 {Math.max(0, Math.min(totalPageCount, rangeEnd) - Math.max(1, rangeStart) + 1)}페이지)</span>
-            </div>
+            {(() => {
+              const parsedStartNum = Math.max(1, Math.min(totalPageCount, parseInt(rangeStart, 10) || 1));
+              const parsedEndNum = Math.max(1, Math.min(totalPageCount, parseInt(rangeEnd, 10) || totalPageCount));
+              const effMin = Math.min(parsedStartNum, parsedEndNum);
+              const effMax = Math.max(parsedStartNum, parsedEndNum);
+              const totalSelected = effMax - effMin + 1;
 
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                onClick={handleApplyRange}
-                style={{
-                  background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  padding: '7px 16px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 10px rgba(139, 92, 246, 0.4)'
-                }}
-              >
-                🚀 {Math.min(rangeStart, rangeEnd)}~{Math.max(rangeStart, rangeEnd)}쪽 공책에 일괄 생성
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsRangeOpen(false)}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  color: '#cbd5e1',
-                  border: 'none',
-                  borderRadius: '8px',
-                  padding: '7px 12px',
-                  fontSize: '12px',
-                  cursor: 'pointer'
-                }}
-              >
-                취소
-              </button>
-            </div>
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#e2e8f0', fontWeight: 600 }}>
+                    <span>🔢 범위 설정:</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={rangeStart}
+                      onChange={(e) => {
+                        const cleaned = e.target.value.replace(/[^0-9]/g, '');
+                        setRangeStart(cleaned);
+                      }}
+                      onBlur={() => {
+                        if (!rangeStart || parseInt(rangeStart, 10) < 1) {
+                          setRangeStart('1');
+                        } else if (parseInt(rangeStart, 10) > totalPageCount) {
+                          setRangeStart(String(totalPageCount));
+                        }
+                      }}
+                      placeholder="1"
+                      style={{
+                        width: '65px',
+                        padding: '5px 8px',
+                        background: '#0f172a',
+                        border: '1.5px solid #6366f1',
+                        borderRadius: '6px',
+                        color: '#ffffff',
+                        fontSize: '13.5px',
+                        textAlign: 'center',
+                        fontWeight: 700
+                      }}
+                      title="시작 페이지 번호 (지우고 원하는 번호 입력)"
+                    />
+                    <span>쪽부터</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={rangeEnd}
+                      onChange={(e) => {
+                        const cleaned = e.target.value.replace(/[^0-9]/g, '');
+                        setRangeEnd(cleaned);
+                      }}
+                      onBlur={() => {
+                        if (!rangeEnd || parseInt(rangeEnd, 10) > totalPageCount) {
+                          setRangeEnd(String(totalPageCount));
+                        } else if (parseInt(rangeEnd, 10) < 1) {
+                          setRangeEnd('1');
+                        }
+                      }}
+                      placeholder={String(totalPageCount)}
+                      style={{
+                        width: '65px',
+                        padding: '5px 8px',
+                        background: '#0f172a',
+                        border: '1.5px solid #6366f1',
+                        borderRadius: '6px',
+                        color: '#ffffff',
+                        fontSize: '13.5px',
+                        textAlign: 'center',
+                        fontWeight: 700
+                      }}
+                      title="끝 페이지 번호 (지우고 원하는 번호 입력)"
+                    />
+                    <span>쪽까지 (총 {totalSelected}페이지)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={handleApplyRange}
+                      style={{
+                        background: 'linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        padding: '7px 16px',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 10px rgba(139, 92, 246, 0.4)'
+                      }}
+                    >
+                      🚀 {effMin}~{effMax}쪽 공책에 일괄 생성
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsRangeOpen(false)}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.08)',
+                        color: '#cbd5e1',
+                        border: 'none',
+                        borderRadius: '8px',
+                        padding: '7px 12px',
+                        fontSize: '12px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      취소
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 

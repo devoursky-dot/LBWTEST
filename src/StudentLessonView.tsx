@@ -371,8 +371,32 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       })();
     }
   }, [initialPdfId, initialPdfName, lessonId, lessonPdfInfo]);
-  const [isLessonPdfPromptOpen, setIsLessonPdfPromptOpen] = useState<boolean>(false);
+  const [_isLessonPdfPromptOpen, setIsLessonPdfPromptOpen] = useState<boolean>(false);
   const [isDownloadingLessonPdf, setIsDownloadingLessonPdf] = useState<boolean>(false);
+
+  // 📥 실시간 파일 다운로드 진행률 상태 (스피너, % 게이지, MB 실시간 표시)
+  const [downloadProgress, setDownloadProgress] = useState<{
+    isActive: boolean;
+    fileName: string;
+    loadedBytes: number;
+    totalBytes: number;
+    percent: number;
+  } | null>(null);
+
+  // 📄 학습지 문서 로딩 상태 (구글 드라이브 다운로드 및 PDF 파싱 실시간 피드백)
+  const [loadingPdfState, setLoadingPdfState] = useState<{
+    isLoading: boolean;
+    fileName: string;
+    message: string;
+  } | null>(null);
+
+  // 🚀 공책 페이지 일괄 생성 실시간 진행 상태 (n/total 쪽 실시간 게이지)
+  const [batchPageProgress, setBatchPageProgress] = useState<{
+    isActive: boolean;
+    currentPage: number;
+    totalPages: number;
+    percent: number;
+  } | null>(null);
 
   // 📺 표준 모듈화된 전체화면 관리 (불필요한 강제 재진입 편법 및 하드코딩 제거)
   const {
@@ -940,11 +964,103 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   };
 
-  // PDF 선택 페이지들을 공책 맨 앞쪽에 일괄 배경 페이지로 생성 (기존 필기 100% 보존)
+  // Blob 파일 브라우저 다운로드 헬퍼
+  const triggerBlobDownload = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  // 📥 수업자료 실시간 스트리밍 다운로드 (진행률 게이지 & 실시간 MB 표시)
+  const handleDownloadMaterialWithProgress = async (mat: { id: string; name: string; size?: string | number; mimeType?: string }) => {
+    try {
+      const parsedSize = typeof mat.size === 'number' ? mat.size : parseInt(String(mat.size || 0), 10) || 0;
+      setDownloadProgress({
+        isActive: true,
+        fileName: mat.name,
+        loadedBytes: 0,
+        totalBytes: parsedSize,
+        percent: 0
+      });
+
+      const apiBase = getApiBaseUrl();
+      const proxyUrl = `${apiBase}/api/drive?action=download&fileId=${mat.id}&fileName=${encodeURIComponent(mat.name)}`;
+
+      let res = await fetch(proxyUrl);
+      if (!res.ok) {
+        // 프록시 실패 시 구글 직접 다운로드로 안전하게 폴백
+        const downloadLink = `https://drive.google.com/uc?export=download&id=${mat.id}`;
+        const a = document.createElement('a');
+        a.href = downloadLink;
+        a.download = mat.name;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        showToast(`📥 '${mat.name}' 다운로드를 시작했습니다.`);
+        setDownloadProgress(null);
+        return;
+      }
+
+      const contentLength = res.headers.get('content-length');
+      const total = contentLength ? parseInt(contentLength, 10) : parsedSize;
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        const blob = await res.blob();
+        triggerBlobDownload(blob, mat.name);
+        setDownloadProgress(null);
+        showToast(`✅ '${mat.name}' 다운로드가 완료되었습니다.`);
+        return;
+      }
+
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          received += value.length;
+          const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+          setDownloadProgress({
+            isActive: true,
+            fileName: mat.name,
+            loadedBytes: received,
+            totalBytes: total,
+            percent: pct
+          });
+        }
+      }
+
+      const blob = new Blob(chunks as any, { type: mat.mimeType || 'application/octet-stream' });
+      triggerBlobDownload(blob, mat.name);
+      setDownloadProgress(null);
+      showToast(`✅ '${mat.name}' 다운로드가 성공적으로 완료되었습니다!`);
+    } catch (err: any) {
+      console.error('다운로드 오류:', err);
+      setDownloadProgress(null);
+      showToast(`❌ 다운로드 실패: ${err.message || '오류 발생'}`);
+    }
+  };
+
+  // PDF 선택 페이지들을 공책 맨 앞쪽에 일괄 배경 페이지로 생성 (기존 필기 100% 보존 & 실시간 진행 게이지)
   const handleBatchInsertPdfPages = async (pageNumbers: number[]) => {
     if (!pdfDocProxy || pageNumbers.length === 0) return;
     try {
-      showToast(`⏳ PDF ${pageNumbers.length}개 쪽을 공책 맨 앞쪽에 생성하고 있습니다...`);
+      setPdfPickerOpen(false); // 페이지 선택기는 즉시 닫아 렉 제거
+      setBatchPageProgress({
+        isActive: true,
+        currentPage: 0,
+        totalPages: pageNumbers.length,
+        percent: 0
+      });
 
       // 1. 현재 작성 중인 페이지 상태를 메모리에 동기화
       const currentSavedPages = pages.map((p, idx) => {
@@ -973,11 +1089,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       for (let i = 0; i < pageNumbers.length; i++) {
         const pNum = pageNumbers[i];
-        if (pageNumbers.length > 3) {
-          showToast(`⏳ PDF 페이지 생성 중 (${i + 1}/${pageNumbers.length}쪽)...`);
-          // 브라우저 렌더링 루프 양보 (저사양 태블릿 OOM 방지 및 가비지 컬렉션 유도)
-          await new Promise(r => setTimeout(r, 25));
-        }
+        setBatchPageProgress({
+          isActive: true,
+          currentPage: i + 1,
+          totalPages: pageNumbers.length,
+          percent: Math.round(((i + 1) / pageNumbers.length) * 100)
+        });
+        // 브라우저 렌더링 루프 양보 (저사양 태블릿 OOM 방지 및 실시간 UI 업데이트)
+        await new Promise(r => setTimeout(r, 20));
+
         const { dataUrl, width, height } = await renderPdfPageToDataUrl(pdfDocProxy, pNum, 2400);
         if (width > height) {
           detectedLandscape = true;
@@ -1009,45 +1129,80 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setUndoStack([]);
       setRedoStack([]);
       setActiveTextId(null);
-      setPdfPickerOpen(false);
+
+      setBatchPageProgress({
+        isActive: true,
+        currentPage: pageNumbers.length,
+        totalPages: pageNumbers.length,
+        percent: 100
+      });
+      await new Promise(r => setTimeout(r, 250));
+      setBatchPageProgress(null);
 
       showToast(`🎉 PDF ${pageNumbers.length}개 쪽이 공책 맨 앞쪽에 성공적으로 생성되었습니다!`);
     } catch (err: any) {
+      setBatchPageProgress(null);
       console.error('PDF 일괄 페이지 생성 실패:', err);
       showToast(`❌ 페이지 일괄 생성 실패: ${err.message || '오류'}`);
     }
   };
 
-  // 구글 드라이브 분산 다운로드 및 학습지 로드 핸들러
-  const handleLoadLessonPdfFromDrive = async (mode: 'direct_download' | 'batch_insert' | 'open_picker') => {
-    if (!lessonPdfInfo) return;
+  // 구글 드라이브 분산 다운로드 및 학습지 로드 핸들러 (즉시 페이지 선택기 팝업 & 실시간 로딩)
+  const handleLoadLessonPdfFromDrive = async (
+    mode: 'direct_download' | 'batch_insert' | 'open_picker',
+    targetPdf?: { id: string; name: string }
+  ) => {
+    const target = targetPdf || lessonPdfInfo;
+    if (!target) return;
 
     // 1) 기기에 원본 PDF 직접 다운로드 (구글 드라이브 분산 다운로드 링크)
     if (mode === 'direct_download') {
-      const downloadLink = `https://drive.google.com/uc?export=download&id=${lessonPdfInfo.id}`;
-      const a = document.createElement('a');
-      a.href = downloadLink;
-      a.download = lessonPdfInfo.name;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast(`📥 '${lessonPdfInfo.name}' 다운로드를 시작합니다.`);
+      await handleDownloadMaterialWithProgress({ id: target.id, name: target.name });
       setIsLessonPdfPromptOpen(false);
       return;
     }
 
-    // 2) 브라우저 메모리에 로드하여 일괄 생성 또는 피커 모달 열기
+    // 2) 브라우저 메모리에 로드하여 즉시 피커 모달 열기 또는 일괄 생성
     try {
       setIsDownloadingLessonPdf(true);
-      showToast(`⏳ 구글 드라이브에서 '${lessonPdfInfo.name}'를 불러오고 있습니다...`);
+      setLoadingPdfState({
+        isLoading: true,
+        fileName: target.name,
+        message: '구글 드라이브에서 학습지 문서를 불러오고 있습니다...'
+      });
 
       let buffer: ArrayBuffer | null = null;
-      const proxyUrl = `https://lbwtest.vercel.app/api/drive?action=download&fileId=${lessonPdfInfo.id}&fileName=${encodeURIComponent(lessonPdfInfo.name)}`;
+      const apiBase = getApiBaseUrl();
+      const proxyUrl = `${apiBase}/api/drive?action=download&fileId=${target.id}&fileName=${encodeURIComponent(target.name)}`;
       try {
         const res = await fetch(proxyUrl);
         if (res.ok) {
-          buffer = await res.arrayBuffer();
+          const contentLength = res.headers.get('content-length');
+          const total = contentLength ? parseInt(contentLength, 10) : 0;
+          const reader = res.body?.getReader();
+
+          if (reader && total > 0) {
+            const chunks: Uint8Array[] = [];
+            let received = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                chunks.push(value);
+                received += value.length;
+                const pct = Math.round((received / total) * 100);
+                setLoadingPdfState({
+                  isLoading: true,
+                  fileName: target.name,
+                  message: `구글 드라이브에서 문서를 다운로드하는 중입니다 (${formatBytes(received)} / ${formatBytes(total)}, ${pct}%)...`
+                });
+              }
+            }
+            const blob = new Blob(chunks as any);
+            buffer = await blob.arrayBuffer();
+          } else {
+            buffer = await res.arrayBuffer();
+          }
         }
       } catch (e) {
         console.warn('Vercel Edge Proxy fetch failed, trying direct Google Drive API:', e);
@@ -1055,7 +1210,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
       if (!buffer) {
         const apiKey = getDriveConfig().googleApiKey;
-        const directApiUrl = `https://www.googleapis.com/drive/v3/files/${lessonPdfInfo.id}?alt=media&supportsAllDrives=true&key=${apiKey}`;
+        const directApiUrl = `https://www.googleapis.com/drive/v3/files/${target.id}?alt=media&supportsAllDrives=true&key=${apiKey}`;
         const res2 = await fetch(directApiUrl);
         if (res2.ok) {
           buffer = await res2.arrayBuffer();
@@ -1064,23 +1219,29 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         }
       }
 
+      setLoadingPdfState({
+        isLoading: true,
+        fileName: target.name,
+        message: 'PDF 페이지 정보를 분석하고 있습니다...'
+      });
+
       const pdfDoc = await loadPdfDocument(buffer);
       setPdfDocProxy(pdfDoc);
-      setPdfFileName(lessonPdfInfo.name);
+      setPdfFileName(target.name);
       const totalP = pdfDoc.numPages || 1;
       setPdfTotalPages(totalP);
       setIsLessonPdfPromptOpen(false);
 
       if (mode === 'batch_insert') {
         if (totalP > 10) {
-          // 10쪽 초과 대용량 PDF인 경우: 태블릿 OOM 메모리 충돌 방지 안내 후 피커 열기
-          showToast(`⚠️ 총 ${totalP}쪽 대용량 자료입니다. 필요한 페이지만 범위(예: 1~5쪽)로 선택해주세요.`);
+          showToast(`⚠️ 총 ${totalP}쪽 대용량 자료입니다. 필요한 페이지만 범위로 선택해주세요.`);
           setPdfPickerOpen(true);
         } else {
           const allPages = Array.from({ length: totalP }, (_, i) => i + 1);
           await handleBatchInsertPdfPages(allPages);
         }
       } else {
+        // 즉시 페이지 선택기 띄우기!
         setPdfPickerOpen(true);
       }
     } catch (err: any) {
@@ -1088,6 +1249,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       showToast(`❌ 학습지 로드 실패: ${err.message || '오류가 발생했습니다.'}`);
     } finally {
       setIsDownloadingLessonPdf(false);
+      setLoadingPdfState(null);
     }
   };
 
@@ -3824,7 +3986,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   type="button"
                   className="student-tool-btn"
                   onClick={() => {
-                    setIsLessonPdfPromptOpen(true);
+                    handleLoadLessonPdfFromDrive('open_picker', lessonPdfInfo);
                     setActivePopup(null);
                   }}
                   style={{
@@ -4655,7 +4817,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 type="button"
                 className="student-tool-btn"
                 onClick={() => {
-                  setIsLessonPdfPromptOpen(true);
+                  handleLoadLessonPdfFromDrive('open_picker', lessonPdfInfo);
                   setActivePopup(null);
                 }}
                 style={{
@@ -5900,9 +6062,163 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         onClose={() => setPdfPickerOpen(false)}
       />
 
-      {/* 5-1. 선생님 수업 학습지 안내 & 분산 다운로드 / 일괄 생성 모달 (ModularModal) */}
+      {/* 🌟 5-0-A. 실시간 파일 다운로드 진행률 모달 (ModularModal) */}
       <ModularModal
-        isOpen={Boolean(isLessonPdfPromptOpen && lessonPdfInfo)}
+        isOpen={Boolean(downloadProgress?.isActive)}
+        onClose={() => setDownloadProgress(null)}
+        maxWidth="440px"
+        zIndex={11000}
+        showCloseButton={false}
+      >
+        {downloadProgress && (
+          <div style={{ textAlign: 'center', padding: '10px 4px' }}>
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                background: 'rgba(2, 132, 199, 0.15)',
+                border: '2px solid rgba(56, 189, 248, 0.4)',
+                margin: '0 auto 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '28px'
+              }}
+            >
+              📥
+            </div>
+            <h3 style={{ margin: '0 0 6px', fontSize: '16.5px', fontWeight: 800, color: '#ffffff' }}>
+              파일 다운로드 진행 중...
+            </h3>
+            <p style={{ margin: '0 0 16px', fontSize: '13px', color: '#94a3b8', wordBreak: 'break-all' }}>
+              {downloadProgress.fileName}
+            </p>
+
+            {/* 게이지 바 */}
+            <div style={{ width: '100%', height: '10px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '5px', overflow: 'hidden', marginBottom: '10px' }}>
+              <div
+                style={{
+                  width: `${downloadProgress.percent}%`,
+                  height: '100%',
+                  background: 'linear-gradient(90deg, #38bdf8 0%, #2563eb 100%)',
+                  borderRadius: '5px',
+                  transition: 'width 0.15s ease'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#cbd5e1', fontWeight: 600 }}>
+              <span>
+                {formatBytes(downloadProgress.loadedBytes)}
+                {downloadProgress.totalBytes > 0 ? ` / ${formatBytes(downloadProgress.totalBytes)}` : ''}
+              </span>
+              <span style={{ color: '#38bdf8', fontWeight: 700 }}>{downloadProgress.percent}%</span>
+            </div>
+          </div>
+        )}
+      </ModularModal>
+
+      {/* 🌟 5-0-B. 학습지 문서 로드/파싱 진행 모달 (ModularModal) */}
+      <ModularModal
+        isOpen={Boolean(loadingPdfState?.isLoading)}
+        onClose={() => setLoadingPdfState(null)}
+        maxWidth="440px"
+        zIndex={11000}
+        showCloseButton={false}
+      >
+        {loadingPdfState && (
+          <div style={{ textAlign: 'center', padding: '12px 6px' }}>
+            <div
+              style={{
+                width: '54px',
+                height: '54px',
+                borderRadius: '50%',
+                background: 'rgba(99, 102, 241, 0.15)',
+                border: '2px solid rgba(129, 140, 248, 0.4)',
+                margin: '0 auto 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '26px'
+              }}
+            >
+              📄
+            </div>
+            <h3 style={{ margin: '0 0 6px', fontSize: '16.5px', fontWeight: 800, color: '#ffffff' }}>
+              학습지 불러오는 중...
+            </h3>
+            <p style={{ margin: '0 0 10px', fontSize: '13px', color: '#cbd5e1', fontWeight: 600, wordBreak: 'break-all' }}>
+              {loadingPdfState.fileName}
+            </p>
+            <p style={{ margin: '0 0 16px', fontSize: '12px', color: '#94a3b8' }}>
+              {loadingPdfState.message}
+            </p>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 14px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '20px', fontSize: '12px', color: '#a5b4fc' }}>
+              <span>⏳</span>
+              <span>잠시만 기다려주세요... 페이지 선택기가 바로 열립니다</span>
+            </div>
+          </div>
+        )}
+      </ModularModal>
+
+      {/* 🌟 5-0-C. 공책 페이지 일괄 생성 실시간 진행 모달 (ModularModal) */}
+      <ModularModal
+        isOpen={Boolean(batchPageProgress?.isActive)}
+        onClose={() => setBatchPageProgress(null)}
+        maxWidth="440px"
+        zIndex={11000}
+        showCloseButton={false}
+      >
+        {batchPageProgress && (
+          <div style={{ textAlign: 'center', padding: '12px 6px' }}>
+            <div
+              style={{
+                width: '54px',
+                height: '54px',
+                borderRadius: '50%',
+                background: 'rgba(168, 85, 247, 0.15)',
+                border: '2px solid rgba(192, 132, 252, 0.4)',
+                margin: '0 auto 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '26px'
+              }}
+            >
+              📖
+            </div>
+            <h3 style={{ margin: '0 0 6px', fontSize: '16.5px', fontWeight: 800, color: '#ffffff' }}>
+              공책에 페이지 생성 중...
+            </h3>
+            <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#cbd5e1' }}>
+              고해상도로 변환하여 공책에 순서대로 배치하고 있습니다
+            </p>
+
+            {/* 게이지 바 */}
+            <div style={{ width: '100%', height: '10px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '5px', overflow: 'hidden', marginBottom: '10px' }}>
+              <div
+                style={{
+                  width: `${batchPageProgress.percent}%`,
+                  height: '100%',
+                  background: 'linear-gradient(90deg, #c084fc 0%, #8b5cf6 100%)',
+                  borderRadius: '5px',
+                  transition: 'width 0.2s ease'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12.5px', color: '#cbd5e1', fontWeight: 700 }}>
+              <span>{batchPageProgress.currentPage} / {batchPageProgress.totalPages} 쪽 변환 완료</span>
+              <span style={{ color: '#c084fc' }}>{batchPageProgress.percent}%</span>
+            </div>
+          </div>
+        )}
+      </ModularModal>
+
+      {/* 5-1. 구버전 복잡한 중간 팝업 비활성화 (곧바로 페이지 선택기를 열도록 변경됨) */}
+      <ModularModal
+        isOpen={false}
         onClose={() => setIsLessonPdfPromptOpen(false)}
         maxWidth="520px"
         zIndex={10000}
@@ -6180,8 +6496,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               }
 
               return uniqueMaterials.map(mat => {
-                const apiBase = getApiBaseUrl();
-                const dlUrl = `${apiBase}/api/drive?action=download&fileId=${mat.id}&fileName=${encodeURIComponent(mat.name)}`;
                 const viewUrl = `https://drive.google.com/file/d/${mat.id}/view?usp=sharing`;
 
                 return (
@@ -6218,13 +6532,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                      {/* 직접 다운로드 */}
-                      <a
-                        href={dlUrl}
-                        download={mat.name}
-                        onClick={() => {
-                          showToast(`📥 '${mat.name}' 다운로드를 시작합니다...`);
-                        }}
+                      {/* 직접 다운로드 (실시간 진행률 게이지 & 스피너 제공) */}
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadMaterialWithProgress(mat)}
                         style={{
                           background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
                           border: '1px solid #38bdf8',
@@ -6234,40 +6545,39 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                           fontSize: '12px',
                           fontWeight: 700,
                           cursor: 'pointer',
-                          textDecoration: 'none',
                           display: 'flex',
                           alignItems: 'center',
                           gap: '4px',
                           boxShadow: '0 2px 6px rgba(2, 132, 199, 0.3)'
                         }}
-                        title={`기기에 '${mat.name}' 다운로드`}
+                        title={`기기에 '${mat.name}' 다운로드 (진행률 표시)`}
                       >
                         <span>📥</span> 다운로드
-                      </a>
+                      </button>
 
-                      {/* PDF인 경우 공책에 바로 넣기 버튼 제공 */}
+                      {/* PDF인 경우 공책에 바로 넣기 -> 중간 팝업 없이 즉시 페이지 선택기 띄우기! */}
                       {(mat.mimeType?.includes('pdf') || mat.name.endsWith('.pdf')) && (
                         <button
                           type="button"
                           onClick={() => {
                             setIsLessonMaterialsModalOpen(false);
-                            setLessonPdfInfo({ id: mat.id, name: mat.name });
-                            setIsLessonPdfPromptOpen(true);
+                            handleLoadLessonPdfFromDrive('open_picker', { id: mat.id, name: mat.name });
                           }}
                           style={{
-                            background: 'rgba(99, 102, 241, 0.15)',
-                            border: '1px solid rgba(99, 102, 241, 0.35)',
-                            color: '#a5b4fc',
-                            padding: '6px 10px',
+                            background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                            border: '1px solid #818cf8',
+                            color: '#ffffff',
+                            padding: '6px 12px',
                             borderRadius: '7px',
                             fontSize: '12px',
-                            fontWeight: 600,
+                            fontWeight: 700,
                             cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '4px'
+                            gap: '4px',
+                            boxShadow: '0 2px 6px rgba(99, 102, 241, 0.3)'
                           }}
-                          title="공책 배경으로 일괄 삽입하여 필기 시작"
+                          title="페이지 선택기를 열어 원하는 페이지를 골라 공책에 넣습니다"
                         >
                           <span>📑</span> 공책에 넣기
                         </button>
