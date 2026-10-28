@@ -134,6 +134,7 @@ export default function App() {
     teacherName: string;
     hasExistingLive: boolean;
   } | null>(null);
+  const [whiteboardClassDuration, setWhiteboardClassDuration] = useState<number>(60);
 
   // --- 통합 PDF 모음집 생성 상태 ---
   const [pdfCompilationTitle, setPdfCompilationTitle] = useState<string>('');
@@ -892,23 +893,17 @@ export default function App() {
   // ==========================================================================
   // [🖥️ 전자칠판 라이브 수업 센터: 수업 선택 및 중복 진행 세션 분기]
   // ==========================================================================
-  const handleWhiteboardSelectLesson = async (teacherName: string, lesson: any) => {
+  const handleWhiteboardSelectLesson = (teacherName: string, lesson: any) => {
     const anyLive = whiteboardTeachersList.some(t => t.lessons.some((l: any) => l.isLive));
-    const thisLessonLive = !!lesson.isLive;
-
-    if (anyLive || thisLessonLive) {
-      setWhiteboardSessionPrompt({
-        lesson,
-        teacherName,
-        hasExistingLive: true
-      });
-      return;
-    }
-
-    await handleLaunchWhiteboardLesson(teacherName, lesson, false);
+    setWhiteboardClassDuration(60); // 기본값 60분
+    setWhiteboardSessionPrompt({
+      lesson,
+      teacherName,
+      hasExistingLive: anyLive || !!lesson.isLive
+    });
   };
 
-  const handleLaunchWhiteboardLesson = async (teacherName: string, lesson: any, terminatePrevious: boolean) => {
+  const handleLaunchWhiteboardLesson = async (teacherName: string, lesson: any, terminatePrevious: boolean, durationMinutes: number = 60) => {
     if (terminatePrevious) {
       await classroomRealtime.closeAllOtherActiveSessions(lesson.lessonId);
       showToast('🔄 이전 수업을 종료하고 새 수업을 개시합니다.');
@@ -927,6 +922,7 @@ export default function App() {
     (driveItem as any).pdfFileName = lesson.pdfName;
     (driveItem as any).attachedFiles = lesson.attachedFiles || [];
     (driveItem as any).teacherName = teacherName;
+    (driveItem as any).sessionDurationMinutes = durationMinutes;
 
     setWhiteboardSessionPrompt(null);
     await startQrLessonViewer(driveItem, terminatePrevious);
@@ -938,7 +934,8 @@ export default function App() {
       pdfId: lesson.pdfId,
       pdfName: lesson.pdfName,
       attachedFiles: lesson.attachedFiles,
-      isLive: true
+      isLive: true,
+      durationMinutes: durationMinutes
     });
 
     loadWhiteboardTeacherLessons();
@@ -2406,68 +2403,94 @@ export default function App() {
       </div>
 
       {/* ====================================================================
-          모달 0: 🖥️ 전자칠판 라이브 수업 센터 - 중복 진행 세션 확인 및 새로 개설 모달
+          모달 0: 🖥️ 전자칠판 라이브 수업 시작 및 수업 시간 설정 모달
           ==================================================================== */}
       {whiteboardSessionPrompt && (
         <div className="modal-backdrop" onClick={() => setWhiteboardSessionPrompt(null)}>
-          <div className="modal-box" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '18px' }}>
-                <span>⚠️</span> 수업 개설 및 전환 확인
+          <div className="modal-box" style={{ maxWidth: '480px', background: '#161b22', border: '1px solid #30363d', borderRadius: '16px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '12px' }}>
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '17px', color: '#ffffff', margin: 0 }}>
+                <span>🖥️</span>
+                <span>[{whiteboardSessionPrompt.lesson.title}] 수업 시작</span>
               </h2>
               <button className="modal-close-btn" onClick={() => setWhiteboardSessionPrompt(null)}>✕</button>
             </div>
 
-            <div style={{ padding: '8px 0 16px 0' }}>
-              <p style={{ fontSize: '14.5px', color: '#ffffff', fontWeight: 600, lineHeight: 1.5, margin: '0 0 10px 0' }}>
-                현재 다른 수업이 진행 중이거나 이전 세션 기록이 있습니다.
-              </p>
-              <div style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '10px', padding: '12px 14px', fontSize: '12.5px', color: '#fca5a5', lineHeight: 1.5 }}>
-                <strong>[새로 개설]</strong>을 누르시면 이전 진행 수업은 <strong>자동 종료</strong>되며, 학생들에게 <strong>'{whiteboardSessionPrompt.lesson.title}'</strong> 새 수업이 즉시 열립니다.
+            <div style={{ padding: '16px 0' }}>
+              <div style={{ fontSize: '13.5px', color: '#93c5fd', marginBottom: '14px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>👨‍🏫</span>
+                <span>{whiteboardSessionPrompt.teacherName} 선생님</span>
               </div>
+
+              {/* ⏱️ 수업 시간 선택 칩 */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '12.5px', color: '#cbd5e1', marginBottom: '8px', fontWeight: 600 }}>
+                  ⏱️ 수업 시간 설정 (종료 시 학생앱 오프라인 안전 전환):
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {[40, 45, 50, 60, 80].map(mins => (
+                    <button
+                      key={mins}
+                      type="button"
+                      onClick={() => setWhiteboardClassDuration(mins)}
+                      style={{
+                        flex: 1,
+                        padding: '9px 4px',
+                        borderRadius: '10px',
+                        border: whiteboardClassDuration === mins ? '2px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.12)',
+                        background: whiteboardClassDuration === mins ? 'rgba(37, 99, 235, 0.35)' : 'rgba(255, 255, 255, 0.05)',
+                        color: whiteboardClassDuration === mins ? '#ffffff' : '#94a3b8',
+                        fontSize: '12.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {mins}분{mins === 60 ? '*' : ''}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '6px' }}>
+                  * 기본 60분 설정. 수업 중 칠판 상단에서 언제든 [➕ 10분 연장] 가능합니다.
+                </div>
+              </div>
+
+              {/* 기존 진행 세션 존재 시 안내 */}
+              {whiteboardSessionPrompt.hasExistingLive && (
+                <div style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '10px', padding: '10px 12px', fontSize: '12px', color: '#fca5a5', lineHeight: 1.5 }}>
+                  ⚠️ 기존 진행 중인 세션이 있습니다. 시작 시 이전 세션은 자동 종료되고 본 수업이 즉시 개설됩니다.
+                </div>
+              )}
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px' }}>
               <button
                 type="button"
                 className="g-btn g-btn-text"
                 onClick={() => setWhiteboardSessionPrompt(null)}
-                style={{ color: '#94a3b8' }}
+                style={{ color: '#94a3b8', padding: '8px 14px' }}
               >
                 취소
               </button>
               <button
                 type="button"
-                onClick={() => handleLaunchWhiteboardLesson(whiteboardSessionPrompt.teacherName, whiteboardSessionPrompt.lesson, false)}
+                onClick={() => handleLaunchWhiteboardLesson(whiteboardSessionPrompt.teacherName, whiteboardSessionPrompt.lesson, whiteboardSessionPrompt.hasExistingLive, whiteboardClassDuration)}
                 style={{
-                  background: 'rgba(59, 130, 246, 0.2)',
-                  border: '1px solid rgba(59, 130, 246, 0.4)',
-                  color: '#93c5fd',
-                  padding: '9px 14px',
-                  borderRadius: '8px',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-              >
-                ▶️ 이어서 계속하기
-              </button>
-              <button
-                type="button"
-                onClick={() => handleLaunchWhiteboardLesson(whiteboardSessionPrompt.teacherName, whiteboardSessionPrompt.lesson, true)}
-                style={{
-                  background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+                  background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
                   border: 'none',
                   color: '#ffffff',
-                  padding: '9px 16px',
+                  padding: '9px 18px',
                   borderRadius: '8px',
                   fontSize: '13px',
                   fontWeight: 700,
                   cursor: 'pointer',
-                  boxShadow: '0 4px 12px rgba(239, 68, 68, 0.4)'
+                  boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
                 }}
               >
-                🔄 이전 수업 종료 후 새로 개설
+                <span>🚀 바로 수업 시작 ({whiteboardClassDuration}분)</span>
               </button>
             </div>
           </div>

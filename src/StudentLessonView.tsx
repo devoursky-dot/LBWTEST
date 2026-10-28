@@ -59,7 +59,10 @@ import {
   saveStudentDraft,
   clearStudentDraft,
   getStudentBackupKey,
-  parseLessonParam
+  parseLessonParam,
+  listStudentSavedNotebooks,
+  deleteStudentNotebook,
+  type SavedNotebookItem
 } from './lib/studentSessionManager';
 
 interface TextItem {
@@ -445,7 +448,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 💬 전체화면을 파괴하는 window.confirm을 100% 대체하는 인앱 다이얼로그 시스템
   const { confirm, confirmModalElement } = useAppConfirm();
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // const [isSubmitting, setIsSubmitting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [hasSavedNote, setHasSavedNote] = useState(false);
   const [lastSavedTimeStr, setLastSavedTimeStr] = useState<string>('');
@@ -457,7 +460,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // 학생 제출 고유 ID (1인 1행 유지하여 중복 생성 및 타임아웃 방지)
   const submissionIdRef = useRef<string | null>(null);
   // 제출 연타 방지 및 쿨다운 관리 (4초 이내 중복 제출 원천 차단)
-  const lastSubmitTimeRef = useRef<number>(0);
+  // const lastSubmitTimeRef = useRef<number>(0);
 
   // --- 전자칠판 실시간 연결 및 화면 꺼짐 방지(WakeLock) 상태 ---
   const [isConnectedToBoard, setIsConnectedToBoard] = useState<boolean>(false);
@@ -495,6 +498,11 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [activeTeachersList, setActiveTeachersList] = useState<ActiveTeacherLesson[]>([]);
   const [isLoadingActiveLessons, setIsLoadingActiveLessons] = useState(false);
   const [selectedTeacherForJoin, setSelectedTeacherForJoin] = useState<ActiveTeacherLesson | null>(null);
+
+  // --- 📂 내 필기 보관함 (오프라인 기본 공책 + 수업별 공책 목록 및 삭제 관리) ---
+  const [isNotebookArchiveModalOpen, setIsNotebookArchiveModalOpen] = useState(false);
+  const [savedNotebooksList, setSavedNotebooksList] = useState<SavedNotebookItem[]>([]);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
 
   // --- ⏱️ 1시간 절대 세션 타이머 상태 (수업 60분 후 오프라인 모드 자동 전환) ---
   const lessonConnectionStartTimeRef = useRef<number | null>(null);
@@ -2104,6 +2112,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         const draft = {
           version: 'a4_v3',
           lessonId,
+          title: activeLessonTitle || lessonTitle || (lessonId.startsWith('student_note_') ? '오프라인 기본 공책' : '수업 필기'),
           timestamp: Date.now(),
           pages: pagesToSave,
           currentPageIndex,
@@ -2310,7 +2319,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   // ==========================================================================
   // [전자칠판 실시간 연결 및 5초 주기 생존 핑 가동]
   // ==========================================================================
-  const handleConnectToBoard = async (targetLessonId?: string, targetTitle?: string, targetFiles?: any[], targetTeacher?: string) => {
+  const handleConnectToBoard = async (
+    targetLessonId?: string,
+    targetTitle?: string,
+    targetFiles?: any[],
+    targetTeacher?: string,
+    targetExpiresAt?: number,
+    targetSessionKey?: string
+  ) => {
     if (!studentInfo || !studentInfo.name.trim()) {
       showToast('⚠️ 먼저 학번과 이름을 입력해주세요.');
       setIsChangingStudent(true);
@@ -2347,15 +2363,21 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     } catch {}
 
     // 3. 전자칠판 실시간 채널 연결 및 5초 주기 핑 발송 자동 가동
+    isUserExitedRef.current = false;
     setIsConnectedToBoard(true);
     if (currentTargetTitle) setActiveLessonTitle(currentTargetTitle);
     if (targetTeacher) setActiveTeacherName(targetTeacher);
     if (targetFiles && Array.isArray(targetFiles)) setConnectedLessonFiles(targetFiles);
+    if (targetExpiresAt) {
+      setSessionExpiresAt(targetExpiresAt);
+      const rem = Math.max(1, Math.ceil((targetExpiresAt - Date.now()) / 60000));
+      setRemainingLessonMinutes(rem);
+    }
 
-    classroomRealtime.joinLesson(currentTargetId, undefined, 'student', studentInfo);
+    classroomRealtime.joinLesson(currentTargetId, undefined, 'student', studentInfo, targetSessionKey);
 
     setIsJoinLessonModalOpen(false);
-    showToast(`🟢 '${currentTargetTitle}' 수업에 실시간 연결되었습니다! (5초 핑 가동)`);
+    showToast(`🟢 '${currentTargetTitle}' 수업에 실시간 연결되었습니다!`);
   };
 
   // [오프라인 모드로 해당 수업 필기 열기]
@@ -2373,6 +2395,50 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     if (pdfName) targetUrl.searchParams.set('pdfName', pdfName);
     targetUrl.searchParams.delete('autoConnect');
     window.location.href = targetUrl.toString();
+  };
+
+  // [보관함에서 공책 열기 핸들러]
+  const handleOpenNotebook = (targetLessonId: string, targetTitle?: string) => {
+    setIsNotebookArchiveModalOpen(false);
+    if (targetLessonId === lessonId) {
+      showToast('📖 현재 화면에 열려있는 공책입니다.');
+      return;
+    }
+    showToast(`📖 '${targetTitle || targetLessonId}' 공책을 불러옵니다...`);
+    const targetUrl = new URL(window.location.href);
+    targetUrl.searchParams.set('lessonId', targetLessonId);
+    if (targetTitle) targetUrl.searchParams.set('title', targetTitle);
+    targetUrl.searchParams.delete('autoConnect');
+    window.location.href = targetUrl.toString();
+  };
+
+  // [보관함에서 공책 영구 삭제 핸들러]
+  const handleDeleteNotebook = async (item: SavedNotebookItem) => {
+    const currentStudentId = studentInfo ? studentInfoToId(studentInfo) : null;
+    const ok = await confirm({
+      title: '필기 영구 삭제',
+      message: `'${item.title}' 필기(총 ${item.pageCount}쪽)를 영구 삭제하시겠습니까?\n\n삭제된 필기는 기기에서 완전히 제거되며 복구할 수 없습니다.`,
+      confirmText: '삭제하기',
+      cancelText: '취소',
+      isDanger: true
+    });
+    if (!ok) return;
+
+    deleteStudentNotebook(item.lessonId, currentStudentId);
+    showToast(`🗑️ '${item.title}' 필기가 삭제되었습니다.`);
+
+    const updated = listStudentSavedNotebooks(currentStudentId);
+    setSavedNotebooksList(updated);
+
+    // 만약 현재 열려있는 공책을 삭제했다면 기본 공책으로 전환 이동
+    if (item.lessonId === lessonId) {
+      const defaultId = `student_note_${currentStudentId || 'guest'}`;
+      const targetUrl = new URL(window.location.href);
+      targetUrl.searchParams.set('lessonId', defaultId);
+      targetUrl.searchParams.delete('title');
+      targetUrl.searchParams.delete('autoConnect');
+      window.location.href = targetUrl.toString();
+    }
   };
 
   // URL 파라미터 중 autoConnect 감지 시 전자칠판 자동 연결 가동
@@ -2525,14 +2591,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [isTeacherLesson, isConnectedToBoard, lessonId, lessonTitle]);
 
-  // 수업 나가기 처리 (WakeLock 해제, 퇴장 신호 발송, 오프라인 모드 복귀)
+  // 수업 나가기 처리 (실시간 핑/연결만 해제, 화면의 수업 필기는 유지하여 오프라인 자동저장 지속)
   const handleExitLesson = async () => {
     const ok = await confirm({
       title: '수업 연결 종료',
-      message: '전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아가시겠습니까?\n(작성하신 필기는 기기에 안전하게 보존됩니다.)',
-      confirmText: '오프라인 복귀',
+      message: '전자칠판 연결을 해제하고 오프라인 공책 모드로 전환하시겠습니까?\n\n(화면의 필기는 그대로 유지되며, 계속해서 기기에 자동 저장됩니다.)',
+      confirmText: '연결 해제 (필기 유지)',
       cancelText: '계속 수업하기',
-      isDanger: true
+      isDanger: false
     });
     if (!ok) return;
 
@@ -2551,22 +2617,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     // 3. 실시간 연결 해제 및 퇴장 신호 전송
     classroomRealtime.leaveLesson(studentInfo || undefined);
     setIsConnectedToBoard(false);
+    setSessionExpiresAt(null);
 
-    showToast('📓 전자칠판 연결이 해제되어 오프라인 공책 모드로 복귀했습니다.');
-
-    // 4. URL에서 lessonId 파라미터 완전 제거
-    if (typeof window !== 'undefined' && window.location.search) {
-      const cleanUrl = new URL(window.location.href);
-      cleanUrl.searchParams.delete('lessonId');
-      cleanUrl.searchParams.delete('title');
-      cleanUrl.searchParams.delete('autoConnect');
-      window.history.replaceState(null, '', cleanUrl.pathname + (cleanUrl.search ? '?' + cleanUrl.search : ''));
-    }
-
-    // 5. 상위 앱 컴포넌트에 오프라인 복귀 신호 전달
-    if (onExit) {
-      onExit();
-    }
+    showToast('📓 전자칠판 연결이 해제되었습니다. 작성 중이던 필기는 오프라인에서 계속 유지 및 저장됩니다.');
   };
 
   // ==========================================================================
@@ -2830,7 +2883,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     };
   }, [isConnectedToBoard, studentInfo, lessonId]);
 
-  // [1시간 절대 세션 타이머]: 수업 연결 시점부터 60분 후 자동 종료 및 오프라인 모드 안전 전환
+  // [수업 세션 타이머]: 교사 설정 만료 시각 또는 수업 시간 경과 후 자동 종료 및 오프라인 모드 안전 전환
   useEffect(() => {
     if (!isConnectedToBoard) {
       lessonConnectionStartTimeRef.current = null;
@@ -2839,31 +2892,33 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     if (!lessonConnectionStartTimeRef.current) {
       lessonConnectionStartTimeRef.current = Date.now();
-      setRemainingLessonMinutes(60);
+      if (!sessionExpiresAt) {
+        setRemainingLessonMinutes(60);
+      }
     }
 
-    const ONE_HOUR_MS = 60 * 60 * 1000;
     const interval = setInterval(() => {
-      const start = lessonConnectionStartTimeRef.current;
-      if (!start) return;
+      const now = Date.now();
+      const expiresAt = sessionExpiresAt || ((lessonConnectionStartTimeRef.current || now) + 60 * 60 * 1000);
 
-      const elapsed = Date.now() - start;
-      if (elapsed >= ONE_HOUR_MS) {
+      if (now >= expiresAt) {
         clearInterval(interval);
         classroomRealtime.leaveLesson(studentInfoRef.current || undefined);
         setIsConnectedToBoard(false);
         lessonConnectionStartTimeRef.current = null;
-        showToast('⏱️ 수업 시간(1시간)이 경과하여 오프라인 필기 모드로 전환되었습니다. 작성하신 필기는 안전하게 보존됩니다.');
+        setSessionExpiresAt(null);
+        showToast('⏱️ 수업 시간이 경과하여 오프라인 필기 모드로 전환되었습니다. 작성하신 필기는 안전하게 보존됩니다.');
         return;
       }
 
-      setRemainingLessonMinutes(Math.max(1, Math.ceil((ONE_HOUR_MS - elapsed) / 60000)));
-    }, 5000);
+      setRemainingLessonMinutes(Math.max(1, Math.ceil((expiresAt - now) / 60000)));
+    }, 3000);
 
     return () => clearInterval(interval);
-  }, [isConnectedToBoard]);
+  }, [isConnectedToBoard, sessionExpiresAt]);
 
-  // [등록 및 제출하기] 수동 버튼 클릭 핸들러 (연타 방지 및 4초 쿨다운 가드)
+  /*
+// [등록 및 제출하기] 수동 버튼 클릭 핸들러 (연타 방지 및 4초 쿨다운 가드)
   const handleSubmitLesson = async () => {
     if (isSubmitting) return;
 
@@ -2898,6 +2953,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setIsSubmitting(false);
     }
   };
+
+  */
 
   // [로컬 기기에 현재 필기 PDF 다운로드 저장]
   const handleExportStudentPdf = async () => {
@@ -3913,38 +3970,6 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   <span style={{ fontSize: '11px', color: '#86efac' }}>5초 생존 핑</span>
                 </div>
 
-                {/* 답안 등록하기 버튼 */}
-                <button
-                  id="menu-btn-submit-lesson"
-                  type="button"
-                  className="g-btn g-btn-primary"
-                  style={{
-                    width: '100%',
-                    padding: '10px 14px',
-                    fontSize: '13px',
-                    fontWeight: 700,
-                    background: hasSavedNote
-                      ? 'linear-gradient(135deg, #059669 0%, #047857 100%)'
-                      : 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                    borderRadius: '10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    border: hasSavedNote ? '1px solid #34d399' : 'none',
-                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
-                    cursor: 'pointer'
-                  }}
-                  disabled={isSubmitting}
-                  onClick={() => {
-                    handleSubmitLesson();
-                    setActivePopup(null);
-                  }}
-                  title="내 필기를 전자칠판 출석부에 즉시 등록/제출합니다"
-                >
-                  {isSubmitting ? '칠판으로 전송 중...' : hasSavedNote ? '✅ 답안 등록 완료 (다시 등록)' : '🚀 선생님 전자칠판에 답안 등록'}
-                </button>
-
                 {/* 수업 연결 해제 버튼 */}
                 <button
                   id="menu-btn-disconnect-board"
@@ -4016,13 +4041,46 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     setActivePopup(null);
                     handleOpenJoinLessonModal();
                   }}
-                  title="개설된 선생님 목록을 확인하거나 QR을 찍어 수업에 참여합니다"
+                  title="개설된 선생님 목록을 확인하거나 수업을 선택하여 참여합니다"
                 >
                   <span>📡</span>
-                  <span>선생님 수업 연결하기 (목록 / QR)</span>
+                  <span>선생님 수업 연결하기</span>
                 </button>
               </>
             )}
+
+            {/* 📂 [내 필기 보관함] 버튼: 기본 공책 및 지난 수업별 필기 목록/불러오기/삭제 관리 */}
+            <button
+              id="menu-btn-open-notebook-archive"
+              type="button"
+              style={{
+                width: '100%',
+                padding: '9px 12px',
+                fontSize: '12.5px',
+                fontWeight: 700,
+                background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.18) 0%, rgba(139, 92, 246, 0.18) 100%)',
+                border: '1px solid rgba(139, 92, 246, 0.45)',
+                color: '#c084fc',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '7px',
+                cursor: 'pointer',
+                boxShadow: '0 2px 8px rgba(139, 92, 246, 0.2)'
+              }}
+              onClick={() => {
+                setActivePopup(null);
+                const sId = studentInfo ? studentInfoToId(studentInfo) : null;
+                const list = listStudentSavedNotebooks(sId);
+                setSavedNotebooksList(list);
+                setIsNotebookArchiveModalOpen(true);
+              }}
+              title="오프라인 기본 공책 및 지난 수업별 필기 목록을 확인, 불러오기 및 삭제합니다"
+            >
+              <span>📂</span>
+              <span>내 필기 보관함 (공책 관리)</span>
+            </button>
           </div>
 
           <div style={{ height: '1px', background: 'rgba(255, 255, 255, 0.08)' }} />
@@ -7086,7 +7144,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                             <button
                               type="button"
                               onClick={() => {
-                                handleConnectToBoard(lesson.lessonId, lesson.title, lesson.attachedFiles, selectedTeacherForJoin.teacherName);
+                                handleConnectToBoard(
+                                  lesson.lessonId,
+                                  lesson.title,
+                                  lesson.attachedFiles,
+                                  selectedTeacherForJoin.teacherName,
+                                  lesson.expiresAt,
+                                  lesson.sessionKey
+                                );
                               }}
                               style={{
                                 background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
@@ -7196,6 +7261,171 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                   );
                 })
               )
+            )}
+          </div>
+        </div>
+      </ModularModal>
+
+      {/* 📂 [내 필기 보관함] 모달: 기본 공책 및 지난 수업별 필기 목록, 불러오기 및 삭제 관리 */}
+      <ModularModal
+        isOpen={isNotebookArchiveModalOpen}
+        onClose={() => setIsNotebookArchiveModalOpen(false)}
+        maxWidth="540px"
+        zIndex={10000}
+        showCloseButton={true}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* 헤더 */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '22px' }}>📂</span>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#ffffff' }}>
+                  내 필기 보관함
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>
+                  기기에 자동 보관된 기본 공책과 지난 수업별 필기 목록입니다
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const sId = studentInfo ? studentInfoToId(studentInfo) : null;
+                const list = listStudentSavedNotebooks(sId);
+                setSavedNotebooksList(list);
+                showToast('🔄 보관함 목록을 새로고침했습니다.');
+              }}
+              style={{
+                background: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                color: '#cbd5e1',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              title="보관함 목록 새로고침"
+            >
+              <span>🔄 새로고침</span>
+            </button>
+          </div>
+
+          {/* 공책 카드 목록 */}
+          <div style={{ maxHeight: '60vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '2px' }}>
+            {savedNotebooksList.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 16px', color: '#94a3b8' }}>
+                <div style={{ fontSize: '32px', marginBottom: '8px' }}>📭</div>
+                <div style={{ fontSize: '13.5px', fontWeight: 600, color: '#cbd5e1' }}>보관된 필기가 없습니다.</div>
+                <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '4px' }}>
+                  기본 공책에 필기를 하거나 수업에 참여하면 자동으로 안전하게 보관됩니다.
+                </div>
+              </div>
+            ) : (
+              savedNotebooksList.map((item) => {
+                const isCurrent = item.lessonId === lessonId;
+                return (
+                  <div
+                    key={item.lessonId}
+                    style={{
+                      background: isCurrent ? 'rgba(59, 130, 246, 0.12)' : 'rgba(30, 41, 59, 0.6)',
+                      border: isCurrent ? '1.5px solid rgba(96, 165, 250, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
+                      borderRadius: '10px',
+                      padding: '12px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '12px',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {/* 공책 정보 */}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#ffffff', wordBreak: 'break-all' }}>
+                          {item.isDefaultNote ? '📖 내 기본 공책' : `📝 ${item.title}`}
+                        </span>
+                        {isCurrent && (
+                          <span style={{
+                            fontSize: '10.5px',
+                            fontWeight: 700,
+                            background: '#10b981',
+                            color: '#ffffff',
+                            padding: '1px 7px',
+                            borderRadius: '9999px'
+                          }}>
+                            현재 열림
+                          </span>
+                        )}
+                        {item.isDefaultNote && (
+                          <span style={{
+                            fontSize: '10px',
+                            background: 'rgba(168, 85, 247, 0.2)',
+                            color: '#c084fc',
+                            border: '1px solid rgba(168, 85, 247, 0.4)',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 600
+                          }}>
+                            오프라인 기본
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ color: '#38bdf8', fontWeight: 600 }}>총 ${item.pageCount}쪽</span>
+                        <span>•</span>
+                        <span>{new Date(item.timestamp).toLocaleDateString()} {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                    </div>
+
+                    {/* 액션 버튼들 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        disabled={isCurrent}
+                        onClick={() => handleOpenNotebook(item.lessonId, item.title)}
+                        style={{
+                          background: isCurrent ? 'rgba(255, 255, 255, 0.05)' : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                          border: isCurrent ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid #3b82f6',
+                          color: isCurrent ? '#64748b' : '#ffffff',
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: isCurrent ? 'default' : 'pointer'
+                        }}
+                        title={isCurrent ? '현재 열려있는 공책입니다' : '이 공책을 불러옵니다'}
+                      >
+                        {isCurrent ? '작성 중' : '열기'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteNotebook(item)}
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.12)',
+                          border: '1px solid rgba(239, 68, 68, 0.35)',
+                          color: '#fca5a5',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                        title="이 공책의 필기를 기기에서 영구 삭제합니다"
+                      >
+                        🗑️ 삭제
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

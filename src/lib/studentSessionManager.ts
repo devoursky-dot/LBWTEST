@@ -151,6 +151,14 @@ export function saveStudentDraft(lessonId: string, studentId: string | null, dra
   }
 }
 
+export interface SavedNotebookItem {
+  lessonId: string;
+  title: string;
+  timestamp: number;
+  pageCount: number;
+  isDefaultNote: boolean;
+}
+
 /**
  * 9. 공책 드래프트 삭제 (학생의 "공책 새로 쓰기" 시 해당 학생+수업의 임시 저장 초기화)
  */
@@ -164,6 +172,60 @@ export function clearStudentDraft(lessonId: string, studentId?: string | null): 
     localStorage.removeItem(`lbw_active_draft_${lessonId}_v3`);
     sessionStorage.removeItem(`lbw_session_draft_${lessonId}`);
   } catch {}
+}
+
+/**
+ * 9-1. 저장된 학생 필기 목록 전체 조회 (숨김메뉴 [내 필기 보관함] 용)
+ */
+export function listStudentSavedNotebooks(studentId?: string | null): SavedNotebookItem[] {
+  if (typeof window === 'undefined') return [];
+  const cleanStudent = studentId?.trim() || 'guest';
+  const prefix = 'lbw_active_draft_';
+  const suffix = `_${cleanStudent}_v3`;
+  const results: SavedNotebookItem[] = [];
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      if (key.startsWith(prefix) && key.endsWith(suffix)) {
+        const lessonId = key.substring(prefix.length, key.length - suffix.length);
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        try {
+          const parsed = JSON.parse(raw);
+          const isDefault = lessonId.startsWith('student_note_') || lessonId === 'default';
+          results.push({
+            lessonId,
+            title: parsed.title || (isDefault ? '오프라인 기본 공책' : lessonId),
+            timestamp: parsed.timestamp || Date.now(),
+            pageCount: Array.isArray(parsed.pages) ? parsed.pages.length : 1,
+            isDefaultNote: isDefault
+          });
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn('listStudentSavedNotebooks error:', err);
+  }
+
+  // 기본 공책을 맨 위에, 나머지는 최신 수정순 정렬
+  results.sort((a, b) => {
+    if (a.isDefaultNote && !b.isDefaultNote) return -1;
+    if (!a.isDefaultNote && b.isDefaultNote) return 1;
+    return b.timestamp - a.timestamp;
+  });
+
+  return results;
+}
+
+/**
+ * 9-2. 특정 수업 필기 영구 삭제 (보관함 삭제 액션)
+ */
+export function deleteStudentNotebook(lessonId: string, studentId?: string | null): boolean {
+  clearStudentDraft(lessonId, studentId);
+  return true;
 }
 
 /**

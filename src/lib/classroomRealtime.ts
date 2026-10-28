@@ -39,6 +39,9 @@ export interface TeacherLessonInfo {
   lessonId: string;
   title: string;
   isLive: boolean; // 현재 전자칠판에서 수업 중인지 여부 (🟢 실시간 진행 중 vs 📓 오프라인)
+  sessionKey?: string; // 실시간 수업 고유 세션키 (수업 개설 시 발급, 수업 종료/초기화 시 파기)
+  durationMinutes?: number; // 설정된 수업 시간 (분)
+  expiresAt?: number; // 수업 만료 예정 시각 (ms)
   pdfId?: string;
   pdfName?: string;
   attachedFiles?: AttachedFileItem[];
@@ -59,12 +62,16 @@ export type RealtimeSignalType =
   | 'RESPONSE_STUDENT_NOTE'  // 학생 -> 전자칠판 실시간 필기 응답
   | 'RESET_SESSION'          // 전자칠판 -> 학생 수업 종료/초기화 통보
   | 'KICK_STUDENT'           // 전자칠판 -> 학생 강제 퇴장 신호
-  | 'REQUEST_ALL_SYNC';      // 전자칠판 -> 전체 학생 일괄 동기화 요청
+  | 'REQUEST_ALL_SYNC'       // 전자칠판 -> 전체 학생 일괄 동기화 요청
+  | 'EXTEND_SESSION';        // 전자칠판 -> 학생 수업 시간 연장 통보
 
 export interface RealtimeSignalPayload {
   type: RealtimeSignalType;
   lessonId: string;
   targetStudentKey?: string;
+  sessionKey?: string;
+  extraMinutes?: number;
+  newExpiresAt?: number;
   student?: {
     grade: string;
     classNum: string;
@@ -89,6 +96,7 @@ export interface FetchTeacherLessonsOptions {
 class ClassroomRealtimeManager {
   private activeChannel: any = null;
   private currentLessonId: string | null = null;
+  private currentSessionKey: string | null = null;
   private currentRole: 'teacher' | 'student' = 'student';
   private listeners: Set<SignalListener> = new Set();
   private localBroadcastListener: ((e: MessageEvent) => void) | null = null;
@@ -112,12 +120,29 @@ class ClassroomRealtimeManager {
     pdfName?: string;
     attachedFiles?: AttachedFileItem[];
     isLive?: boolean;
-  }): Promise<boolean> {
-    const { lessonId, teacherName, lessonTitle, pdfId, pdfName, attachedFiles, isLive = true } = params;
-    if (!supabase || !isSupabaseConfigured) return false;
+    durationMinutes?: number;
+    sessionKey?: string;
+  }): Promise<{ success: boolean; sessionKey: string; expiresAt: number }> {
+    const {
+      lessonId,
+      teacherName,
+      lessonTitle,
+      pdfId,
+      pdfName,
+      attachedFiles,
+      isLive = true,
+      durationMinutes = 60
+    } = params;
+    const nowMs = Date.now();
+    const sessionKey = params.sessionKey || `sess_${lessonId}_${nowMs}`;
+    const expiresAt = nowMs + durationMinutes * 60 * 1000;
+
+    if (!supabase || !isSupabaseConfigured) {
+      return { success: false, sessionKey, expiresAt };
+    }
 
     try {
-      const now = new Date().toISOString();
+      const nowIso = new Date().toISOString();
       const payload: ClassNoteRecord = {
         lesson_id: lessonId,
         student_grade: '_TEACHER_SESSION_',
@@ -128,10 +153,13 @@ class ClassroomRealtimeManager {
           pdfId: pdfId || null,
           pdfName: pdfName || null,
           attachedFiles: attachedFiles || [],
-          startedAt: now,
-          lastTouched: Date.now()
+          startedAt: nowIso,
+          lastTouched: nowMs,
+          sessionKey,
+          durationMinutes,
+          expiresAt
         },
-        updated_at: now
+        updated_at: nowIso
       };
 
       // 기존 세션 row 확인 후 upsert
@@ -153,12 +181,62 @@ class ClassroomRealtimeManager {
       const { error } = await supabase.from('class_notes').upsert(payload);
       if (error) {
         console.warn('[Realtime] registerTeacherSession error:', error.message);
-        return false;
+        return { success: false, sessionKey, expiresAt };
       }
-      return true;
+      return { success: true, sessionKey, expiresAt };
     } catch (err) {
       console.warn('[Realtime] registerTeacherSession exception:', err);
-      return false;
+      return { success: false, sessionKey, expiresAt };
+    }
+  }
+
+  /**
+   * 전자칠판: 수업 시간 연장 (기본 10분 추가)
+   */
+  public async extendTeacherSession(lessonId: string, extraMinutes: number = 10): Promise<{ success: boolean; newExpiresAt: number }> {
+    if (!supabase || !isSupabaseConfigured) return { success: false, newExpiresAt: Date.now() };
+
+    try {
+      const { data: existing } = await supabase
+        .from('class_notes')
+        .select('id, strokes_data')
+        .eq('lesson_id', lessonId)
+        .eq('student_grade', '_TEACHER_SESSION_')
+        .maybeSingle();
+
+      if (existing?.id && existing.strokes_data) {
+        const curExpires = existing.strokes_data.expiresAt || (Date.now() + 60 * 60 * 1000);
+        const newExpiresAt = Math.max(curExpires, Date.now()) + extraMinutes * 60 * 1000;
+        const newDuration = (existing.strokes_data.durationMinutes || 60) + extraMinutes;
+
+        await supabase
+          .from('class_notes')
+          .update({
+            strokes_data: {
+              ...existing.strokes_data,
+              expiresAt: newExpiresAt,
+              durationMinutes: newDuration,
+              lastTouched: Date.now()
+            },
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existing.id);
+
+        try {
+          await this.sendSignal({
+            type: 'EXTEND_SESSION',
+            lessonId,
+            extraMinutes,
+            newExpiresAt
+          });
+        } catch {}
+
+        return { success: true, newExpiresAt };
+      }
+      return { success: false, newExpiresAt: Date.now() };
+    } catch (err) {
+      console.warn('[Realtime] extendTeacherSession error:', err);
+      return { success: false, newExpiresAt: Date.now() };
     }
   }
 
@@ -341,10 +419,12 @@ class ClassroomRealtimeManager {
                         }
                       } catch {}
 
-                      // Supabase 실시간 세션 정보 대조
+                      // Supabase 실시간 세션 정보 대조 (세션키 및 만료 시각 검증)
                       const sbRow = sbSessionMap.get(lessonId);
                       const lastTouched = sbRow?.strokes_data?.lastTouched || (sbRow?.updated_at ? new Date(sbRow.updated_at).getTime() : 0);
-                      const isLive = sbRow?.student_num === 'ACTIVE' && (now - lastTouched <= TWO_HOURS_MS);
+                      const sessionExpiresAt = sbRow?.strokes_data?.expiresAt;
+                      const isNotExpired = sessionExpiresAt ? (now <= sessionExpiresAt) : (now - lastTouched <= TWO_HOURS_MS);
+                      const isLive = sbRow?.student_num === 'ACTIVE' && isNotExpired;
 
                       if (sbRow?.strokes_data?.attachedFiles && attachedFiles.length === 0) {
                         attachedFiles = sbRow.strokes_data.attachedFiles;
@@ -358,6 +438,9 @@ class ClassroomRealtimeManager {
                         lessonId,
                         title: cleanTitle,
                         isLive,
+                        sessionKey: sbRow?.strokes_data?.sessionKey,
+                        durationMinutes: sbRow?.strokes_data?.durationMinutes,
+                        expiresAt: sessionExpiresAt,
                         pdfId,
                         pdfName,
                         attachedFiles,
@@ -414,20 +497,28 @@ class ClassroomRealtimeManager {
    * @param onSignal 신호 콜백
    * @param role 'teacher' | 'student'
    * @param studentInfo 학생 역할일 때 필수 (5초 주기 핑 발송용)
+   * @param sessionKey 교사의 실시간 세션키
    */
+  public getCurrentSessionKey(): string | null {
+    return this.currentSessionKey;
+  }
+
   public joinLesson(
     lessonId: string,
     onSignal?: SignalListener,
     role: 'teacher' | 'student' = 'student',
-    studentInfo?: { grade: string; classNum: string; studentNum: string; name: string }
+    studentInfo?: { grade: string; classNum: string; studentNum: string; name: string },
+    sessionKey?: string
   ): void {
     if (this.currentLessonId === lessonId && this.currentRole === role) {
       if (onSignal) this.listeners.add(onSignal);
+      if (sessionKey) this.currentSessionKey = sessionKey;
       return;
     }
 
     this.leaveLesson();
     this.currentLessonId = lessonId;
+    this.currentSessionKey = sessionKey || null;
     this.currentRole = role;
     if (onSignal) this.listeners.add(onSignal);
 
@@ -485,6 +576,7 @@ class ClassroomRealtimeManager {
       this.sendSignal({
         type: 'STUDENT_PING',
         lessonId,
+        sessionKey: this.currentSessionKey || undefined,
         student: {
           ...studentInfo,
           isAway: getIsAway()
@@ -604,6 +696,7 @@ class ClassroomRealtimeManager {
     }
 
     this.currentLessonId = null;
+    this.currentSessionKey = null;
     this.listeners.clear();
   }
 }

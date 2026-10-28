@@ -352,9 +352,22 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   }>>(new Map());
 
   // 1시간 절대 세션 타이머 (수업 시작 기준 60분 후 자동 종료)
-  const sessionStartTimeRef = useRef<number>(Date.now());
-  const [remainingMinutes, setRemainingMinutes] = useState<number>(60);
+  // 수업 타이머 (설정된 시간 후 자동 종료 & 10분 연장 지원)
+  const initialDuration = (lesson as any).sessionDurationMinutes || 60;
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number>(() => {
+    return Date.now() + initialDuration * 60 * 1000;
+  });
+  const [remainingMinutes, setRemainingMinutes] = useState<number>(initialDuration);
   const lastInteractionTimeRef = useRef<number>(Date.now());
+
+  // 10분 연장 핸들러
+  const handleExtendSession = async () => {
+    const nextExpires = Math.max(sessionExpiresAt, Date.now()) + 10 * 60 * 1000;
+    setSessionExpiresAt(nextExpires);
+    setRemainingMinutes(Math.max(1, Math.ceil((nextExpires - Date.now()) / 60000)));
+    await classroomRealtime.extendTeacherSession(currentLessonId, 10);
+    showToast('⏱️ 수업 시간이 10분 연장되었습니다.');
+  };
 
   // 화면 터치/클릭 발생 시 마지막 조작 시간 갱신 & Supabase 세션 터치
   const handleUserInteraction = useCallback(() => {
@@ -362,22 +375,20 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     classroomRealtime.touchTeacherSession(currentLessonId);
   }, [currentLessonId]);
 
-  // 1초 주기로 학생 생존 핑 및 2시간 무터치 검사
+  // 1초 주기로 학생 생존 핑 및 수업 만료 검사
   useEffect(() => {
     const timer = setInterval(() => {
       const now = Date.now();
 
-      // [A] 1시간(3600초) 수업 기준 자동 종료
-      const elapsed = now - sessionStartTimeRef.current;
-      const ONE_HOUR_MS = 60 * 60 * 1000;
-      if (elapsed >= ONE_HOUR_MS) {
+      // [A] 설정된 수업 시간 경과 시 자동 세션 종료
+      if (now >= sessionExpiresAt) {
         clearInterval(timer);
-        showToast('⏱️ 수업 시간(1시간)이 경과하여 수업이 안전하게 자동 종료되었습니다.');
+        showToast('⏱️ 수업 시간이 경과하여 수업이 안전하게 자동 종료되었습니다.');
         classroomRealtime.closeTeacherSession(currentLessonId);
         onExit();
         return;
       }
-      setRemainingMinutes(Math.max(1, Math.ceil((ONE_HOUR_MS - elapsed) / 60000)));
+      setRemainingMinutes(Math.max(1, Math.ceil((sessionExpiresAt - now) / 60000)));
 
       // [B] 학생 5초 핑 상태 정밀 판정 (8초 이내: 정상, 8~15초: 확인 중, 15초 초과: 끊김)
       setStudentHeartbeats((prev) => {
@@ -417,6 +428,12 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
       // [1] 학생 5초 주기 생존 핑(PING) 수신
       if (signal.type === 'STUDENT_PING' && signal.student) {
+        // 교사 실시간 세션키 검증: 이전 수업 유령 핑이 새 수업 출석부에 유입되는 것 100% 방지
+        const currentTeacherSessionKey = (lesson as any).sessionKey;
+        if (currentTeacherSessionKey && signal.sessionKey && signal.sessionKey !== currentTeacherSessionKey) {
+          return;
+        }
+
         const key = `${signal.student.grade}_${signal.student.classNum}_${signal.student.studentNum}`;
         const now = Date.now();
 
@@ -1015,23 +1032,47 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             </span>
           </div>
 
-          {/* ⏱️ 1시간 수업 타이머 배지 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              background: '#21262d',
-              padding: '6px 12px',
-              borderRadius: '20px',
-              border: '1px solid #30363d',
-              fontSize: '12.5px',
-              color: remainingMinutes <= 5 ? '#f87171' : '#cbd5e1'
-            }}
-            title="모든 수업은 1시간 기준이며 1시간 후 자동 종료됩니다."
-          >
-            <span>⏱️</span>
-            <span style={{ fontWeight: 700 }}>{remainingMinutes}분 남음</span>
+          {/* ⏱️ 수업 타이머 배지 & 10분 연장 버튼 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                background: '#21262d',
+                padding: '6px 12px',
+                borderRadius: '20px',
+                border: '1px solid #30363d',
+                fontSize: '12.5px',
+                color: remainingMinutes <= 5 ? '#f87171' : '#cbd5e1'
+              }}
+              title="설정된 수업 시간이 경과하면 수업이 안전하게 자동 종료됩니다."
+            >
+              <span>⏱️</span>
+              <span style={{ fontWeight: 700 }}>{remainingMinutes}분 남음</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleExtendSession}
+              style={{
+                background: 'rgba(59, 130, 246, 0.15)',
+                border: '1px solid rgba(59, 130, 246, 0.4)',
+                color: '#93c5fd',
+                padding: '5px 10px',
+                borderRadius: '16px',
+                fontSize: '11.5px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px'
+              }}
+              title="수업 시간을 10분 연장합니다"
+            >
+              <span>➕</span>
+              <span>10분 연장</span>
+            </button>
           </div>
 
           {/* 🖥️ 플로팅 미니 모니터 버튼 (Always-on-Top) */}
