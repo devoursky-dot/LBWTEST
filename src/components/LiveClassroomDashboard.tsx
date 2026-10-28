@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
 import { getApiBaseUrl } from '../lib/apiConfig';
-import { getDriveConfig } from '../lib/driveService';
+import { getDriveConfig, fetchDriveItems } from '../lib/driveService';
 import { generateClassSubmissionPdf } from '../lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './StudentNoteFullscreenViewer';
 
@@ -125,8 +125,32 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       }
     }
 
-    // 3) 구글 드라이브 lesson_config.json에서 공식 등록된 첨부자료 보충 확인
-    if (materialsMap.size === 0 && currentLessonId) {
+    // 3) 구글 드라이브 수업 폴더(currentLessonId) 내의 실제 파일 목록 직접 조회
+    if (currentLessonId) {
+      try {
+        const driveFiles = await fetchDriveItems(currentLessonId);
+        for (const item of driveFiles) {
+          if (item.type === 'folder') continue;
+          if (item.name === 'lesson_config.json') continue;
+          if (item.name.toLowerCase().endsWith('.png') && item.name.toLowerCase().includes('qr')) continue;
+          if (!materialsMap.has(item.id)) {
+            const isPdf = item.name.toLowerCase().endsWith('.pdf');
+            materialsMap.set(item.id, {
+              id: item.id,
+              name: item.name,
+              mimeType: isPdf ? 'application/pdf' : undefined,
+              size: item.size,
+              sourceTag: isPdf ? '수업 등록 교재' : '수업 등록 자료'
+            });
+          }
+        }
+      } catch (driveErr) {
+        console.warn('LiveClassroomDashboard fetchDriveItems error:', driveErr);
+      }
+    }
+
+    // 4) 구글 드라이브 lesson_config.json에서 외부 등록된 첨부자료 보충 확인
+    if (currentLessonId) {
       try {
         const apiKey = getDriveConfig().googleApiKey;
         const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&key=${apiKey}&_t=${Date.now()}`;

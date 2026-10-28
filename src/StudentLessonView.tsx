@@ -6,7 +6,7 @@ import { PwaInstallButton, usePwaInstall } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import { useAppVersionCheck, VersionUpdateOverlay } from './modules/version';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from './lib/supabase';
-import { getDriveConfig } from './lib/driveService';
+import { getDriveConfig, fetchDriveItems } from './lib/driveService';
 import {
   loadPdfDocument,
   renderPdfPageToDataUrl,
@@ -451,6 +451,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
   const [activeTeacherName, setActiveTeacherName] = useState<string>('');
   const [connectedLessonFiles, setConnectedLessonFiles] = useState<Array<{ id: string; name: string; size?: string | number; mimeType?: string }>>([]);
   const [isLessonMaterialsModalOpen, setIsLessonMaterialsModalOpen] = useState<boolean>(false);
+  const [isLoadingMaterials, setIsLoadingMaterials] = useState<boolean>(false);
 
   // --- 📡 선생님 수업 연결 모달 및 활성 목록 상태 ---
   const [isJoinLessonModalOpen, setIsJoinLessonModalOpen] = useState(false);
@@ -2202,31 +2203,62 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [lessonId, lessonTitle]);
 
-  // 실시간 연결 시 활성 수업자료 및 선생님 정보 자동 동기화
-  useEffect(() => {
-    if (!isConnectedToBoard || !lessonId || lessonId.startsWith('student_note_')) return;
+  // 교사 수업 진입 여부 판별 (학생 개인 공책이 아닌 경우)
+  const isTeacherLesson = Boolean(lessonId && !lessonId.startsWith('student_note_'));
 
-    // 1. 활성 선생님 수업 목록에서 매칭 시도
-    classroomRealtime.fetchActiveTeacherLessons().then(teachers => {
-      setActiveTeachersList(teachers);
-      for (const t of teachers) {
-        const found = t.lessons.find(l => l.lessonId === lessonId || (activeLessonTitle && l.title === activeLessonTitle));
-        if (found) {
-          if (found.title) setActiveLessonTitle(found.title);
-          if (t.teacherName) setActiveTeacherName(t.teacherName);
-          if (found.pdfId) {
-            setLessonPdfInfo({ id: found.pdfId, name: found.pdfName || `${found.title}.pdf` });
-          }
-          if (found.attachedFiles && found.attachedFiles.length > 0) {
-            setConnectedLessonFiles(found.attachedFiles);
-          }
-          return;
+  // 교사 수업 진입 시 구글 드라이브 실제 수업자료 및 선생님 정보 실시간 동기화
+  const loadLessonMaterials = useCallback(async () => {
+    if (!lessonId || lessonId.startsWith('student_note_')) return;
+    setIsLoadingMaterials(true);
+
+    try {
+      // 1. 구글 드라이브 수업 폴더 내의 모든 실제 파일 조회 (Google Drive 단일 진실원)
+      const driveFiles = await fetchDriveItems(lessonId);
+      const validFiles: Array<{ id: string; name: string; size?: string | number; mimeType?: string }> = [];
+      let foundPdf: { id: string; name: string } | null = null;
+
+      for (const f of driveFiles) {
+        if (f.type === 'folder') continue;
+        if (f.name === 'lesson_config.json') continue;
+        if (f.name.toLowerCase().endsWith('.png') && f.name.toLowerCase().includes('qr')) continue;
+
+        validFiles.push({
+          id: f.id,
+          name: f.name,
+          size: f.size,
+          mimeType: f.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : undefined
+        });
+
+        if (!foundPdf && f.name.toLowerCase().endsWith('.pdf')) {
+          foundPdf = { id: f.id, name: f.name };
         }
       }
-    }).catch(() => {});
 
-    // 2. 구글 드라이브 lesson_config.json 확인
-    (async () => {
+      // 2. 활성 선생님 수업 목록 대조하여 교사 이름 및 실시간 수업 정보 동기화
+      try {
+        const teachers = await classroomRealtime.fetchActiveTeacherLessons();
+        setActiveTeachersList(teachers);
+        for (const t of teachers) {
+          const found = t.lessons.find(l => l.lessonId === lessonId || (activeLessonTitle && l.title === activeLessonTitle));
+          if (found) {
+            if (found.title) setActiveLessonTitle(found.title);
+            if (t.teacherName) setActiveTeacherName(t.teacherName);
+            if (found.pdfId && !foundPdf) {
+              foundPdf = { id: found.pdfId, name: found.pdfName || `${found.title}.pdf` };
+            }
+            if (found.attachedFiles && found.attachedFiles.length > 0) {
+              found.attachedFiles.forEach(af => {
+                if (af && af.id && !validFiles.some(vf => vf.id === af.id)) {
+                  validFiles.push(af);
+                }
+              });
+            }
+            break;
+          }
+        }
+      } catch {}
+
+      // 3. lesson_config.json 대조 (외부 링크된 첨부자료 병합)
       try {
         const apiBase = getApiBaseUrl();
         const apiKey = getDriveConfig().googleApiKey;
@@ -2239,20 +2271,48 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
             const dlRes = await fetch(`${apiBase}/api/drive?action=download&fileId=${cfgFile.id}&fileName=lesson_config.json`);
             if (dlRes.ok) {
               const cfgJson = await dlRes.json();
-              if (cfgJson.attachedFiles && Array.isArray(cfgJson.attachedFiles) && cfgJson.attachedFiles.length > 0) {
-                setConnectedLessonFiles(cfgJson.attachedFiles);
+              if (cfgJson.attachedFiles && Array.isArray(cfgJson.attachedFiles)) {
+                cfgJson.attachedFiles.forEach((af: any) => {
+                  if (af && af.id && !validFiles.some(vf => vf.id === af.id)) {
+                    validFiles.push(af);
+                  }
+                });
               }
-              if (cfgJson.pdfId && !lessonPdfInfo) {
-                setLessonPdfInfo({ id: cfgJson.pdfId, name: cfgJson.pdfName || `${cfgJson.title || '수업'}.pdf` });
+              if (cfgJson.pdfId && !foundPdf) {
+                foundPdf = { id: cfgJson.pdfId, name: cfgJson.pdfName || `${cfgJson.title || '수업'}.pdf` };
               }
+              if (cfgJson.title && !activeLessonTitle) setActiveLessonTitle(cfgJson.title);
             }
           }
         }
-      } catch (err) {
-        console.warn('lesson_config.json sync warning:', err);
+      } catch (cfgErr) {
+        console.warn('lesson_config.json fetch warning:', cfgErr);
       }
-    })();
-  }, [isConnectedToBoard, lessonId, activeLessonTitle]);
+
+      setConnectedLessonFiles(validFiles);
+      if (foundPdf) {
+        setLessonPdfInfo(foundPdf);
+      }
+    } catch (err) {
+      console.warn('수업자료 로드 오류:', err);
+    } finally {
+      setIsLoadingMaterials(false);
+    }
+  }, [lessonId, activeLessonTitle]);
+
+  // 수업 진입 시 구글 드라이브 수업자료 자동 로드
+  useEffect(() => {
+    if (isTeacherLesson) {
+      loadLessonMaterials();
+    }
+  }, [isTeacherLesson, loadLessonMaterials]);
+
+  // 교사 수업 진입 시 실시간 전자칠판 세션 자동 연결
+  useEffect(() => {
+    if (isTeacherLesson && !isConnectedToBoard) {
+      handleConnectToBoard(lessonId, lessonTitle);
+    }
+  }, [isTeacherLesson, isConnectedToBoard, lessonId, lessonTitle]);
 
   // 수업 나가기 처리 (WakeLock 해제, 퇴장 신호 발송, 오프라인 모드 복귀)
   const handleExitLesson = async () => {
@@ -2731,8 +2791,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         </button>
       ) : (
         <div className="student-floating-toolbar-wrapper">
-          {/* 🌟 1. 수업 연결 시 툴바 바로 위에 배치되는 수업제목줄 */}
-          {isConnectedToBoard && (
+          {/* 🌟 1. 수업 연결 시 툴바 바로 위에 항상 배치되는 수업제목줄 및 자료 다운로드 */}
+          {(isConnectedToBoard || isTeacherLesson) && (
             <div
               id="student-lesson-header-bar"
               style={{
@@ -5992,9 +6052,33 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
               📥
             </div>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#ffffff' }}>
-                수업자료 다운로드
-              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#ffffff' }}>
+                  수업자료 다운로드
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => loadLessonMaterials()}
+                  disabled={isLoadingMaterials}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    color: '#e2e8f0',
+                    padding: '3px 9px',
+                    borderRadius: '6px',
+                    fontSize: '11.5px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  title="구글 드라이브에서 최신 수업자료 다시 확인"
+                >
+                  <span>🔄</span>
+                  <span>{isLoadingMaterials ? '조회 중...' : '새로고침'}</span>
+                </button>
+              </div>
               <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#94a3b8' }}>
                 {activeTeacherName ? `${activeTeacherName} 선생님 • ` : ''}{activeLessonTitle || '실시간 수업'}
               </p>
@@ -6020,6 +6104,17 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
           {/* 자료 목록 */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '340px', overflowY: 'auto' }}>
             {(() => {
+              if (isLoadingMaterials) {
+                return (
+                  <div style={{ padding: '36px 16px', textAlign: 'center', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '12px', border: '1px dashed #30363d' }}>
+                    <span style={{ fontSize: '28px', display: 'block', marginBottom: '8px' }}>⏳</span>
+                    <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
+                      구글 드라이브에서 수업자료를 불러오는 중입니다...
+                    </p>
+                  </div>
+                );
+              }
+
               const allMaterials: Array<{ id: string; name: string; size?: string | number; mimeType?: string; isPrimaryPdf?: boolean }> = [];
               if (lessonPdfInfo && lessonPdfInfo.id) {
                 allMaterials.push({
@@ -6044,9 +6139,25 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                     <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#ffffff' }}>
                       본 수업에 등록된 수업자료가 없습니다.
                     </p>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#8b949e' }}>
+                    <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#8b949e' }}>
                       선생님이 수업 자료를 등록하시면 여기에 자동으로 표시됩니다.
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => loadLessonMaterials()}
+                      style={{
+                        background: 'rgba(56, 189, 248, 0.15)',
+                        border: '1px solid rgba(56, 189, 248, 0.3)',
+                        color: '#38bdf8',
+                        padding: '6px 14px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      🔄 드라이브 다시 확인
+                    </button>
                   </div>
                 );
               }

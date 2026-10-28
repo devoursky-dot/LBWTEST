@@ -83,6 +83,7 @@ export default function App() {
   const [folderHistory, setFolderHistory] = useState<{ id: string; name: string }[]>([
     { id: rootFolderId, name: '내 드라이브' }
   ]);
+  const [teacherHomeFolder, setTeacherHomeFolder] = useState<{ id: string; name: string } | null>(null);
   const [items, setItems] = useState<DriveItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -275,7 +276,9 @@ export default function App() {
       // 2. 해당 선생님 이름이 포함된 폴더 검색 (예: '이병우', '이병우 선생님')
       const matched = rootFolders.find(f => f.name.includes(cleanTeacherName) || cleanTeacherName.includes(f.name.replace(' 선생님', '')));
       if (matched) {
-        setFolderHistory([{ id: matched.id, name: `${cleanTeacherName} 선생님 드라이브` }]);
+        const home = { id: matched.id, name: `${cleanTeacherName} 선생님 드라이브` };
+        setTeacherHomeFolder(home);
+        setFolderHistory([home]);
         fetchDriveItems(matched.id);
       } else {
         console.warn(`선생님 폴더를 찾지 못했습니다: ${cleanTeacherName}`);
@@ -283,6 +286,15 @@ export default function App() {
     } catch (err) {
       console.warn('선생님 폴더 자동 진입 오류:', err);
     }
+  };
+
+  // 내 드라이브 / 홈 네비게이션 헬퍼 (선생님 로그인 시 무조건 선생님 본인 폴더로 진입)
+  const navigateToHome = () => {
+    const targetHome = (authMode === 'teacher' && teacherHomeFolder)
+      ? teacherHomeFolder
+      : { id: rootFolderId, name: '내 드라이브' };
+    setFolderHistory([targetHome]);
+    setSearchTerm('');
   };
 
   // 🖥️ 전자칠판 모드: 전체 선생님 목록 및 개설 수업 실시간 로드
@@ -341,6 +353,7 @@ export default function App() {
     setWhiteboardPermanentAuth(false);
     setCurrentSessionState(null);
     setAuthMode('guest');
+    setTeacherHomeFolder(null);
     localStorage.removeItem('lbw_auth_mode');
     showToast('👋 로그아웃되었습니다.');
   };
@@ -1415,10 +1428,8 @@ export default function App() {
       <header className="gdrive-header">
         <div 
           className="gdrive-logo-group"
-          onClick={() => {
-            setFolderHistory([{ id: rootFolderId, name: '내 드라이브' }]);
-            setSearchTerm('');
-          }}
+          onClick={navigateToHome}
+          title="드라이브 홈으로 이동"
         >
           <div className="gdrive-logo-icon">
             {/* Google Drive 공식 SVG 아이콘 */}
@@ -1695,40 +1706,11 @@ export default function App() {
           <nav className="gdrive-nav-list">
             <button 
               className={`gdrive-nav-item ${folderHistory.length === 1 ? 'active' : ''}`}
-              onClick={() => {
-                setFolderHistory([{ id: rootFolderId, name: '내 드라이브' }]);
-                setSearchTerm('');
-              }}
+              onClick={navigateToHome}
+              title={authMode === 'teacher' && teacherHomeFolder ? `${currentSession?.name || '내'} 드라이브 폴더로 이동` : '내 드라이브로 이동'}
             >
               <span style={{ fontSize: '18px' }}>📁</span>
-              <span>내 드라이브</span>
-            </button>
-            <button 
-              className="gdrive-nav-item"
-              onClick={() => {
-                showToast('💡 공유 드라이브 바로가기');
-              }}
-            >
-              <span style={{ fontSize: '18px' }}>👥</span>
-              <span>공유 드라이브</span>
-            </button>
-            <button 
-              className="gdrive-nav-item"
-              onClick={() => {
-                showToast('💡 최근 사용 파일 보기');
-              }}
-            >
-              <span style={{ fontSize: '18px' }}>🕒</span>
-              <span>최근 문서함</span>
-            </button>
-            <button 
-              className="gdrive-nav-item"
-              onClick={() => {
-                window.open('https://drive.google.com/drive/trash', '_blank');
-              }}
-            >
-              <span style={{ fontSize: '18px' }}>🗑️</span>
-              <span>휴지통 열기</span>
+              <span>{authMode === 'teacher' && teacherHomeFolder ? `${currentSession?.name || '선생님'} 폴더` : '내 드라이브'}</span>
             </button>
           </nav>
         </aside>
