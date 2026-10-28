@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
@@ -342,7 +343,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   }, [currentLessonId, initialClear]);
 
-  // 4. 학생별 실시간 핑 상태 추적 Map: key -> { student, lastPingTime, status }
+  // 4. 학생별 실시간 핑 상태 추적 Map: key -> { student, lastPingTime, status, isAway }
   const [studentHeartbeats, setStudentHeartbeats] = useState<Map<string, {
     grade: string;
     classNum: string;
@@ -350,6 +351,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     name: string;
     lastPingTime: number;
     status: 'connected' | 'checking' | 'disconnected';
+    isAway?: boolean;
   }>>(new Map());
 
   // 2시간 무터치 자동 종료 감지용 마지막 터치 시간 (ms)
@@ -424,7 +426,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           next.set(key, {
             ...signal.student!,
             lastPingTime: now,
-            status: 'connected'
+            status: 'connected',
+            isAway: Boolean(signal.student?.isAway)
           });
 
           // 처음 접속하거나 복귀했을 때만 토스트 알림 1회
@@ -503,6 +506,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       studentNum: string;
       name: string;
       status: 'connected' | 'checking' | 'disconnected';
+      isAway?: boolean;
       submission?: ClassNoteRecord;
     }>();
 
@@ -516,6 +520,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         studentNum: sub.student_num,
         name: sub.student_name,
         status: 'disconnected',
+        isAway: false,
         submission: sub
       });
     }
@@ -526,6 +531,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       if (existing) {
         existing.status = hb.status;
         existing.name = hb.name;
+        existing.isAway = hb.isAway;
       } else {
         studentMap.set(key, {
           key,
@@ -533,7 +539,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           classNum: hb.classNum,
           studentNum: hb.studentNum,
           name: hb.name,
-          status: hb.status
+          status: hb.status,
+          isAway: hb.isAway
         });
       }
     }
@@ -567,6 +574,112 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
   // 실시간 출석 카운트
   const activeCount = sortedStudentRoster.filter(s => s.status === 'connected' || s.status === 'checking').length;
+
+  // 실시간 다른 화면(앱 이탈/딴짓) 보고 있는 학생 목록
+  const awayStudents = useMemo(() => {
+    return sortedStudentRoster.filter(s =>
+      (s.status === 'connected' || s.status === 'checking') && s.isAway
+    );
+  }, [sortedStudentRoster]);
+
+  // ==========================================================================
+  // [미니 플로팅 모니터 (Document PiP 및 Always-On-Top 팝업)]
+  // ==========================================================================
+  const [pipWindow, setPipWindow] = useState<Window | null>(null);
+  const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
+
+  // 컴포넌트 언마운트 시 열려있는 PiP 창 닫기
+  useEffect(() => {
+    return () => {
+      if (pipWindow && !pipWindow.closed) {
+        pipWindow.close();
+      }
+    };
+  }, [pipWindow]);
+
+  const toggleMiniMonitor = useCallback(async () => {
+    if (pipWindow && !pipWindow.closed) {
+      pipWindow.close();
+      setPipWindow(null);
+      setPipContainer(null);
+      return;
+    }
+
+    const PIP_WIDTH = 380;
+    const PIP_HEIGHT = 280;
+
+    // 1) 최신 크롬/엣지 Document Picture-in-Picture 지원 시 (OS 레벨 Always-on-Top 고정)
+    if (typeof window !== 'undefined' && 'documentPictureInPicture' in window && (window as any).documentPictureInPicture?.requestWindow) {
+      try {
+        const newPipWindow = await (window as any).documentPictureInPicture.requestWindow({
+          width: PIP_WIDTH,
+          height: PIP_HEIGHT,
+        });
+
+        newPipWindow.addEventListener('pagehide', () => {
+          setPipWindow(null);
+          setPipContainer(null);
+        });
+
+        const style = newPipWindow.document.createElement('style');
+        style.textContent = `
+          * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+          body { background: #0f172a; color: #f8fafc; overflow: hidden; height: 100vh; width: 100vw; user-select: none; }
+        `;
+        newPipWindow.document.head.appendChild(style);
+
+        const container = newPipWindow.document.createElement('div');
+        container.id = 'mini-monitor-root';
+        container.style.width = '100%';
+        container.style.height = '100%';
+        newPipWindow.document.body.appendChild(container);
+
+        setPipWindow(newPipWindow);
+        setPipContainer(container);
+        showToast('🖥️ 플로팅 미니 모니터가 켜졌습니다. (모든 앱 위에 고정)');
+        return;
+      } catch (err) {
+        console.warn('[PiP] Document PiP failed, fallback to window.open', err);
+      }
+    }
+
+    // 2) Document PiP 미지원 구형 브라우저 fallback: window.open 팝업
+    const screenW = typeof window !== 'undefined' ? window.screen.availWidth : 1920;
+    const left = screenW - PIP_WIDTH - 20;
+    const top = 60;
+    const popup = window.open(
+      '',
+      'LBW_MiniClassMonitor',
+      `width=${PIP_WIDTH},height=${PIP_HEIGHT},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes`
+    );
+
+    if (popup) {
+      popup.document.title = '실시간 출석 & 화면 모니터링';
+      const style = popup.document.createElement('style');
+      style.textContent = `
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        body { background: #0f172a; color: #f8fafc; overflow: hidden; height: 100vh; width: 100vw; user-select: none; }
+      `;
+      popup.document.head.appendChild(style);
+
+      const container = popup.document.createElement('div');
+      container.id = 'mini-monitor-root';
+      container.style.width = '100%';
+      container.style.height = '100%';
+      popup.document.body.appendChild(container);
+
+      popup.addEventListener('beforeunload', () => {
+        setPipWindow(null);
+        setPipContainer(null);
+      });
+
+      setPipWindow(popup);
+      setPipContainer(container);
+      showToast('🖥️ 미니 모니터 팝업창이 열렸습니다.');
+    } else {
+      showToast('⚠️ 팝업창 열기가 차단되었습니다. 브라우저 팝업 허용을 켜주세요.');
+    }
+  }, [pipWindow, showToast]);
 
   // 5. 학생 타일 클릭 시 온디맨드 필기 상세 열람
   const handleSelectStudent = async (studentItem: typeof sortedStudentRoster[0]) => {
@@ -892,6 +1005,49 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
               / 총 {sortedStudentRoster.length}명
             </span>
           </div>
+
+          {/* 🖥️ 플로팅 미니 모니터 버튼 (Always-on-Top) */}
+          <button
+            type="button"
+            onClick={toggleMiniMonitor}
+            style={{
+              background: pipWindow
+                ? 'linear-gradient(135deg, rgba(34, 197, 94, 0.25) 0%, rgba(22, 163, 74, 0.4) 100%)'
+                : 'linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(79, 70, 229, 0.4) 100%)',
+              border: pipWindow ? '1.5px solid #22c55e' : '1.5px solid #818cf8',
+              color: '#ffffff',
+              borderRadius: '8px',
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: pipWindow
+                ? '0 2px 10px rgba(34, 197, 94, 0.3)'
+                : '0 2px 10px rgba(99, 102, 241, 0.3)'
+            }}
+            title="수업 중 PPT나 전자칠판 판서 등 다른 앱을 사용할 때도, 학생 출석 및 다른 화면을 보고 있는 학생을 항상 화면 맨 위에 실시간으로 띄워둡니다."
+          >
+            <span style={{ fontSize: '15px' }}>{pipWindow ? '🟢' : '🖥️'}</span>
+            <span>{pipWindow ? '미니 모니터 닫기' : '미니 모니터 (모든 앱 위)'}</span>
+            {awayStudents.length > 0 && (
+              <span
+                style={{
+                  fontSize: '11px',
+                  background: '#ef4444',
+                  color: '#ffffff',
+                  padding: '1px 7px',
+                  borderRadius: '10px',
+                  fontWeight: 800,
+                  marginLeft: '2px'
+                }}
+              >
+                이탈 {awayStudents.length}
+              </span>
+            )}
+          </button>
 
           {/* 수업자료 다운로드 버튼 */}
           <button
@@ -1307,10 +1463,17 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   let cardBg = '#161b22';
 
                   if (isOnline) {
-                    badgeBg = '#238636';
-                    badgeLabel = '🟢 연결됨';
-                    borderColor = '#388bfd';
-                    cardBg = 'rgba(56, 139, 253, 0.12)';
+                    if (studentItem.isAway) {
+                      badgeBg = '#dc2626';
+                      badgeLabel = '🚨 다른 화면';
+                      borderColor = '#ef4444';
+                      cardBg = 'rgba(239, 68, 68, 0.16)';
+                    } else {
+                      badgeBg = '#238636';
+                      badgeLabel = '🟢 연결됨';
+                      borderColor = '#388bfd';
+                      cardBg = 'rgba(56, 139, 253, 0.12)';
+                    }
                   } else if (isChecking) {
                     badgeBg = '#d29922';
                     badgeLabel = '🟡 확인 중';
@@ -1677,6 +1840,269 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* ====================================================================
+          미니 플로팅 모니터 (Document PiP / Always-On-Top 윈도우 포털)
+          ==================================================================== */}
+      {pipContainer && createPortal(
+        <MiniMonitorContent
+          lessonTitle={cleanLessonTitle}
+          activeCount={activeCount}
+          totalCount={sortedStudentRoster.length}
+          awayStudents={awayStudents}
+          onClose={() => {
+            if (pipWindow && !pipWindow.closed) {
+              pipWindow.close();
+            }
+            setPipWindow(null);
+            setPipContainer(null);
+          }}
+        />,
+        pipContainer
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// [플로팅 미니 모니터 컴포넌트: 접속 인원수 및 다른 화면 보는 학생 실시간 관제]
+// ============================================================================
+interface MiniMonitorContentProps {
+  lessonTitle: string;
+  activeCount: number;
+  totalCount: number;
+  awayStudents: Array<{
+    key: string;
+    grade: string;
+    classNum: string;
+    studentNum: string;
+    name: string;
+  }>;
+  onClose: () => void;
+}
+
+const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
+  lessonTitle,
+  activeCount,
+  totalCount,
+  awayStudents,
+  onClose
+}) => {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        padding: '12px 14px',
+        background: '#0f172a',
+        color: '#f8fafc',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        userSelect: 'none'
+      }}
+    >
+      {/* 1. 상단 타이틀 & 닫기 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '8px',
+          paddingBottom: '6px',
+          borderBottom: '1px solid rgba(148, 163, 184, 0.2)'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+          <span style={{ fontSize: '15px' }}>🖥️</span>
+          <span
+            style={{
+              fontSize: '13px',
+              fontWeight: 800,
+              color: '#38bdf8',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}
+            title={lessonTitle}
+          >
+            {lessonTitle}
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          type="button"
+          style={{
+            background: 'rgba(255, 255, 255, 0.1)',
+            border: 'none',
+            color: '#94a3b8',
+            borderRadius: '6px',
+            width: '24px',
+            height: '24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            fontSize: '13px',
+            fontWeight: 700
+          }}
+          title="모니터 닫기"
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* 2. 접속한 인원수 카드 */}
+      <div
+        style={{
+          background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%)',
+          border: '1px solid rgba(56, 189, 248, 0.3)',
+          borderRadius: '10px',
+          padding: '8px 12px',
+          marginBottom: '8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span
+            style={{
+              display: 'inline-block',
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              background: '#22c55e',
+              boxShadow: '0 0 8px #22c55e'
+            }}
+          />
+          <span style={{ fontSize: '12.5px', color: '#cbd5e1', fontWeight: 700 }}>
+            현재 접속 인원
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+          <span style={{ fontSize: '22px', fontWeight: 900, color: '#4ade80' }}>
+            {activeCount}
+          </span>
+          <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 700 }}>
+            / {totalCount}명
+          </span>
+        </div>
+      </div>
+
+      {/* 3. 접속 후 다른 화면 보고 있는 학생 (이탈자) 실시간 표시 */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          background: awayStudents.length > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.08)',
+          border: awayStudents.length > 0 ? '1.5px solid #ef4444' : '1px solid rgba(34, 197, 94, 0.3)',
+          borderRadius: '10px',
+          padding: '8px 10px',
+          overflow: 'hidden'
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '6px'
+          }}
+        >
+          <span
+            style={{
+              fontSize: '12px',
+              fontWeight: 800,
+              color: awayStudents.length > 0 ? '#f87171' : '#4ade80',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            {awayStudents.length > 0 ? (
+              <>
+                <span>🚨</span>
+                <span>다른 화면 보는 중 ({awayStudents.length}명)</span>
+              </>
+            ) : (
+              <>
+                <span>✨</span>
+                <span>수업 화면 집중 중</span>
+              </>
+            )}
+          </span>
+        </div>
+
+        {/* 학생 목록 (스크롤 가능 칩 뷰) */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '6px',
+            alignContent: 'flex-start',
+            paddingRight: '2px'
+          }}
+        >
+          {awayStudents.length === 0 ? (
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#4ade80',
+                fontSize: '12.5px',
+                fontWeight: 600
+              }}
+            >
+              <span>모든 학생이 필기 화면을 보고 있습니다 👍</span>
+            </div>
+          ) : (
+            awayStudents.map(student => (
+              <div
+                key={student.key}
+                style={{
+                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.35) 0%, rgba(185, 28, 28, 0.45) 100%)',
+                  border: '1px solid #ef4444',
+                  borderRadius: '16px',
+                  padding: '4px 10px',
+                  fontSize: '12px',
+                  fontWeight: 800,
+                  color: '#fee2e2',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  boxShadow: '0 2px 6px rgba(239, 68, 68, 0.3)'
+                }}
+              >
+                <span style={{ color: '#ef4444', fontSize: '10px' }}>●</span>
+                <span>
+                  {student.grade}-{student.classNum} {student.studentNum}번 {student.name}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* 4. 하단 안내 문구 */}
+      <div
+        style={{
+          marginTop: '6px',
+          textAlign: 'center',
+          fontSize: '10px',
+          color: '#64748b'
+        }}
+      >
+        📌 PPT나 판서 앱 위에도 항상 최상위에 떠 있습니다
+      </div>
     </div>
   );
 };

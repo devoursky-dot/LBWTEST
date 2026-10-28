@@ -23,6 +23,7 @@ export interface StudentPresenceInfo {
   name: string;
   status: StudentStatus;
   lastActiveTime: number; // Date.now() ms
+  isAway?: boolean; // 다른 화면/앱을 보고 있는지 여부 (document.hidden || !document.hasFocus())
 }
 
 export interface AttachedFileItem {
@@ -69,6 +70,7 @@ export interface RealtimeSignalPayload {
     classNum: string;
     studentNum: string;
     name: string;
+    isAway?: boolean;
   };
   noteRecord?: ClassNoteRecord;
   timestamp: number; // ms
@@ -91,6 +93,7 @@ class ClassroomRealtimeManager {
   private listeners: Set<SignalListener> = new Set();
   private localBroadcastListener: ((e: MessageEvent) => void) | null = null;
   private pingIntervalId: any = null;
+  private appVisibilityCleanup: (() => void) | null = null;
   private touchThrottleTimer: any = null;
   private lastTouchRegisteredTime: number = 0;
 
@@ -464,7 +467,7 @@ class ClassroomRealtimeManager {
   }
 
   /**
-   * 학생: 5초 주기 초경량 생존 핑 발송
+   * 학생: 5초 주기 초경량 생존 핑 발송 (다른 화면/탭 이탈 감지 포함)
    */
   private startStudentPing(
     lessonId: string,
@@ -472,12 +475,20 @@ class ClassroomRealtimeManager {
   ): void {
     this.stopStudentPing();
 
+    const getIsAway = (): boolean => {
+      if (typeof document === 'undefined') return false;
+      return Boolean(document.hidden || !document.hasFocus());
+    };
+
     const sendPing = () => {
       if (this.currentLessonId !== lessonId) return;
       this.sendSignal({
         type: 'STUDENT_PING',
         lessonId,
-        student: studentInfo
+        student: {
+          ...studentInfo,
+          isAway: getIsAway()
+        }
       }).catch(() => {});
     };
 
@@ -485,12 +496,33 @@ class ClassroomRealtimeManager {
     sendPing();
     // 5초 주기 정기 발송
     this.pingIntervalId = setInterval(sendPing, 5000);
+
+    // 학생이 탭을 전환하거나 다른 앱을 열 때(또는 복귀할 때) 즉각 감지하여 실시간 알림 발송
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const handleVisibilityOrFocusChange = () => {
+        sendPing();
+      };
+
+      document.addEventListener('visibilitychange', handleVisibilityOrFocusChange);
+      window.addEventListener('focus', handleVisibilityOrFocusChange);
+      window.addEventListener('blur', handleVisibilityOrFocusChange);
+
+      this.appVisibilityCleanup = () => {
+        document.removeEventListener('visibilitychange', handleVisibilityOrFocusChange);
+        window.removeEventListener('focus', handleVisibilityOrFocusChange);
+        window.removeEventListener('blur', handleVisibilityOrFocusChange);
+      };
+    }
   }
 
   private stopStudentPing(): void {
     if (this.pingIntervalId) {
       clearInterval(this.pingIntervalId);
       this.pingIntervalId = null;
+    }
+    if (this.appVisibilityCleanup) {
+      this.appVisibilityCleanup();
+      this.appVisibilityCleanup = null;
     }
   }
 
