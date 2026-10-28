@@ -2757,6 +2757,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       if (signal.type === 'RESET_SESSION') {
         setIsConnectedToBoard(false);
         submissionIdRef.current = null;
+        classroomRealtime.leaveLesson(studentInfo || undefined);
         showToast('📢 선생님이 새 수업을 시작하여 세션이 초기화되었습니다.');
         return;
       }

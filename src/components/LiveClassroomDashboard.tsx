@@ -615,8 +615,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       return;
     }
 
-    const PIP_WIDTH = 150;
-    const PIP_HEIGHT = 300;
+    const PIP_WIDTH = 70;
+    const PIP_HEIGHT = 220;
 
     // 1) 최신 크롬/엣지 Document Picture-in-Picture 지원 시 (OS 레벨 Always-on-Top 고정)
     if (typeof window !== 'undefined' && 'documentPictureInPicture' in window && (window as any).documentPictureInPicture?.requestWindow) {
@@ -1889,109 +1889,97 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        padding: '8px 6px',
-        background: '#0f172a',
+        width: '100%',
+        padding: '5px 4px',
+        background: '#090d16',
         color: '#f8fafc',
         boxSizing: 'border-box',
         overflow: 'hidden',
-        userSelect: 'none'
+        userSelect: 'none',
+        alignItems: 'center'
       }}
     >
-      {/* 1. 상단 타이틀 & 닫기 */}
-      <div
+      {/* 1. 상단 닫기 버튼 */}
+      <button
+        onClick={onClose}
+        type="button"
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: '6px',
-          paddingBottom: '4px',
-          borderBottom: '1px solid rgba(148, 163, 184, 0.2)'
+          background: 'rgba(255, 255, 255, 0.08)',
+          border: '1px solid rgba(255, 255, 255, 0.15)',
+          color: '#94a3b8',
+          cursor: 'pointer',
+          fontSize: '11px',
+          fontWeight: 800,
+          borderRadius: '4px',
+          width: '100%',
+          padding: '2px 0',
+          marginBottom: '5px'
         }}
+        title={`[${lessonTitle}] 미니 모니터 닫기`}
       >
-        <span
-          style={{
-            fontSize: '11px',
-            fontWeight: 800,
-            color: '#38bdf8',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis'
-          }}
-          title={lessonTitle}
-        >
-          🖥️ 출석 관제
-        </span>
-        <button
-          onClick={onClose}
-          type="button"
-          style={{
-            background: 'transparent',
-            border: 'none',
-            color: '#94a3b8',
-            cursor: 'pointer',
-            fontSize: '12px',
-            fontWeight: 700,
-            padding: '0 2px'
-          }}
-          title="모니터 닫기"
-        >
-          ✕
-        </button>
-      </div>
+        ✕
+      </button>
 
-      {/* 2. 접속 인원수 카드 */}
+      {/* 2. 접속 인원수 (원형/슬림 뱃지) */}
       <div
         style={{
-          background: 'rgba(30, 41, 59, 0.9)',
-          border: '1px solid rgba(56, 189, 248, 0.25)',
+          width: '100%',
+          background: 'rgba(30, 41, 59, 0.95)',
+          border: '1px solid rgba(56, 189, 248, 0.35)',
           borderRadius: '6px',
-          padding: '4px 6px',
-          marginBottom: '6px',
-          textAlign: 'center'
+          padding: '5px 2px',
+          marginBottom: '5px',
+          textAlign: 'center',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.4)'
         }}
-        title="현재 실시간 접속 인원 / 전체 학생"
+        title={`접속한 인원: ${activeCount}명 / 전체 ${totalCount}명`}
       >
-        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 600 }}>접속</div>
-        <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', lineHeight: 1.15 }}>
-          {activeCount}<span style={{ fontSize: '11.5px', color: '#64748b' }}>/{totalCount}</span>
+        <div style={{ fontSize: '9px', color: '#38bdf8', fontWeight: 800 }}>접속</div>
+        <div style={{ fontSize: '17px', fontWeight: 900, color: '#4ade80', lineHeight: 1.1 }}>
+          {activeCount}
+        </div>
+        <div style={{ fontSize: '9.5px', color: '#64748b', fontWeight: 700 }}>
+          /{totalCount}
         </div>
       </div>
 
-      {/* 3. 접속 후 다른 화면 보고 있는 학생 (이탈자) 실시간 표시 */}
+      {/* 3. 딴짓/이탈 학생 섹션 (폭 1/4 슬림 툴바) */}
       <div
         style={{
           flex: 1,
+          width: '100%',
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          background: awayStudents.length > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(34, 197, 94, 0.08)',
+          background: awayStudents.length > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.08)',
           border: awayStudents.length > 0 ? '1px solid #ef4444' : '1px solid rgba(34, 197, 94, 0.25)',
           borderRadius: '6px',
-          padding: '6px 4px',
+          padding: '4px 2px',
           overflow: 'hidden'
         }}
+        title={awayStudents.length > 0 ? `다른 화면 보는 중: ${awayStudents.length}명` : '모든 학생이 수업 화면 집중 중'}
       >
         <div
           style={{
-            fontSize: '10.5px',
+            fontSize: '9px',
             fontWeight: 800,
             color: awayStudents.length > 0 ? '#f87171' : '#4ade80',
-            marginBottom: '4px',
+            marginBottom: '3px',
             textAlign: 'center'
           }}
         >
-          {awayStudents.length > 0 ? `🚨 이탈 (${awayStudents.length})` : '✨ 전원 집중'}
+          {awayStudents.length > 0 ? `🚨${awayStudents.length}` : '✨정상'}
         </div>
 
-        {/* 학생 목록 (세로 1열 칩 뷰) */}
+        {/* 학생 목록 (세로 1열 슬림 칩) */}
         <div
           style={{
             flex: 1,
             overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
-            gap: '4px',
-            paddingRight: '1px'
+            gap: '3px',
+            padding: '0 1px'
           }}
         >
           {awayStudents.length === 0 ? (
@@ -2003,32 +1991,31 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
                 justifyContent: 'center',
                 color: '#4ade80',
                 fontSize: '11px',
-                fontWeight: 600
+                fontWeight: 700
               }}
-              title="모든 학생이 수업 화면을 보고 있습니다"
             >
-              ● 정상
+              ●
             </div>
           ) : (
             awayStudents.map(student => (
               <div
                 key={student.key}
                 style={{
-                  background: 'rgba(239, 68, 68, 0.3)',
+                  background: 'rgba(239, 68, 68, 0.35)',
                   border: '1px solid #ef4444',
                   borderRadius: '4px',
-                  padding: '3px 4px',
-                  fontSize: '11px',
-                  fontWeight: 700,
+                  padding: '2px 1px',
+                  fontSize: '9.5px',
+                  fontWeight: 800,
                   color: '#fee2e2',
                   textAlign: 'center',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis'
                 }}
-                title={`${student.grade}-${student.classNum} ${student.studentNum}번 ${student.name} 학생이 다른 화면을 보고 있습니다`}
+                title={`${student.studentNum}번 ${student.name} (다른 화면 감지)`}
               >
-                {student.studentNum}번 {student.name}
+                {student.studentNum}번
               </div>
             ))
           )}
