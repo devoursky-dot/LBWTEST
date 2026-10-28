@@ -24,13 +24,12 @@ import {
   fileToBase64,
   GAS_CODE_TEMPLATE
 } from './lib/driveService';
+import { getApiBaseUrl } from './lib/apiConfig';
 import './index.css';
 
 const ADMIN_ID = 'admin';
 
-const apiBase = typeof window !== 'undefined' && window.location.hostname.includes('github.io')
-  ? 'https://lbwtest.vercel.app'
-  : '';
+const apiBase = getApiBaseUrl();
 
 type AuthMode = 'guest' | 'teacher' | 'admin' | 'whiteboard';
 

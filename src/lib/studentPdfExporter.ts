@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import { type Stroke, drawSingleStroke } from './drawingGeometry';
+import { type Stroke, drawSingleStroke, loadImageSafely } from './drawingGeometry';
 import type { EmbeddedImageItem } from '../components/EmbeddedImageLayer';
 
 export interface TextItem {
@@ -33,19 +33,7 @@ export interface StudentPdfExportOptions {
   A4_HEIGHT: number;
 }
 
-/**
- * 이미지 소스를 안전하게 로드하는 비동기 헬퍼
- */
-function loadImageSafely(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    if (!src) return resolve(null);
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-}
+
 
 /**
  * [1페이지 전용 고화질 리포트 표지 Canvas 렌더러]
@@ -275,7 +263,9 @@ export async function exportStudentNotebookToPdf(
     // (2) 임베드 이미지(문제 스티커) 렌더링
     if (page.images && page.images.length > 0) {
       for (const imgItem of page.images) {
-        const loadedImg = await loadImageSafely(imgItem.src);
+        const imgUrl = imgItem.src || (imgItem as any).dataUrl;
+        if (!imgUrl) continue;
+        const loadedImg = await loadImageSafely(imgUrl);
         if (loadedImg) {
           ctx.save();
           ctx.drawImage(loadedImg, imgItem.x, imgItem.y, imgItem.width, imgItem.height);

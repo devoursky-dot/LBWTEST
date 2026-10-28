@@ -131,8 +131,10 @@ export async function uploadNoteToGoogleDrive(
           action: 'upload',
           folderId: targetFolderId,
           fileName: fileName,
+          name: fileName,
           mimeType: 'image/png',
-          fileData: base64Content
+          fileData: base64Content,
+          base64: base64Content
         };
 
         const response = await fetch(gasUploadUrl, {

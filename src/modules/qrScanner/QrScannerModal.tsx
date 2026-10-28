@@ -105,8 +105,10 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       if (video && canvas && video.readyState === video.HAVE_ENOUGH_DATA) {
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (ctx) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+          }
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
           try {

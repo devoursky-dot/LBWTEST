@@ -1,19 +1,6 @@
 import { jsPDF } from 'jspdf';
 import type { ClassNoteRecord } from './supabase';
-
-/**
- * 이미지 소스를 안전하게 로드하는 비동기 헬퍼
- */
-function loadImageSafely(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    if (!src) return resolve(null);
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
-}
+import { loadImageSafely } from './drawingGeometry';
 
 /**
  * 표지(Cover Page)를 Canvas 2D로 렌더링하여 CJK 한글 폰트가 100% 깨지지 않고
@@ -208,8 +195,9 @@ async function renderStudentCanvasPageDataUrl(
   // 2. 임베디드 스티커/사진 이미지들 렌더링 (오프셋 없이 1:1 배치)
   const images = pageData.images || [];
   for (const imgItem of images) {
-    if (imgItem.dataUrl) {
-      const stickerImg = await loadImageSafely(imgItem.dataUrl);
+    const imgUrl = (imgItem as any).src || (imgItem as any).dataUrl;
+    if (imgUrl) {
+      const stickerImg = await loadImageSafely(imgUrl);
       if (stickerImg) {
         ctx.save();
         ctx.drawImage(

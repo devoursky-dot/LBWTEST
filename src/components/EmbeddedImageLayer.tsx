@@ -5,6 +5,7 @@ export interface EmbeddedImageItem {
   id: string;
   src: string; // 잘라낸 표시용 DataURL
   originalSrc: string; // 언제든 재자르기 가능한 원본 DataURL
+  dataUrl?: string; // 하위 호환 및 내보내기/압축용 DataURL 별칭
   x: number; // A4 좌표계 기준 X
   y: number; // A4 좌표계 기준 Y
   width: number; // A4 좌표계 기준 너비

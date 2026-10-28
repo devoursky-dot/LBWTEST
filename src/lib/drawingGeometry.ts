@@ -3,6 +3,20 @@
 // - GoodNotes / Procreate 방식 벡터 보간 및 충돌 검사
 // ============================================================================
 
+/**
+ * 이미지 안전 비동기 로드 헬퍼 (CORS anonymous 지원)
+ */
+export function loadImageSafely(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    if (!src) return resolve(null);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
 export interface StrokePoint {
   x: number;
   y: number;

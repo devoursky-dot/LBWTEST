@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
 import { getApiBaseUrl } from '../lib/apiConfig';
@@ -33,8 +32,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const currentLessonId = lesson.folderId || lesson.id;
   const cleanLessonTitle = lesson.name.replace('[QR수업]', '').trim();
 
-  // QR 코드 상태
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  // 학생 접속 URL 상태
   const [studentUrl, setStudentUrl] = useState<string>('');
 
   // 실시간 학생 접속 및 제출 목록 상태
@@ -49,8 +47,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const [pdfProgress, setPdfProgress] = useState<{ current: number; total: number; name: string } | null>(null);
 
-  // 사이드바 접힘 상태 및 25명 한화면 자동배치 보기 모드 ('auto' | 'scroll')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  // 25명 한화면 자동배치 보기 모드 ('auto' | 'scroll')
   const [viewMode, setViewMode] = useState<'auto' | 'scroll'>('auto');
 
   // 수업자료 목록 및 다운로드 모달 상태 (본 수업에 공식 등록된 자료만 엄격히 관리)
@@ -221,7 +218,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     }
   };
 
-  // 1. 학생 참여 QR 코드 및 전용 접속 URL 생성 & 수업자료 일괄 수집
+  // 1. 학생 전용 접속 URL 생성 & 수업자료 일괄 수집
   useEffect(() => {
     const currentPath = window.location.pathname.replace(/\/$/, '');
     const baseOrigin = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
@@ -235,14 +232,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       }
     }
     setStudentUrl(generatedUrl);
-
-    QRCode.toDataURL(generatedUrl, {
-      width: 400,
-      margin: 1,
-      color: { dark: '#0f172a', light: '#ffffff' }
-    }).then(setQrCodeDataUrl).catch((err) => {
-      console.error('QR 생성 실패:', err);
-    });
 
     // 1-2. 본 수업에 공식 등록된 수업자료 즉시 동기화
     fetchRegisteredLessonMaterials();
@@ -362,7 +351,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     isAway?: boolean;
   }>>(new Map());
 
-  // 2시간 무터치 자동 종료 감지용 마지막 터치 시간 (ms)
+  // 1시간 절대 세션 타이머 (수업 시작 기준 60분 후 자동 종료)
+  const sessionStartTimeRef = useRef<number>(Date.now());
+  const [remainingMinutes, setRemainingMinutes] = useState<number>(60);
   const lastInteractionTimeRef = useRef<number>(Date.now());
 
   // 화면 터치/클릭 발생 시 마지막 조작 시간 갱신 & Supabase 세션 터치
@@ -376,14 +367,17 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     const timer = setInterval(() => {
       const now = Date.now();
 
-      // [A] 2시간(7200초) 무터치 시 자동 세션 종료
-      if (now - lastInteractionTimeRef.current > 2 * 60 * 60 * 1000) {
+      // [A] 1시간(3600초) 수업 기준 자동 종료
+      const elapsed = now - sessionStartTimeRef.current;
+      const ONE_HOUR_MS = 60 * 60 * 1000;
+      if (elapsed >= ONE_HOUR_MS) {
         clearInterval(timer);
-        showToast('⚠️ 2시간 동안 조작이 없어 수업 세션이 자동으로 종료되었습니다.');
+        showToast('⏱️ 수업 시간(1시간)이 경과하여 수업이 안전하게 자동 종료되었습니다.');
         classroomRealtime.closeTeacherSession(currentLessonId);
         onExit();
         return;
       }
+      setRemainingMinutes(Math.max(1, Math.ceil((ONE_HOUR_MS - elapsed) / 60000)));
 
       // [B] 학생 5초 핑 상태 정밀 판정 (8초 이내: 정상, 8~15초: 확인 중, 15초 초과: 끊김)
       setStudentHeartbeats((prev) => {
@@ -615,8 +609,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       return;
     }
 
-    const PIP_WIDTH = 70;
-    const PIP_HEIGHT = 220;
+    const PIP_WIDTH = 320;
+    const PIP_HEIGHT = 40;
 
     // 1) 최신 크롬/엣지 Document Picture-in-Picture 지원 시 (OS 레벨 Always-on-Top 고정)
     if (typeof window !== 'undefined' && 'documentPictureInPicture' in window && (window as any).documentPictureInPicture?.requestWindow) {
@@ -1021,6 +1015,25 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             </span>
           </div>
 
+          {/* ⏱️ 1시간 수업 타이머 배지 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              background: '#21262d',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              border: '1px solid #30363d',
+              fontSize: '12.5px',
+              color: remainingMinutes <= 5 ? '#f87171' : '#cbd5e1'
+            }}
+            title="모든 수업은 1시간 기준이며 1시간 후 자동 종료됩니다."
+          >
+            <span>⏱️</span>
+            <span style={{ fontWeight: 700 }}>{remainingMinutes}분 남음</span>
+          </div>
+
           {/* 🖥️ 플로팅 미니 모니터 버튼 (Always-on-Top) */}
           <button
             type="button"
@@ -1134,6 +1147,34 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             🔄 수업 초기화
           </button>
 
+          {/* 학생 접속 주소 복사 버튼 */}
+          <button
+            type="button"
+            style={{
+              background: '#21262d',
+              border: '1px solid #30363d',
+              color: '#c9d1d9',
+              borderRadius: '8px',
+              padding: '8px 12px',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            onClick={() => {
+              if (studentUrl) {
+                navigator.clipboard.writeText(studentUrl);
+                showToast('✅ 학생 접속 URL이 복사되었습니다.');
+              }
+            }}
+            title="학생 접속 주소를 클립보드에 복사합니다."
+          >
+            <span>🔗</span>
+            <span>주소 복사</span>
+          </button>
+
           {/* 수업 나가기 버튼 */}
           <button
             type="button"
@@ -1177,135 +1218,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         </div>
       )}
 
-      {/* 3. 대시보드 본문 (좌측: QR패널 / 우측: 전체 학생 타일 그리드) */}
+      {/* 3. 대시보드 본문 (전체 화면 학생 타일 그리드 전면 렌더링) */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* 좌측 패널 (대형 QR코드 및 접속 안내) */}
-        {!sidebarCollapsed && (
-          <aside
-            style={{
-              width: '320px',
-              background: '#161b22',
-              borderRight: '1px solid #30363d',
-              padding: '24px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              flexShrink: 0,
-              overflowY: 'auto'
-            }}
-          >
-            <h2 style={{ fontSize: '15px', color: '#58a6ff', marginBottom: '14px', fontWeight: 700, textAlign: 'center' }}>
-              📷 학생 참여 초대형 QR코드
-            </h2>
-
-            {qrCodeDataUrl ? (
-              <div
-                style={{
-                  background: '#ffffff',
-                  padding: '14px',
-                  borderRadius: '16px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.6)'
-                }}
-              >
-                <img
-                  src={qrCodeDataUrl}
-                  alt="Student QR Code"
-                  style={{ width: '230px', height: '230px', display: 'block' }}
-                />
-              </div>
-            ) : (
-              <div style={{ width: '230px', height: '230px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e' }}>
-                QR코드 생성 중...
-              </div>
-            )}
-
-            <p style={{ fontSize: '12.5px', color: '#8b949e', textAlign: 'center', marginTop: '12px', lineHeight: 1.5 }}>
-              태블릿 카메라로 QR을 스캔한 뒤<br />
-              <strong>[📡 전자칠판 연결]</strong>을 누르면<br />
-              우측에 실시간 출석으로 표시됩니다.
-            </p>
-
-            <div style={{ display: 'flex', gap: '8px', marginTop: '12px', width: '100%' }}>
-              <button
-                type="button"
-                style={{
-                  flex: 1,
-                  padding: '8px 10px',
-                  fontSize: '12px',
-                  background: '#21262d',
-                  color: '#c9d1d9',
-                  border: '1px solid #30363d',
-                  borderRadius: '6px',
-                  cursor: 'pointer'
-                }}
-                onClick={() => {
-                  navigator.clipboard.writeText(studentUrl);
-                  showToast('✅ 학생 접속 URL이 복사되었습니다.');
-                }}
-              >
-                🔗 주소 복사
-              </button>
-              <button
-                type="button"
-                style={{
-                  flex: 1,
-                  padding: '8px 10px',
-                  fontSize: '12px',
-                  background: '#1f6feb',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
-                  cursor: 'pointer'
-                }}
-                onClick={() => window.open(studentUrl, '_blank')}
-              >
-                🚀 학생 창 열기
-              </button>
-            </div>
-
-            <div style={{ marginTop: 'auto', paddingTop: '16px', width: '100%', borderTop: '1px solid #30363d', textAlign: 'center' }}>
-              <button
-                type="button"
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#8b949e',
-                  fontSize: '12px',
-                  cursor: 'pointer'
-                }}
-                onClick={() => setSidebarCollapsed(true)}
-              >
-                ◀ QR 패널 접기 (학생 타일 넓게 보기)
-              </button>
-            </div>
-          </aside>
-        )}
-
-        {/* 사이드바 접혔을 때 펼치기 토글 버튼 */}
-        {sidebarCollapsed && (
-          <button
-            type="button"
-            style={{
-              width: '32px',
-              background: '#161b22',
-              border: 'none',
-              borderRight: '1px solid #30363d',
-              color: '#8b949e',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              writingMode: 'vertical-rl'
-            }}
-            onClick={() => setSidebarCollapsed(false)}
-            title="QR 패널 펼치기"
-          >
-            ▶ QR 패널 열기
-          </button>
-        )}
-
-        {/* 우측 메인 영역: 30석 고정 타일 배치 그리드 */}
+        {/* 전체 학생 타일 배치 그리드 */}
         <main
           style={{
             flex: 1,
@@ -1887,140 +1802,113 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
+        alignItems: 'center',
         height: '100%',
         width: '100%',
-        padding: '5px 4px',
+        padding: '0 8px',
         background: '#090d16',
         color: '#f8fafc',
         boxSizing: 'border-box',
         overflow: 'hidden',
         userSelect: 'none',
-        alignItems: 'center'
+        gap: '8px'
       }}
     >
-      {/* 1. 상단 닫기 버튼 */}
+      {/* 1. 접속 인원수 아이콘 뱃지 */}
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          background: 'rgba(30, 41, 59, 0.95)',
+          border: '1px solid rgba(56, 189, 248, 0.35)',
+          borderRadius: '6px',
+          padding: '3px 7px',
+          fontSize: '12px',
+          fontWeight: 800,
+          color: '#4ade80',
+          flexShrink: 0
+        }}
+        title={`[${lessonTitle}] 접속 학생: ${activeCount}명 / 전체 ${totalCount}명`}
+      >
+        <span style={{ fontSize: '10px' }}>🟢</span>
+        <span>{activeCount}</span>
+        <span style={{ fontSize: '10.5px', color: '#64748b', fontWeight: 600 }}>/{totalCount}</span>
+      </div>
+
+      {/* 2. 구분선 */}
+      <div style={{ width: '1px', height: '18px', background: 'rgba(148, 163, 184, 0.25)', flexShrink: 0 }} />
+
+      {/* 3. 이탈 학생 영역 (가로 스크롤 가능) */}
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '5px',
+          overflowX: 'auto',
+          scrollbarWidth: 'none',
+          padding: '2px 0'
+        }}
+      >
+        {awayStudents.length === 0 ? (
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              color: '#4ade80',
+              fontSize: '11px',
+              fontWeight: 600,
+              whiteSpace: 'nowrap'
+            }}
+            title="모든 학생이 수업 화면을 보고 있습니다"
+          >
+            <span>✨</span>
+            <span>정상</span>
+          </div>
+        ) : (
+          awayStudents.map(student => (
+            <span
+              key={student.key}
+              style={{
+                background: 'rgba(239, 68, 68, 0.3)',
+                border: '1px solid #ef4444',
+                borderRadius: '4px',
+                padding: '2px 6px',
+                fontSize: '11px',
+                fontWeight: 700,
+                color: '#fee2e2',
+                whiteSpace: 'nowrap',
+                flexShrink: 0
+              }}
+              title={`${student.grade}-${student.classNum} ${student.studentNum}번 ${student.name} (다른 화면 감지)`}
+            >
+              🚨 {student.studentNum}번 {student.name}
+            </span>
+          ))
+        )}
+      </div>
+
+      {/* 4. 닫기 버튼 */}
       <button
         onClick={onClose}
         type="button"
         style={{
-          background: 'rgba(255, 255, 255, 0.08)',
-          border: '1px solid rgba(255, 255, 255, 0.15)',
+          background: 'transparent',
+          border: 'none',
           color: '#94a3b8',
           cursor: 'pointer',
-          fontSize: '11px',
+          fontSize: '12px',
           fontWeight: 800,
-          borderRadius: '4px',
-          width: '100%',
-          padding: '2px 0',
-          marginBottom: '5px'
+          padding: '2px 4px',
+          flexShrink: 0
         }}
-        title={`[${lessonTitle}] 미니 모니터 닫기`}
+        title="미니 모니터 닫기"
       >
         ✕
       </button>
-
-      {/* 2. 접속 인원수 (원형/슬림 뱃지) */}
-      <div
-        style={{
-          width: '100%',
-          background: 'rgba(30, 41, 59, 0.95)',
-          border: '1px solid rgba(56, 189, 248, 0.35)',
-          borderRadius: '6px',
-          padding: '5px 2px',
-          marginBottom: '5px',
-          textAlign: 'center',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.4)'
-        }}
-        title={`접속한 인원: ${activeCount}명 / 전체 ${totalCount}명`}
-      >
-        <div style={{ fontSize: '9px', color: '#38bdf8', fontWeight: 800 }}>접속</div>
-        <div style={{ fontSize: '17px', fontWeight: 900, color: '#4ade80', lineHeight: 1.1 }}>
-          {activeCount}
-        </div>
-        <div style={{ fontSize: '9.5px', color: '#64748b', fontWeight: 700 }}>
-          /{totalCount}
-        </div>
-      </div>
-
-      {/* 3. 딴짓/이탈 학생 섹션 (폭 1/4 슬림 툴바) */}
-      <div
-        style={{
-          flex: 1,
-          width: '100%',
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          background: awayStudents.length > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.08)',
-          border: awayStudents.length > 0 ? '1px solid #ef4444' : '1px solid rgba(34, 197, 94, 0.25)',
-          borderRadius: '6px',
-          padding: '4px 2px',
-          overflow: 'hidden'
-        }}
-        title={awayStudents.length > 0 ? `다른 화면 보는 중: ${awayStudents.length}명` : '모든 학생이 수업 화면 집중 중'}
-      >
-        <div
-          style={{
-            fontSize: '9px',
-            fontWeight: 800,
-            color: awayStudents.length > 0 ? '#f87171' : '#4ade80',
-            marginBottom: '3px',
-            textAlign: 'center'
-          }}
-        >
-          {awayStudents.length > 0 ? `🚨${awayStudents.length}` : '✨정상'}
-        </div>
-
-        {/* 학생 목록 (세로 1열 슬림 칩) */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '3px',
-            padding: '0 1px'
-          }}
-        >
-          {awayStudents.length === 0 ? (
-            <div
-              style={{
-                height: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#4ade80',
-                fontSize: '11px',
-                fontWeight: 700
-              }}
-            >
-              ●
-            </div>
-          ) : (
-            awayStudents.map(student => (
-              <div
-                key={student.key}
-                style={{
-                  background: 'rgba(239, 68, 68, 0.35)',
-                  border: '1px solid #ef4444',
-                  borderRadius: '4px',
-                  padding: '2px 1px',
-                  fontSize: '9.5px',
-                  fontWeight: 800,
-                  color: '#fee2e2',
-                  textAlign: 'center',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis'
-                }}
-                title={`${student.studentNum}번 ${student.name} (다른 화면 감지)`}
-              >
-                {student.studentNum}번
-              </div>
-            ))
-          )}
-        </div>
-      </div>
     </div>
   );
 };

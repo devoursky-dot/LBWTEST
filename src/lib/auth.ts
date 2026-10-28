@@ -428,25 +428,42 @@ export function setWhiteboardPermanentAuth(authed: boolean): void {
 // ============================================================================
 
 /**
- * 학생 학번 유효성 검사 (1101 ~ 3830)
- * 학년: 1~3, 반: 1~8, 번호: 01~30
+ * 학생 학번 유효성 검사 (4자리 또는 5자리 학번 유연 지원)
+ * - 4자리: 1학년 2반 05번 -> 1205 (학년 1~6, 반 1~9, 번호 01~50)
+ * - 5자리: 1학년 12반 05번 -> 11205 (학년 1~6, 반 01~20, 번호 01~50)
  */
 export function parseStudentId(id: string): { valid: boolean; grade: string; classNum: string; studentNum: string; label: string } {
   const clean = id.trim();
-  if (!/^[1-3][1-8](0[1-9]|[1-2][0-9]|30)$/.test(clean)) {
-    return { valid: false, grade: '', classNum: '', studentNum: '', label: '' };
+  
+  // 4자리 표준 (학년 1자리, 반 1자리, 번호 2자리)
+  if (/^[1-6][1-9](0[1-9]|[1-4][0-9]|50)$/.test(clean)) {
+    const grade = clean[0];
+    const classNum = clean[1];
+    const studentNum = parseInt(clean.slice(2), 10).toString();
+    return {
+      valid: true,
+      grade,
+      classNum,
+      studentNum,
+      label: `${grade}학년 ${classNum}반 ${studentNum}번`
+    };
   }
-  const grade = clean[0];
-  const classNum = clean[1];
-  const numInt = parseInt(clean.slice(2), 10);
-  const studentNum = numInt.toString();
-  return {
-    valid: true,
-    grade,
-    classNum,
-    studentNum,
-    label: `${grade}학년 ${classNum}반 ${studentNum}번`
-  };
+
+  // 5자리 확장 (학년 1자리, 반 2자리, 번호 2자리: 예 11005 -> 1학년 10반 5번)
+  if (/^[1-6](0[1-9]|1[0-9]|20)(0[1-9]|[1-4][0-9]|50)$/.test(clean)) {
+    const grade = clean[0];
+    const classNum = parseInt(clean.slice(1, 3), 10).toString();
+    const studentNum = parseInt(clean.slice(3), 10).toString();
+    return {
+      valid: true,
+      grade,
+      classNum,
+      studentNum,
+      label: `${grade}학년 ${classNum}반 ${studentNum}번`
+    };
+  }
+
+  return { valid: false, grade: '', classNum: '', studentNum: '', label: '' };
 }
 
 /**
@@ -459,7 +476,7 @@ export async function verifyStudentLogin(
   const cleanId = studentId.trim();
   const parsed = parseStudentId(cleanId);
   if (!parsed.valid) {
-    return { success: false, message: '올바른 4자리 학번(예: 1101~3830)을 입력하세요.' };
+    return { success: false, message: '올바른 학번(예: 1101 또는 11201)을 입력하세요.' };
   }
 
   const inputHash = await hashPassword(inputPw);

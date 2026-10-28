@@ -327,16 +327,20 @@ export function initGlobalTouchScroll() {
       const isModal = curr.classList.contains('modal-box') || curr.classList.contains('modal-backdrop');
       const isToolbar = curr.classList.contains('student-floating-toolbar') || curr.classList.contains('floating-toolbar');
       const isPopup = curr.classList.contains('samsung-tool-popup');
+      const hasScrollHint = isModal || isToolbar || isPopup || curr.hasAttribute('data-scrollable') || (typeof curr.className === 'string' && curr.className.includes('scroll'));
 
-      const style = window.getComputedStyle(curr);
-      const overflowY = style.overflowY;
-      const overflowX = style.overflowX;
+      // 레이아웃 측정 전 가벼운 사전 필터링으로 getComputedStyle 호출 최소화
+      if (hasScrollHint || curr.scrollHeight > curr.clientHeight || curr.scrollWidth > curr.clientWidth) {
+        const style = window.getComputedStyle(curr);
+        const overflowY = style.overflowY;
+        const overflowX = style.overflowX;
 
-      const canScrollY = (overflowY === 'auto' || overflowY === 'scroll' || isModal || isPopup) && curr.scrollHeight > curr.clientHeight;
-      const canScrollX = (overflowX === 'auto' || overflowX === 'scroll' || isToolbar) && curr.scrollWidth > curr.clientWidth;
+        const canScrollY = (overflowY === 'auto' || overflowY === 'scroll' || isModal || isPopup) && curr.scrollHeight > curr.clientHeight;
+        const canScrollX = (overflowX === 'auto' || overflowX === 'scroll' || isToolbar) && curr.scrollWidth > curr.clientWidth;
 
-      if (canScrollY || canScrollX) {
-        return { el: curr, canY: canScrollY, canX: canScrollX };
+        if (canScrollY || canScrollX) {
+          return { el: curr, canY: canScrollY, canX: canScrollX };
+        }
       }
 
       curr = curr.parentElement;

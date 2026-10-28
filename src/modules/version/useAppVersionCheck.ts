@@ -26,12 +26,14 @@ export function useAppVersionCheck(options?: {
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
   const [newVersionInfo, setNewVersionInfo] = useState<VersionInfo | null>(null);
   const isCheckingRef = useRef<boolean>(false);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const checkVersion = useCallback(async (isManual = false) => {
     if (isCheckingRef.current) return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      if (isManual && options?.onToast) {
-        options.onToast('📡 오프라인 상태이므로 버전 확인을 건너뜁니다.');
+      if (isManual && optionsRef.current?.onToast) {
+        optionsRef.current.onToast('📡 오프라인 상태이므로 버전 확인을 건너뜁니다.');
       }
       return;
     }
@@ -40,8 +42,8 @@ export function useAppVersionCheck(options?: {
     try {
       const serverInfo = await fetchServerVersionInfo();
       if (!serverInfo) {
-        if (isManual && options?.onToast) {
-          options.onToast('⚠️ 서버 버전 정보를 가져올 수 없습니다.');
+        if (isManual && optionsRef.current?.onToast) {
+          optionsRef.current.onToast('⚠️ 서버 버전 정보를 가져올 수 없습니다.');
         }
         return;
       }
@@ -56,8 +58,8 @@ export function useAppVersionCheck(options?: {
           await forceApplyAppUpdate(serverInfo.version);
         }, 1200);
       } else {
-        if (isManual && options?.onToast) {
-          options.onToast(`✨ 현재 최신 버전입니다. (${localVersion.buildTime})`);
+        if (isManual && optionsRef.current?.onToast) {
+          optionsRef.current.onToast(`✨ 현재 최신 버전입니다. (${localVersion.buildTime})`);
         }
       }
     } catch (err) {
@@ -65,7 +67,7 @@ export function useAppVersionCheck(options?: {
     } finally {
       isCheckingRef.current = false;
     }
-  }, [localVersion, options]);
+  }, [localVersion]);
 
   useEffect(() => {
     if (!autoCheck) return;

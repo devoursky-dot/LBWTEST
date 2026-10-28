@@ -14,8 +14,8 @@ import { getApiBaseUrl } from './apiConfig';
 // ============================================================================
 // [1. 기본 인프라 설정값 & 단일 진실 공급원]
 // ============================================================================
-export const DEFAULT_ROOT_FOLDER_ID = '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
-export const DEFAULT_GOOGLE_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
+export const DEFAULT_ROOT_FOLDER_ID = (import.meta.env.VITE_GOOGLE_ROOT_FOLDER_ID as string) || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
+export const DEFAULT_GOOGLE_API_KEY = (import.meta.env.VITE_GOOGLE_API_KEY as string) || 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
 export const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbyzVzpNLWD58mtuhE2FBTP2NGkV--8pet3WACl7FrBx8yuopJ9LZHowYHl0jsJwjvFigw/exec';
 
 // 과거 구형 인프라 키 (자동 마이그레이션 대상)
@@ -372,8 +372,10 @@ export const GAS_CODE_TEMPLATE = `function doPost(e) {
       var upFolderId = data.folderId || '${DEFAULT_ROOT_FOLDER_ID}';
       var upFolder = DriveApp.getFolderById(upFolderId);
       var contentType = data.mimeType || 'application/octet-stream';
-      var decoded = Utilities.base64Decode(data.base64);
-      var blob = Utilities.newBlob(decoded, contentType, data.name);
+      var fileName = data.name || data.fileName || 'note.png';
+      var base64Data = data.base64 || data.fileData;
+      var decoded = Utilities.base64Decode(base64Data);
+      var blob = Utilities.newBlob(decoded, contentType, fileName);
       var file = upFolder.createFile(blob);
       return ContentService.createTextOutput(JSON.stringify({
         success: true,

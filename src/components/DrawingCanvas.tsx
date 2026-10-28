@@ -124,7 +124,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const isHoldSnappedRef = useRef<boolean>(false);
   const holdAnchorCoordRef = useRef<{ x: number; y: number } | null>(null);
   const snappedShapeRef = useRef<RecognizedShape | null>(null);
-  const lastPointTimeRef = useRef<number>(Date.now());
+  const lastPointTimeRef = useRef<number>(0);
 
   // 펜 모드(penOnlyMode)에서 손가락 화면 톡톡(더블탭) 펜/지우개 전환 감지 레퍼런스
   const lastFingerTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
@@ -154,7 +154,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onTogglePenEraser,
     strokes,
     enablePressure,
-    enableQuickShape
+    enableQuickShape,
+    fullPageBackground,
+    paperTheme,
+    A4_WIDTH,
+    A4_HEIGHT
   });
 
   propsRef.current = {
@@ -176,7 +180,11 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     onTogglePenEraser,
     strokes,
     enablePressure,
-    enableQuickShape
+    enableQuickShape,
+    fullPageBackground,
+    paperTheme,
+    A4_WIDTH,
+    A4_HEIGHT
   };
 
   // 캔버스 크기(해상도) 초기화 및 동기화
@@ -456,8 +464,8 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           currentStroke.points = updateBezierPoints(shape.points, fixedStart, { x, y });
         }
 
-        // 화면 1회 리렌더링
-        renderCanvasGridAndStrokes(canvas, p.strokes, fullPageBackground, paperTheme, p.enablePressure);
+        // 화면 1회 리렌더링 (최신 propsRef 참조로 Stale Closure 방지)
+        renderCanvasGridAndStrokes(canvas, p.strokes, p.fullPageBackground, p.paperTheme, p.enablePressure);
         drawSingleStroke(ctx, currentStroke, false);
 
         if (p.tool === 'shapePen') {
@@ -768,6 +776,7 @@ export const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       window.removeEventListener('pointerup', handleGlobalWindowPointerUp);
       window.removeEventListener('pointercancel', handleGlobalWindowPointerUp);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

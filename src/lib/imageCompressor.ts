@@ -107,13 +107,18 @@ export async function compressNotePagesForTransmission(pages: any[]): Promise<an
       if (Array.isArray(compressedImages) && compressedImages.length > 0) {
         compressedImages = await Promise.all(
           compressedImages.map(async (item: any) => {
-            if (item.dataUrl) {
-              const compressedItemUrl = await compressDataUrl(item.dataUrl, {
+            const rawUrl = item.src || item.dataUrl;
+            if (rawUrl) {
+              const compressedItemUrl = await compressDataUrl(rawUrl, {
                 maxWidth: 900,
                 maxHeight: 900,
                 quality: 0.70
               });
-              return { ...item, dataUrl: compressedItemUrl };
+              return {
+                ...item,
+                src: compressedItemUrl || rawUrl,
+                dataUrl: compressedItemUrl || rawUrl
+              };
             }
             return item;
           })

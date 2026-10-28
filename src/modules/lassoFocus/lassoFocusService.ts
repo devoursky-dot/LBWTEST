@@ -299,8 +299,9 @@ export async function createFocusedPageBackground(
     throw new Error('선택된 영역이 너무 작습니다. 문제를 조금 더 넉넉하게 둘러싸주세요.');
   }
 
-  // 1. [고해상도 업스케일링 대비]: 2.0x 슈퍼샘플링 소스 캔버스 렌더링
-  const superSample = 2.0;
+  // 1. [고해상도 업스케일링 대비]: iOS Safari 4096px 한계 보호를 위해 슈퍼샘플링 비율 안전 클램핑
+  const maxDim = Math.max(A4_WIDTH, A4_HEIGHT);
+  const superSample = Math.min(2.0, Math.max(1.0, 4096 / maxDim));
   const sourceCanvas = await renderCurrentPageToCompositeCanvas(options, superSample);
   const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
   if (!sourceCtx) throw new Error('Source context 실패');
@@ -447,6 +448,14 @@ export async function createFocusedPageBackground(
   }
 
   const dataUrl = targetCanvas.toDataURL('image/jpeg', 0.94);
+
+  // 임시 GPU 캔버스 버퍼 즉시 해제 (모바일/태블릿 메모리 누수 원천 차단)
+  sourceCanvas.width = 0;
+  sourceCanvas.height = 0;
+  segmentCanvas.width = 0;
+  segmentCanvas.height = 0;
+  targetCanvas.width = 0;
+  targetCanvas.height = 0;
 
   return {
     dataUrl,
