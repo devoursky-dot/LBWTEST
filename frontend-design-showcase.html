@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anthropic Frontend Design 원칙 인터랙티브 쇼케이스</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Anthropic Frontend Design: 의도되고 엄격한 4~6색 토큰 시스템 */
+      --bg-base: #090d16;
+      --bg-surface: #101726;
+      --bg-elevated: #162035;
+      --border-subtle: #1e293b;
+      --border-active: #3b82f6;
+      
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      
+      --accent-primary: #38bdf8;
+      --accent-live: #22c55e;
+      --accent-danger: #ef4444;
+      
+      --font-sans: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      padding: 40px 24px 80px;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+
+    /* 1. 상단 내비게이션 & 뱃지 */
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 48px;
+    }
+
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-badge {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 3px 8px;
+      border-radius: var(--radius-sm);
+      background: rgba(56, 189, 248, 0.12);
+      color: var(--accent-primary);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+
+    /* 2. Hero 영역: 과장된 네온 그라데이션이 아닌, 주제(전자칠판)에 뿌리내린 핵심 인터랙션 */
+    .hero-section {
+      margin-bottom: 64px;
+    }
+
+    .hero-heading {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.25;
+      margin-bottom: 16px;
+      max-width: 760px;
+    }
+
+    .hero-lead {
+      font-size: 17px;
+      color: var(--text-secondary);
+      max-width: 680px;
+      line-height: 1.65;
+      margin-bottom: 32px;
+    }
+
+    /* 실시간 인터랙티브 보드 데모 */
+    .demo-board-frame {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+    }
+
+    .demo-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .tool-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .tool-btn {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-secondary);
+      padding: 7px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+
+    .tool-btn.active, .tool-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-primary);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .tool-btn:active {
+      transform: scale(0.97);
+    }
+
+    .live-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent-live);
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--accent-live);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--accent-live);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    .canvas-area {
+      height: 320px;
+      position: relative;
+      cursor: crosshair;
+      background: 
+        radial-gradient(circle, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .canvas-hint {
+      position: absolute;
+      bottom: 16px;
+      left: 20px;
+      font-size: 12px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    /* 3. 섹션: Anthropic Frontend Design 5대 핵심 차이점 비교 */
+    .section-title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
+    }
+
+    .section-subtitle {
+      font-size: 14.5px;
+      color: var(--text-secondary);
+      margin-bottom: 28px;
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 64px;
+    }
+
+    .comparison-card {
+      padding: 24px;
+      border-radius: var(--radius-md);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .comparison-card.bad {
+      border-left: 4px solid var(--accent-danger);
+    }
+
+    .comparison-card.good {
+      border-left: 4px solid var(--accent-primary);
+    }
+
+    .card-tag {
+      font-size: 11.5px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      display: inline-block;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .comparison-card.bad .card-tag { color: var(--accent-danger); }
+    .comparison-card.good .card-tag { color: var(--accent-primary); }
+
+    .comparison-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .comparison-list li {
+      font-size: 13.5px;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    .comparison-list li strong {
+      color: var(--text-primary);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    /* 4. 인터랙티브 컴포넌트 갤러리 (손맛, 정직한 에러, 명확한 카피) */
+    .component-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 64px;
+    }
+
+    .demo-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .demo-card h4 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .demo-card p {
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    /* 손맛 버튼 스타일 (1px Inset shadow & Active Scale) */
+    .btn-tactile {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 18px;
+      font-size: 13.5px;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      color: #ffffff;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 2px 6px rgba(0, 0, 0, 0.4);
+      cursor: pointer;
+      transition: all 0.08s ease;
+    }
+
+    .btn-tactile:hover {
+      background: linear-gradient(180deg, #273549 0%, #151f33 100%);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-tactile:active {
+      transform: scale(0.97);
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+    }
+
+    .btn-primary-tactile {
+      background: linear-gradient(180deg, #0284c7 0%, #0369a1 100%);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-primary-tactile:hover {
+      background: linear-gradient(180deg, #0ea5e9 0%, #0284c7 100%);
+    }
+
+    .kbd-chip {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      padding: 2px 5px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+      color: var(--text-secondary);
+    }
+
+    /* 정직한 상태 피드백 */
+    .status-box {
+      padding: 12px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+
+    .status-box.honest-error {
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      color: #fca5a5;
+    }
+
+    .status-box.honest-success {
+      background: rgba(34, 197, 94, 0.08);
+      border: 1px solid rgba(34, 197, 94, 0.25);
+      color: #86efac;
+    }
+
+    /* 푸터 안내 */
+    .footer-bar {
+      padding-top: 32px;
+      border-top: 1px solid var(--border-subtle);
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: gap;
+    }
+
+    .footer-link {
+      color: var(--accent-primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .footer-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    
+    <!-- 1. 헤더 -->
+    <header class="header-bar">
+      <div class="brand-title">
+        <span>🎨 Anthropic Frontend Design System</span>
+        <span class="brand-badge">SKILL.md Installed</span>
+      </div>
+      <div>
+        <a href="./" class="footer-link">← 전자칠판 포털 메인으로 가기</a>
+      </div>
+    </header>
+
+    <!-- 2. Hero: 과장된 그래픽 대신, '전자칠판 스마트 드라이브'라는 실제 주제에 뿌리내린 라이브 데모 -->
+    <section class="hero-section">
+      <h1 class="hero-heading">템플릿 클리셰를 거부하는 의도적이고 독창적인 프론트엔드 장인정신</h1>
+      <p class="hero-lead">
+        Anthropic의 <code>frontend-design</code> 스킬은 뻔한 보라색 네온 그라데이션, 어디에나 쓰이는 SaaS 카드 뭉치, 불필요한 장식용 라벨을 단호히 거부합니다.
+        소프트웨어의 실제 본질(전자칠판과 교실)에 기반한 타이포그래피, 손맛 나는 미세 반응, 정직한 상태 전달을 직접 체험해 보세요.
+      </p>
+
+      <!-- 실제 인터랙티브 캔버스 데모 -->
+      <div class="demo-board-frame">
+        <div class="demo-toolbar">
+          <div class="tool-group">
+            <button class="tool-btn active" id="btn-pen" onclick="setMode('pen')">✏️ 디지털 펜</button>
+            <button class="tool-btn" id="btn-highlighter" onclick="setMode('highlighter')">🖍️ 형광펜</button>
+            <button class="tool-btn" id="btn-eraser" onclick="clearCanvas()">🧹 칠판 지우기</button>
+          </div>
+          <div class="live-indicator">
+            <span class="live-dot"></span>
+            <span>28명 학생 실시간 연결 중</span>
+          </div>
+        </div>
+        <div class="canvas-area" id="canvas-container">
+          <canvas id="demo-canvas"></canvas>
+          <div class="canvas-hint">💡 마우스나 터치로 선을 그어보세요. 불필요한 번쩍임 없이 부드러운 필기 엔진을 체험할 수 있습니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. AI 클리셰 vs Anthropic 디자인 원칙 비교 -->
+    <section>
+      <h2 class="section-title">일반적인 AI 디자인 vs 앤트로픽 디자인 원칙</h2>
+      <p class="section-subtitle">코드에 <code>frontend-design</code> 스킬이 장착되었을 때 달라지는 5가지 결정적 디테일</p>
+
+      <div class="comparison-grid">
+        <div class="comparison-card bad">
+          <span class="card-tag">❌ 흔한 AI 생성 디자인 (The AI Tells)</span>
+          <ul class="comparison-list">
+            <li>
+              <strong>천편일률적인 보라-파랑 네온 그라데이션</strong>
+              제품의 성격과 상관없이 모든 곳에 흐리멍텅한 보라색 그라데이션 배경을 깔아 AI 티를 냅니다.
+            </li>
+            <li>
+              <strong>모든 요소를 동일한 둥근 카드로 쪼개기 (SaaS Card Kit)</strong>
+              콘텐츠의 위계와 상관없이 똑같은 radius와 흐린 그림자를 가진 카드를 도배합니다.
+            </li>
+            <li>
+              <strong>불필요한 대문자 라벨 & 제목 단어 하나만 색칠하기</strong>
+              <code>FEATURES</code> 같은 의미 없는 영문 대문자 머리글을 붙이고, 헤드라인에서 한 단어만 이탤릭으로 바꿉니다.
+            </li>
+            <li>
+              <strong>마우스만 올리면 붕붕 뜨는 어색한 호버</strong>
+              이유 없이 모든 카드에 <code>translateY(-8px)</code>를 남발하여 시각적 피로감을 줍니다.
+            </li>
+          </ul>
+        </div>
+
+        <div class="comparison-card good">
+          <span class="card-tag">✨ Anthropic Frontend Design (고유한 장인정신)</span>
+          <ul class="comparison-list">
+            <li>
+              <strong>제품 본질에 뿌리내린 4~6색 팔레트</strong>
+              전자칠판의 칠판 감성과 고대비 가독성을 위한 옵시디언 블랙과 코발트 블루를 엄격히 사용합니다.
+            </li>
+            <li>
+              <strong>시각적 구조가 곧 정보 (Structure is Information)</strong>
+              1, 2, 3 번호는 진짜 순서가 있을 때만 쓰고, 선과 테두리는 꾸밈이 아닌 정보 구분을 위해 씁니다.
+            </li>
+            <li>
+              <strong>절제된 1개 요소 집중 (One Memorable Moment)</strong>
+              모든 것을 화려하게 하지 않고, 실시간 필기 칠판이라는 단 하나의 'Hero'에 모든 디테일을 쏟습니다.
+            </li>
+            <li>
+              <strong>누르면 묵직하게 반응하는 손맛 (Tactile Feedback)</strong>
+              가벼운 점프 대신, 실제 물리 버튼을 누르는 듯한 <code>scale(0.97)</code>과 1px 내부 하이라이트를 제공합니다.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 실무 UI 컴포넌트 쇼케이스 -->
+    <section>
+      <h2 class="section-title">손맛과 정직함이 담긴 컴포넌트 갤러리</h2>
+      <p class="section-subtitle">버튼의 미세 반발력, 명확한 UX 카피, 에러를 숨기지 않는 정직한 피드백</p>
+
+      <div class="component-gallery">
+        <!-- 버튼 쇼케이스 -->
+        <div class="demo-card">
+          <h4>1. 물리적 반발력의 촉각 버튼 (Tactile Press)</h4>
+          <p>납작한 플랫 버튼이 아닌, 상단 1px에 은은한 빛이 맺히고 클릭 시 살짝 들어가는 손맛을 구현합니다.</p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px;">
+            <button class="btn-tactile btn-primary-tactile" onclick="triggerEffect(this)">
+              <span>수업 개설하기</span>
+              <span class="kbd-chip">↵ Enter</span>
+            </button>
+            <button class="btn-tactile" onclick="triggerEffect(this)">
+              <span>자료 배부</span>
+              <span class="kbd-chip">D</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 정직한 에러 보고 쇼케이스 -->
+        <div class="demo-card">
+          <h4>2. 에러를 둘러대지 않는 정직한 피드백</h4>
+          <p>가짜 난수 ID로 거짓 성공을 띄우지 않고, 무엇이 실패했고 어떻게 해결해야 하는지 명확히 말합니다.</p>
+          <div class="status-box honest-error">
+            <strong>❌ 구글 드라이브 폴더 생성 실패 (403)</strong><br>
+            Google Apps Script 웹 앱 권한 설정이 필요합니다. [배포 관리]에서 액세스 권한을 '모든 사용자'로 변경해 주세요.
+          </div>
+        </div>
+
+        <!-- 정직한 성공 보고 쇼케이스 -->
+        <div class="demo-card">
+          <h4>3. 실제 드라이브 폴더와 1:1 동기화</h4>
+          <p>가짜 카드를 띄우지 않고, 구글 공식 API가 물리적으로 확인한 고유 ID만을 바인딩합니다.</p>
+          <div class="status-box honest-success">
+            <strong>🎉 '수학 미적분' 수업 개설 완료</strong><br>
+            드라이브 ID: <code>1cfIC_zodDRAgk...</code><br>
+            학생 QR 접속 링크와 교사용 공책 보관함이 생성되었습니다.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 푸터 -->
+    <footer class="footer-bar">
+      <div>
+        스킬 위치: <code>.agents/skills/frontend-design/SKILL.md</code>
+      </div>
+      <div>
+        <a href="https://github.com/anthropics/skills/tree/main/skills/frontend-design" target="_blank" rel="noopener" class="footer-link">
+          Anthropic 원본 깃허브 저장소 확인 ↗
+        </a>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    // 인터랙티브 캔버스 로직
+    const canvas = document.getElementById('demo-canvas');
+    const container = document.getElementById('canvas-container');
+    const ctx = canvas.getContext('2d');
+    
+    let isDrawing = false;
+    let mode = 'pen'; // 'pen' | 'highlighter'
+
+    function resizeCanvas() {
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+      drawDefaultArt();
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    setTimeout(resizeCanvas, 50);
+
+    function drawDefaultArt() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      
+      // 삼각함수 곡선 예시 그리기 (전자칠판 감성)
+      ctx.beginPath();
+      const centerY = canvas.height / 2;
+      for (let x = 40; x < canvas.width - 40; x += 3) {
+        const y = centerY + Math.sin(x * 0.02) * 50;
+        if (x === 40) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '13px Pretendard, sans-serif';
+      ctx.fillText('f(x) = sin(x) · 실시간 전자칠판 필기 예시', 50, centerY - 65);
+    }
+
+    function setMode(newMode) {
+      mode = newMode;
+      document.getElementById('btn-pen').classList.toggle('active', mode === 'pen');
+      document.getElementById('btn-highlighter').classList.toggle('active', mode === 'highlighter');
+    }
+
+    function clearCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function getCoords(e) {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: clientX - rect.left,
+        y: clientY - rect.top
+      };
+    }
+
+    function startDrawing(e) {
+      isDrawing = true;
+      const p = getCoords(e);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      if (mode === 'pen') {
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 3.5;
+        ctx.globalAlpha = 1.0;
+      } else {
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 18;
+        ctx.globalAlpha = 0.35;
+      }
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    }
+
+    function draw(e) {
+      if (!isDrawing) return;
+      e.preventDefault();
+      const p = getCoords(e);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+
+    function stopDrawing() {
+      isDrawing = false;
+    }
+
+    canvas.addEventListener('mousedown', startDrawing);
+    canvas.addEventListener('mousemove', draw);
+    window.addEventListener('mouseup', stopDrawing);
+
+    canvas.addEventListener('touchstart', startDrawing, { passive: false });
+    canvas.addEventListener('touchmove', draw, { passive: false });
+    window.addEventListener('touchend', stopDrawing);
+
+    function triggerEffect(btn) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<span>⚡ 실행됨</span>';
+      setTimeout(() => btn.innerHTML = orig, 1000);
+    }
+  </script>
+</body>
+</html>
