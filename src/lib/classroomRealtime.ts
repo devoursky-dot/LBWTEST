@@ -377,41 +377,8 @@ class ClassroomRealtimeManager {
       console.warn('[Realtime] 구글 드라이브 수업 통합 조회 예외:', driveErr);
     }
 
-    // 3. Supabase에 등록된 세션 중 드라이브에서 아직 매칭되지 않은 수업도 안전하게 보존
-    for (const row of supabaseRows) {
-      const lessonId = row.lesson_id;
-      const teacherName = (row.student_class || '선생님').replace(' 선생님', '').trim();
-      const lastTouched = row.strokes_data?.lastTouched || (row.updated_at ? new Date(row.updated_at).getTime() : 0);
-      const isLive = row.student_num === 'ACTIVE' && (now - lastTouched <= TWO_HOURS_MS);
-
-      if (!teacherMap.has(teacherName)) {
-        teacherMap.set(teacherName, []);
-      }
-
-      const existingLessons = teacherMap.get(teacherName)!;
-      if (!existingLessons.some(l => l.lessonId === lessonId)) {
-        const attachedFiles = row.strokes_data?.attachedFiles || [];
-        if (row.strokes_data?.pdfId && !attachedFiles.some((f: any) => f.id === row.strokes_data.pdfId)) {
-          attachedFiles.unshift({
-            id: row.strokes_data.pdfId,
-            name: row.strokes_data.pdfName || '수업_학습지.pdf',
-            downloadUrl: `https://drive.google.com/uc?export=download&id=${row.strokes_data.pdfId}`,
-            mimeType: 'application/pdf'
-          });
-        }
-
-        existingLessons.push({
-          lessonId,
-          title: row.student_name || '수업',
-          isLive,
-          pdfId: row.strokes_data?.pdfId,
-          pdfName: row.strokes_data?.pdfName,
-          attachedFiles,
-          startedAt: row.strokes_data?.startedAt || row.updated_at || new Date().toISOString(),
-          lastTouched
-        });
-      }
-    }
+    // 3. (구글 드라이브 단일 진실 공급원)
+    // 구글 드라이브에 실제 존재하지 않는 고스트 세션은 절대 학생/전자칠판 목록에 추가하지 않습니다.
 
     // 4. 교사별 수업 목록 정렬: 실시간 진행 중(🟢)을 최상단, 최신 활동순
     return Array.from(teacherMap.entries()).map(([teacherName, lessons]) => {
