@@ -798,39 +798,33 @@ export default function App() {
         isLive: false
       });
 
-      // 3. 구글 드라이브 폴더명 변경 및 lesson_config.json 업로드는 백그라운드 안전 실행
-      (async () => {
-        try {
-          if (editingQrLesson.name !== newFolderName) {
-            await executeDriveAction({
-              action: 'rename',
-              id: lessonFolderId,
-              name: newFolderName
-            }).catch(() => {});
-          }
+      // 3. 구글 드라이브 폴더명 변경 및 lesson_config.json 실제 업로드
+      if (editingQrLesson.name !== newFolderName) {
+        await executeDriveAction({
+          action: 'rename',
+          id: lessonFolderId,
+          name: newFolderName
+        });
+      }
 
-          const lessonConfig = {
-            lessonId: lessonFolderId,
-            title: cleanTitle,
-            folderId: lessonFolderId,
-            teacherPin: '1234',
-            updatedAt: new Date().toISOString(),
-            pdfFileId: newAttachedFiles[0]?.id,
-            pdfFileName: newAttachedFiles[0]?.name,
-            attachedFiles: newAttachedFiles
-          };
-          const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
-          await executeDriveAction({
-            action: 'upload',
-            folderId: lessonFolderId,
-            name: 'lesson_config.json',
-            mimeType: 'application/json',
-            base64: configJsonBase64
-          }).catch(() => {});
-        } catch (gErr) {
-          console.warn('구글 드라이브 동기화 백그라운드 경고:', gErr);
-        }
-      })();
+      const lessonConfig = {
+        lessonId: lessonFolderId,
+        title: cleanTitle,
+        folderId: lessonFolderId,
+        teacherPin: '1234',
+        updatedAt: new Date().toISOString(),
+        pdfFileId: newAttachedFiles[0]?.id,
+        pdfFileName: newAttachedFiles[0]?.name,
+        attachedFiles: newAttachedFiles
+      };
+      const configJsonBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(lessonConfig, null, 2))));
+      await executeDriveAction({
+        action: 'upload',
+        folderId: lessonFolderId,
+        name: 'lesson_config.json',
+        mimeType: 'application/json',
+        base64: configJsonBase64
+      });
 
       showToast(`🎉 '${cleanTitle}' 수업 정보 및 첨부자료(${newAttachedFiles.length}개)가 성공적으로 저장되었습니다!`);
       setActiveModal(null);
