@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useHorizontalToolbarScroll } from './lib/scrollModule';
 import { useAppConfirm } from './lib/fullscreenModule';
 import { useFullscreen } from './modules/fullscreen';
@@ -2300,6 +2300,31 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [lessonId, activeLessonTitle]);
 
+  // 사용자가 명시적으로 수업 나가기를 눌렀는지 추적 (자동 재연결 방지)
+  const isUserExitedRef = useRef<boolean>(false);
+
+  // 본 수업 공식 등록 수업자료 단일 진실 공급원 (Single Source of Truth)
+  // 대표 PDF(lessonPdfInfo)와 첨부 학습지(connectedLessonFiles)의 ID 중복을 원천 제거
+  const uniqueMaterials = useMemo(() => {
+    const list: Array<{ id: string; name: string; size?: string | number; mimeType?: string; isPrimaryPdf?: boolean }> = [];
+    if (lessonPdfInfo && lessonPdfInfo.id) {
+      list.push({
+        id: lessonPdfInfo.id,
+        name: lessonPdfInfo.name,
+        mimeType: 'application/pdf',
+        isPrimaryPdf: true
+      });
+    }
+    if (connectedLessonFiles && connectedLessonFiles.length > 0) {
+      connectedLessonFiles.forEach(f => {
+        if (f && f.id && !list.some(m => m.id === f.id)) {
+          list.push({ ...f, isPrimaryPdf: false });
+        }
+      });
+    }
+    return list;
+  }, [lessonPdfInfo, connectedLessonFiles]);
+
   // 수업 진입 시 구글 드라이브 수업자료 자동 로드
   useEffect(() => {
     if (isTeacherLesson) {
@@ -2307,46 +2332,55 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [isTeacherLesson, loadLessonMaterials]);
 
-  // 교사 수업 진입 시 실시간 전자칠판 세션 자동 연결
+  // 교사 수업 진입 시 실시간 전자칠판 세션 자동 연결 (퇴장 후 자동 재연결 원천 차단)
   useEffect(() => {
-    if (isTeacherLesson && !isConnectedToBoard) {
+    if (isTeacherLesson && !isConnectedToBoard && !isUserExitedRef.current) {
       handleConnectToBoard(lessonId, lessonTitle);
     }
   }, [isTeacherLesson, isConnectedToBoard, lessonId, lessonTitle]);
 
   // 수업 나가기 처리 (WakeLock 해제, 퇴장 신호 발송, 오프라인 모드 복귀)
   const handleExitLesson = async () => {
-    if (isConnectedToBoard) {
-      const ok = await confirm({
-        title: '수업 연결 종료',
-        message: '전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아가시겠습니까?\n(작성하신 필기는 기기에 안전하게 보존됩니다.)',
-        confirmText: '오프라인 복귀',
-        cancelText: '계속 수업하기',
-        isDanger: true
-      });
-      if (!ok) return;
+    const ok = await confirm({
+      title: '수업 연결 종료',
+      message: '전자칠판 연결을 해제하고 오프라인 공책 모드로 돌아가시겠습니까?\n(작성하신 필기는 기기에 안전하게 보존됩니다.)',
+      confirmText: '오프라인 복귀',
+      cancelText: '계속 수업하기',
+      isDanger: true
+    });
+    if (!ok) return;
 
-      if (wakeLockRef.current) {
-        try {
-          await wakeLockRef.current.release();
-        } catch {}
-        wakeLockRef.current = null;
-      }
-      await exitFullscreenSafe();
+    // 1. 퇴장 플래그 설정하여 재접속 useEffect 원천 차단
+    isUserExitedRef.current = true;
 
-      // 퇴장 신호 발송 및 채널 정리
-      classroomRealtime.leaveLesson(studentInfo || undefined);
-      setIsConnectedToBoard(false);
-      showToast('📓 전자칠판 연결이 해제되어 오프라인 공책 모드로 복귀했습니다.');
+    // 2. 화면 꺼짐 방지 및 전체화면 해제
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch {}
+      wakeLockRef.current = null;
+    }
+    await exitFullscreenSafe();
 
-      // 만약 URL 파라미터로 특정 수업에 진입했던 경우라면, 오프라인 메인으로 URL 갱신
-      if (typeof window !== 'undefined' && window.location.search.includes('lessonId=')) {
-        window.history.replaceState(null, '', window.location.pathname);
-      }
-      return;
+    // 3. 실시간 연결 해제 및 퇴장 신호 전송
+    classroomRealtime.leaveLesson(studentInfo || undefined);
+    setIsConnectedToBoard(false);
+
+    showToast('📓 전자칠판 연결이 해제되어 오프라인 공책 모드로 복귀했습니다.');
+
+    // 4. URL에서 lessonId 파라미터 완전 제거
+    if (typeof window !== 'undefined' && window.location.search) {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('lessonId');
+      cleanUrl.searchParams.delete('title');
+      cleanUrl.searchParams.delete('autoConnect');
+      window.history.replaceState(null, '', cleanUrl.pathname + (cleanUrl.search ? '?' + cleanUrl.search : ''));
     }
 
-    if (onExit) onExit();
+    // 5. 상위 앱 컴포넌트에 오프라인 복귀 신호 전달
+    if (onExit) {
+      onExit();
+    }
   };
 
   // ==========================================================================
@@ -2857,7 +2891,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 >
                   <span>📥</span>
                   <span>수업자료 다운로드</span>
-                  {((lessonPdfInfo ? 1 : 0) + connectedLessonFiles.length) > 0 && (
+                  {uniqueMaterials.length > 0 && (
                     <span
                       style={{
                         fontSize: '10.5px',
@@ -2867,7 +2901,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                         fontWeight: 800
                       }}
                     >
-                      {(lessonPdfInfo ? 1 : 0) + connectedLessonFiles.length}
+                      {uniqueMaterials.length}
                     </span>
                   )}
                 </button>
@@ -6115,24 +6149,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 );
               }
 
-              const allMaterials: Array<{ id: string; name: string; size?: string | number; mimeType?: string; isPrimaryPdf?: boolean }> = [];
-              if (lessonPdfInfo && lessonPdfInfo.id) {
-                allMaterials.push({
-                  id: lessonPdfInfo.id,
-                  name: lessonPdfInfo.name,
-                  mimeType: 'application/pdf',
-                  isPrimaryPdf: true
-                });
-              }
-              if (connectedLessonFiles && connectedLessonFiles.length > 0) {
-                connectedLessonFiles.forEach(f => {
-                  if (f && f.id && !allMaterials.some(m => m.id === f.id)) {
-                    allMaterials.push({ ...f, isPrimaryPdf: false });
-                  }
-                });
-              }
-
-              if (allMaterials.length === 0) {
+              if (uniqueMaterials.length === 0) {
                 return (
                   <div style={{ padding: '36px 16px', textAlign: 'center', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '12px', border: '1px dashed #30363d' }}>
                     <span style={{ fontSize: '30px', display: 'block', marginBottom: '8px' }}>📂</span>
@@ -6162,7 +6179,7 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                 );
               }
 
-              return allMaterials.map(mat => {
+              return uniqueMaterials.map(mat => {
                 const apiBase = getApiBaseUrl();
                 const dlUrl = `${apiBase}/api/drive?action=download&fileId=${mat.id}&fileName=${encodeURIComponent(mat.name)}`;
                 const viewUrl = `https://drive.google.com/file/d/${mat.id}/view?usp=sharing`;
@@ -6205,8 +6222,9 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
                       <a
                         href={dlUrl}
                         download={mat.name}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        onClick={() => {
+                          showToast(`📥 '${mat.name}' 다운로드를 시작합니다...`);
+                        }}
                         style={{
                           background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
                           border: '1px solid #38bdf8',

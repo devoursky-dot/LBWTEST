@@ -150,25 +150,33 @@ function localDriveApiPlugin(): Plugin {
           // ===================================================================
           if (action === 'download' && fileId) {
             try {
-              const pageUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-              const checkRes = await fetch(pageUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-              });
-              const checkHtml = await checkRes.text();
-
-              const uuidMatch = checkHtml.match(/uuid=([^&"']+)/i) || checkHtml.match(/name="uuid" value="([^"]+)"/i);
-              const confirmMatch = checkHtml.match(/confirm=([^&"']+)/i) || checkHtml.match(/name="confirm" value="([^"]+)"/i);
-
-              let realDownloadUrl = `https://drive.google.com/uc?export=download&confirm=t&id=${fileId}`;
-              if (uuidMatch) {
-                const uuid = uuidMatch[1];
-                const confirm = confirmMatch ? confirmMatch[1] : 't';
-                realDownloadUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=${confirm}&uuid=${uuid}`;
+              const fetchOptions: any = {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+              };
+              // Windows 로컬 개발 환경 SSL 인증서 체인 호환성 처리
+              if (process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0') {
+                process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
               }
 
-              const streamRes = await fetch(realDownloadUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-              });
+              // 1차 시도: drive.usercontent.google.com 직접 호출
+              let streamRes = await fetch(`https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`, fetchOptions);
+
+              // 2차 시도: 대용량 바이러스 경고 페이지일 경우 uuid/confirm 파싱
+              if (!streamRes.ok || (streamRes.headers.get('content-type') || '').includes('text/html')) {
+                const pageUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+                const checkRes = await fetch(pageUrl, fetchOptions);
+                const checkHtml = await checkRes.text();
+
+                const uuidMatch = checkHtml.match(/uuid=([^&"']+)/i) || checkHtml.match(/name="uuid" value="([^"]+)"/i);
+                const confirmMatch = checkHtml.match(/confirm=([^&"']+)/i) || checkHtml.match(/name="confirm" value="([^"]+)"/i);
+
+                if (uuidMatch) {
+                  const uuid = uuidMatch[1];
+                  const confirm = confirmMatch ? confirmMatch[1] : 't';
+                  const realDownloadUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=${confirm}&uuid=${uuid}`;
+                  streamRes = await fetch(realDownloadUrl, fetchOptions);
+                }
+              }
 
               const safeFilename = encodeURIComponent(fileName);
               res.writeHead(200, {
@@ -189,9 +197,12 @@ function localDriveApiPlugin(): Plugin {
               res.end();
               return;
             } catch (err: any) {
-              console.error('[Vite Dev] Download stream error:', err);
-              res.writeHead(500, { 'Content-Type': 'text/plain' });
-              res.end('Download Error: ' + err.message);
+              console.error('[Vite Dev] Download stream fallback to direct redirect:', err);
+              // 스트리밍 실패 시 구글 다이렉트 다운로드 링크로 302 리다이렉트
+              res.writeHead(302, {
+                Location: `https://drive.google.com/uc?export=download&id=${fileId}`
+              });
+              res.end();
               return;
             }
           }
