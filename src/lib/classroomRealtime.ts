@@ -10,6 +10,9 @@
  */
 
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './supabase';
+import { DEFAULT_ROOT_FOLDER_ID, DEFAULT_GOOGLE_API_KEY, getDriveConfig } from './driveService';
+
+export { DEFAULT_ROOT_FOLDER_ID, DEFAULT_GOOGLE_API_KEY };
 
 export type StudentStatus = 'connected' | 'checking' | 'disconnected';
 
@@ -73,8 +76,7 @@ export interface RealtimeSignalPayload {
 
 type SignalListener = (signal: RealtimeSignalPayload) => void;
 
-export const DEFAULT_ROOT_FOLDER_ID = '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
-export const DEFAULT_GOOGLE_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
+// Re-exported above from driveService
 
 export interface FetchTeacherLessonsOptions {
   rootFolderId?: string;
@@ -243,10 +245,9 @@ class ClassroomRealtimeManager {
    * - 대기/오프라인 수업인 경우 `isLive: false` (📓 수업 대기)
    */
   public async fetchAllTeacherLessons(options?: FetchTeacherLessonsOptions): Promise<ActiveTeacherLesson[]> {
-    const savedRoot = typeof localStorage !== 'undefined' ? localStorage.getItem('lbw_root_folder_id') : null;
-    const rootFolderId = options?.rootFolderId || (savedRoot && savedRoot !== '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn' ? savedRoot : DEFAULT_ROOT_FOLDER_ID);
-    const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem('lbw_google_api_key') : null;
-    const googleApiKey = options?.googleApiKey || (savedKey && savedKey !== 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw' ? savedKey : DEFAULT_GOOGLE_API_KEY);
+    const driveCfg = getDriveConfig();
+    const rootFolderId = options?.rootFolderId || driveCfg.rootFolderId;
+    const googleApiKey = options?.googleApiKey || driveCfg.googleApiKey;
 
     const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
     const now = Date.now();

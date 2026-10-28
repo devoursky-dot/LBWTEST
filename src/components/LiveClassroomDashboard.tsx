@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
 import { getApiBaseUrl } from '../lib/apiConfig';
+import { getDriveConfig } from '../lib/driveService';
 import { generateClassSubmissionPdf } from '../lib/pdfGenerator';
 import { StudentNoteFullscreenViewer } from './StudentNoteFullscreenViewer';
 
@@ -127,7 +128,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     // 3) 구글 드라이브 lesson_config.json에서 공식 등록된 첨부자료 보충 확인
     if (materialsMap.size === 0 && currentLessonId) {
       try {
-        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&key=AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA&_t=${Date.now()}`;
+        const apiKey = getDriveConfig().googleApiKey;
+        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${currentLessonId}'+in+parents+and+name='lesson_config.json'+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name)&key=${apiKey}&_t=${Date.now()}`;
         const cRes = await fetch(directUrl);
         if (cRes.ok) {
           const cData = await cRes.json();

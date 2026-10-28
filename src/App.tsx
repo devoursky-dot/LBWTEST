@@ -13,26 +13,19 @@ import { classroomRealtime, type AttachedFileItem } from './lib/classroomRealtim
 import { PwaInstallButton } from './modules/pwa';
 import { QrScannerModal, useQrScannerAction } from './modules/qrScanner';
 import { useAppVersionCheck, VersionUpdateOverlay } from './modules/version';
+import {
+  type DriveItem,
+  type DriveConfig,
+  getDriveConfig,
+  saveDriveConfig,
+  fetchDriveItems as fetchDriveItemsFromService,
+  executeDriveAction as executeDriveActionFromService,
+  createTeacherFolder,
+  fileToBase64,
+  GAS_CODE_TEMPLATE
+} from './lib/driveService';
 import './index.css';
 
-// ============================================================================
-// [타입 정의]
-// ============================================================================
-interface DriveItem {
-  id: string;
-  name: string;
-  type: 'folder' | 'document';
-  folderId?: string;
-  size?: string;
-  updatedAt: string;
-  viewUrl: string;
-  downloadUrl: string;
-  isQrLesson?: boolean;
-}
-
-const DEFAULT_ROOT_FOLDER_ID = '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
-const DEFAULT_GOOGLE_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
-const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
 const ADMIN_ID = 'admin';
 
 const apiBase = typeof window !== 'undefined' && window.location.hostname.includes('github.io')
@@ -40,75 +33,6 @@ const apiBase = typeof window !== 'undefined' && window.location.hostname.includ
   : '';
 
 type AuthMode = 'guest' | 'teacher' | 'admin' | 'whiteboard';
-
-// 1분 Google Apps Script 표준 코드 템플릿 (업로드, 새 폴더, 이름 변경, 삭제 통합 지원)
-const GAS_CODE_TEMPLATE = `function doPost(e) {
-  try {
-    var data = JSON.parse(e.postData.contents);
-    var action = data.action || (data.base64 ? 'upload' : 'unknown');
-
-    // 1. 파일 또는 폴더 휴지통 이동 (삭제)
-    if (action === 'delete') {
-      var targetId = data.id;
-      if (!targetId) throw new Error('삭제할 항목의 ID가 없습니다.');
-      try {
-        var file = DriveApp.getFileById(targetId);
-        file.setTrashed(true);
-        return ContentService.createTextOutput(JSON.stringify({ success: true, id: targetId, type: 'file' })).setMimeType(ContentService.MimeType.JSON);
-      } catch (errFile) {
-        var folder = DriveApp.getFolderById(targetId);
-        folder.setTrashed(true);
-        return ContentService.createTextOutput(JSON.stringify({ success: true, id: targetId, type: 'folder' })).setMimeType(ContentService.MimeType.JSON);
-      }
-    }
-
-    // 2. 새 폴더 만들기
-    if (action === 'createFolder') {
-      var targetFolderId = data.folderId || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
-      var parentFolder = DriveApp.getFolderById(targetFolderId);
-      var newFolder = parentFolder.createFolder(data.name || '새 폴더');
-      return ContentService.createTextOutput(JSON.stringify({
-        success: true,
-        folderId: newFolder.getId(),
-        name: newFolder.getName()
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // 3. 이름 바꾸기 (폴더 또는 파일 자동 감지)
-    if (action === 'rename') {
-      var renameId = data.id;
-      var newName = data.name;
-      try {
-        DriveApp.getFileById(renameId).setName(newName);
-      } catch (errF) {
-        DriveApp.getFolderById(renameId).setName(newName);
-      }
-      return ContentService.createTextOutput(JSON.stringify({ success: true, id: renameId, name: newName })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // 4. 파일 업로드
-    if (action === 'upload') {
-      var upFolderId = data.folderId || '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
-      var upFolder = DriveApp.getFolderById(upFolderId);
-      var contentType = data.mimeType || 'application/octet-stream';
-      var decoded = Utilities.base64Decode(data.base64);
-      var blob = Utilities.newBlob(decoded, contentType, data.name);
-      var file = upFolder.createFile(blob);
-      return ContentService.createTextOutput(JSON.stringify({
-        success: true,
-        fileId: file.getId(),
-        name: file.getName()
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    throw new Error('지원되지 않는 요청 유형: ' + action);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      error: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
-  }
-}`;
 
 export default function App() {
   // --- 통합 포털 세션 (전자칠판, 선생님, 학생, 관리자) ---
@@ -149,26 +73,11 @@ export default function App() {
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   const { handleScannedResult } = useQrScannerAction();
 
-  // --- 드라이브 설정 상태 (구형 키/폴더 자동 마이그레이션 적용) ---
-  const [rootFolderId, setRootFolderId] = useState<string>(() => {
-    const saved = localStorage.getItem('lbw_root_folder_id');
-    if (!saved || saved === '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn') {
-      localStorage.setItem('lbw_root_folder_id', DEFAULT_ROOT_FOLDER_ID);
-      return DEFAULT_ROOT_FOLDER_ID;
-    }
-    return saved;
-  });
-  const [googleApiKey, setGoogleApiKey] = useState<string>(() => {
-    const saved = localStorage.getItem('lbw_google_api_key');
-    if (!saved || saved === 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw') {
-      localStorage.setItem('lbw_google_api_key', DEFAULT_GOOGLE_API_KEY);
-      return DEFAULT_GOOGLE_API_KEY;
-    }
-    return saved;
-  });
-  const [gasUploadUrl, setGasUploadUrl] = useState<string>(() => {
-    return localStorage.getItem('lbw_gas_upload_url') || DEFAULT_GAS_UPLOAD_URL;
-  });
+  // --- 드라이브 설정 상태 (중앙 driveService 모듈 연동) ---
+  const [driveConfig, setDriveConfigState] = useState<DriveConfig>(() => getDriveConfig());
+  const rootFolderId = driveConfig.rootFolderId;
+  const googleApiKey = driveConfig.googleApiKey;
+  const gasUploadUrl = driveConfig.gasUploadUrl;
 
   // --- 폴더 탐색 상태 ---
   const [folderHistory, setFolderHistory] = useState<{ id: string; name: string }[]>([
@@ -321,31 +230,22 @@ export default function App() {
     return rootTeacherFolders.map(item => item.name);
   }, [rootTeacherFolders]);
 
-  // 새 선생님 추가 핸들러: 구글 드라이브 최상위 폴더에 실제 폴더 생성 시도
+  // 새 선생님 추가 핸들러: 구글 드라이브 최상위 폴더에 실제 폴더 생성 시도 (모듈화)
   const handleAddTeacher = async (teacherName: string): Promise<{ success: boolean; error?: string }> => {
     const cleanName = teacherName.trim().replace(' 선생님', '').replace('선생님', '').trim();
     if (!cleanName) return { success: false, error: '선생님 이름을 입력해 주세요.' };
 
     showToast(`📁 구글 드라이브에 '${cleanName}' 선생님 폴더 생성을 시도합니다...`);
 
-    try {
-      const res = await executeDriveAction({
-        action: 'createFolder',
-        folderId: rootFolderId,
-        name: cleanName
-      });
+    const res = await createTeacherFolder(cleanName, { rootFolderId, googleApiKey, gasUploadUrl });
 
-      if (res && (res.folderId || res.id)) {
-        await fetchRootTeacherFolders();
-        loadWhiteboardTeacherLessons();
-        showToast(`🎉 '${cleanName}' 선생님 폴더가 구글 드라이브에 생성되었습니다. (초기 비밀번호: 1234)`);
-        return { success: true };
-      } else {
-        throw new Error(res?.error || '구글 드라이브 폴더 생성 실패');
-      }
-    } catch (err: any) {
-      console.warn('구글 드라이브 선생님 폴더 생성 오류:', err);
-      return { success: false, error: err.message || '구글 드라이브 시스템 권한(403) 오류' };
+    if (res.success) {
+      await fetchRootTeacherFolders();
+      loadWhiteboardTeacherLessons();
+      showToast(`🎉 '${cleanName}' 선생님 폴더가 구글 드라이브에 생성되었습니다. (초기 비밀번호: 1234)`);
+      return { success: true };
+    } else {
+      return { success: false, error: res.error || '구글 드라이브 시스템 권한(403) 오류' };
     }
   };
 
@@ -446,72 +346,22 @@ export default function App() {
   };
 
   // ==========================================================================
-  // [드라이브 폴더 데이터 실시간 로드 - 100% 구글 드라이브 실제 목록 연동]
+  // [드라이브 폴더 데이터 실시간 로드 - driveService 모듈 연동]
   // ==========================================================================
   const fetchDriveItems = async (folderId: string) => {
     setIsLoading(true);
     setErrorMessage(null);
     setSelectedItemId(null);
 
-    // 1. 구글 공식 Drive API v3 직접 호출 최우선 실행 (100% 실제 데이터)
-    if (googleApiKey) {
-      try {
-        const directUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=folder,name&key=${googleApiKey}&_t=${Date.now()}`;
-        const gRes = await fetch(directUrl, { cache: 'no-store' });
-        if (gRes.ok) {
-          const gData = await gRes.json();
-          const directItems: DriveItem[] = (gData.files || [])
-            .map((file: any) => {
-            const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
-            const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
-            const sizeStr = sizeBytes > 0 
-              ? sizeBytes > 1024 * 1024 
-                ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB` 
-                : `${(sizeBytes / 1024).toFixed(0)} KB` 
-              : '-';
-
-            return {
-              id: file.id,
-              name: file.name,
-              type: isFolder ? 'folder' : 'document',
-              folderId: isFolder ? file.id : undefined,
-              size: isFolder ? '-' : sizeStr,
-              updatedAt: file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('ko-KR') : '-',
-              viewUrl: isFolder 
-                ? `https://drive.google.com/drive/folders/${file.id}?usp=sharing` 
-                : `https://drive.google.com/file/d/${file.id}/view?usp=sharing`,
-              downloadUrl: `${apiBase}/api/drive?action=download&fileId=${file.id}&fileName=${encodeURIComponent(file.name)}`
-            };
-          });
-          setItems(directItems);
-          setIsLoading(false);
-          return;
-        }
-      } catch (directErr) {
-        console.warn('Direct Google Drive API failed, fallback to proxy:', directErr);
-      }
-    }
-
     try {
-      const queryParams = new URLSearchParams({
-        action: 'list',
-        folderId,
-        _t: Date.now().toString(),
-        ...(googleApiKey ? { apiKey: googleApiKey } : {})
+      const driveItems = await fetchDriveItemsFromService(folderId, {
+        rootFolderId,
+        googleApiKey,
+        gasUploadUrl
       });
-
-      const res = await fetch(`${apiBase}/api/drive?${queryParams.toString()}`, { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.items && Array.isArray(data.items)) {
-          setItems(data.items);
-          setIsLoading(false);
-          return;
-        }
-      }
-      throw new Error('데이터 응답 형식 오류');
+      setItems(driveItems);
     } catch (err: any) {
-      console.warn('API 목록 조회 실패:', err);
+      console.warn('드라이브 목록 조회 예외:', err);
       setItems([]);
       setErrorMessage(null);
     } finally {
@@ -636,59 +486,14 @@ export default function App() {
   }, [activeModal, activeQrLesson]);
 
   // ==========================================================================
-  // [구글 드라이브 통합 액션 실행 엔진]
+  // [구글 드라이브 통합 액션 실행 래퍼 (driveService 모듈에 위임)]
   // ==========================================================================
   const executeDriveAction = async (payload: any): Promise<any> => {
-    const finalGasUrl = gasUploadUrl || DEFAULT_GAS_UPLOAD_URL;
-
-
-    try {
-      const res = await fetch(`${apiBase}/api/drive`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, gasUrl: finalGasUrl })
-      });
-      if (res.ok) {
-        const text = await res.text();
-        try {
-          const data = JSON.parse(text);
-          if (data.success) return data;
-          if (data.error) throw new Error(data.error);
-        } catch (jsonErr: any) {
-          throw new Error(jsonErr.message);
-        }
-      }
-    } catch (proxyErr: any) {
-      console.warn('Proxy drive action failed, trying direct GAS fetch:', proxyErr);
-      if (proxyErr.message && (proxyErr.message.includes('액세스') || proxyErr.message.includes('권한'))) {
-        throw proxyErr;
-      }
-    }
-
-    if (finalGasUrl) {
-      try {
-        const directRes = await fetch(finalGasUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload)
-        });
-        const directText = await directRes.text();
-        let directData;
-        try {
-          directData = JSON.parse(directText);
-        } catch {
-          throw new Error('Google Apps Script 웹 앱 권한 오류 (HTML 응답 수신됨)');
-        }
-        if (!directData.success) {
-          throw new Error(directData.error || '요청 처리에 실패했습니다.');
-        }
-        return directData;
-      } catch (directErr: any) {
-        throw new Error(directErr.message || '요청 처리에 실패했습니다.');
-      }
-    }
-
-    throw new Error('Google Apps Script 업로드 URL이 설정되어 있지 않습니다.');
+    return executeDriveActionFromService(payload, {
+      rootFolderId,
+      googleApiKey,
+      gasUploadUrl
+    });
   };
 
   // ==========================================================================
@@ -1432,20 +1237,7 @@ export default function App() {
     }
   };
 
-  // ==========================================================================
-  // [파일 업로드 처리]
-  // ==========================================================================
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        const result = reader.result as string;
-        resolve(result.split(',')[1]);
-      };
-      reader.onerror = error => reject(error);
-    });
-  };
+  // (fileToBase64는 driveService 모듈에서 import하여 사용)
 
   const handleUploadFiles = async (files: File[]) => {
     if (!canEdit) {
@@ -3516,16 +3308,15 @@ export default function App() {
             </div>
             <form onSubmit={(e) => {
               e.preventDefault();
+              const updated = saveDriveConfig({
+                rootFolderId: tempRootFolderId.trim() || undefined,
+                googleApiKey: tempApiKey.trim() || undefined,
+                gasUploadUrl: tempGasUrl.trim() || undefined
+              });
+              setDriveConfigState(updated);
               if (tempRootFolderId.trim()) {
-                setRootFolderId(tempRootFolderId.trim());
-                localStorage.setItem('lbw_root_folder_id', tempRootFolderId.trim());
-                setFolderHistory([{ id: tempRootFolderId.trim(), name: '내 드라이브' }]);
+                setFolderHistory([{ id: updated.rootFolderId, name: '내 드라이브' }]);
               }
-              setGoogleApiKey(tempApiKey.trim());
-              localStorage.setItem('lbw_google_api_key', tempApiKey.trim());
-              const finalGas = tempGasUrl.trim() || DEFAULT_GAS_UPLOAD_URL;
-              setGasUploadUrl(finalGas);
-              localStorage.setItem('lbw_gas_upload_url', finalGas);
               setActiveModal(null);
               showToast('✅ 드라이브 인프라 설정이 저장되었습니다.');
             }} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -3644,8 +3435,8 @@ export default function App() {
                     className="g-btn g-btn-primary"
                     onClick={() => {
                       if (tempGasUrl.trim()) {
-                        setGasUploadUrl(tempGasUrl.trim());
-                        localStorage.setItem('lbw_gas_upload_url', tempGasUrl.trim());
+                        const updated = saveDriveConfig({ gasUploadUrl: tempGasUrl.trim() });
+                        setDriveConfigState(updated);
                         showToast('✅ 웹앱 URL이 저장되었습니다.');
                         setActiveModal(null);
                       }
