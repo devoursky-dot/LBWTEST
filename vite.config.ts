@@ -104,7 +104,7 @@ function localDriveApiPlugin(): Plugin {
               req.on('end', async () => {
                 try {
                   const body = JSON.parse(bodyStr || '{}');
-                  const targetGasUrl = body.gasUrl || process.env.VITE_GAS_UPLOAD_URL || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
+                  const targetGasUrl = body.gasUrl || process.env.VITE_GAS_UPLOAD_URL || 'https://script.google.com/macros/s/AKfycbyzVzpNLWD58mtuhE2FBTP2NGkV--8pet3WACl7FrBx8yuopJ9LZHowYHl0jsJwjvFigw/exec';
                   
                   const gasRes = await fetch(targetGasUrl, {
                     method: 'POST',

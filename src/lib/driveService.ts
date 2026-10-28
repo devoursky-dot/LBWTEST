@@ -16,11 +16,15 @@ import { getApiBaseUrl } from './apiConfig';
 // ============================================================================
 export const DEFAULT_ROOT_FOLDER_ID = '1_bNWtyScX1zl-Xlz4WA8yZJC_qAshXlM';
 export const DEFAULT_GOOGLE_API_KEY = 'AIzaSyD1qkVW-lVqI0TX7tNptdlDXSbhxvYuONA';
-export const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
+export const DEFAULT_GAS_UPLOAD_URL = (import.meta.env.VITE_GAS_UPLOAD_URL as string) || 'https://script.google.com/macros/s/AKfycbyzVzpNLWD58mtuhE2FBTP2NGkV--8pet3WACl7FrBx8yuopJ9LZHowYHl0jsJwjvFigw/exec';
 
 // 과거 구형 인프라 키 (자동 마이그레이션 대상)
 const LEGACY_ROOT_FOLDER_ID = '1Ew38nohOksBhypc2UjHYTmi6bSjbICmn';
 const LEGACY_GOOGLE_API_KEY = 'AIzaSyAmEvx5j8IFigp22Ujp1Cm8lF4wpi0xlFw';
+const LEGACY_GAS_URLS = [
+  'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec',
+  'https://script.google.com/macros/s/AKfycbxochhrBdED9cc7EiSKp7eEFtbRjn3x_MV_50hLfLgM3W7jKm7S115aabgvEC2lKxEF2A/exec'
+];
 
 export const STORAGE_KEYS = {
   ROOT_FOLDER_ID: 'lbw_root_folder_id',
@@ -59,7 +63,11 @@ export function getDriveConfig(): DriveConfig {
       localStorage.setItem(STORAGE_KEYS.GOOGLE_API_KEY, DEFAULT_GOOGLE_API_KEY);
     }
 
-    const savedGas = localStorage.getItem(STORAGE_KEYS.GAS_UPLOAD_URL) || DEFAULT_GAS_UPLOAD_URL;
+    let savedGas = localStorage.getItem(STORAGE_KEYS.GAS_UPLOAD_URL);
+    if (!savedGas || LEGACY_GAS_URLS.includes(savedGas)) {
+      savedGas = DEFAULT_GAS_UPLOAD_URL;
+      localStorage.setItem(STORAGE_KEYS.GAS_UPLOAD_URL, DEFAULT_GAS_UPLOAD_URL);
+    }
 
     return {
       rootFolderId: savedRoot,

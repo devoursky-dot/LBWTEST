@@ -197,7 +197,7 @@ export async function GET(request: Request) {
   });
 }
 
-const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbx_J2hdpXKy8iKFu8cxof4aKGYdhFO4ea93_E3a3KTeTNRbHMaaV4Fo7IkjbeDGUkli/exec';
+const DEFAULT_GAS_URL = 'https://script.google.com/macros/s/AKfycbyzVzpNLWD58mtuhE2FBTP2NGkV--8pet3WACl7FrBx8yuopJ9LZHowYHl0jsJwjvFigw/exec';
 
 export async function POST(request: Request) {
   const corsHeaders = {
