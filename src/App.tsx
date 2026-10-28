@@ -129,7 +129,7 @@ export default function App() {
   const [whiteboardTeachersList, setWhiteboardTeachersList] = useState<any[]>([]);
   const [isLoadingWhiteboardLessons, setIsLoadingWhiteboardLessons] = useState<boolean>(false);
   const [selectedTeacherNameForBoard, setSelectedTeacherNameForBoard] = useState<string | null>(null);
-  const [whiteboardViewMode, setWhiteboardViewMode] = useState<'hub' | 'drive'>('hub');
+  const [whiteboardViewMode] = useState<'hub' | 'drive'>('hub');
   const [whiteboardSessionPrompt, setWhiteboardSessionPrompt] = useState<{
     lesson: any;
     teacherName: string;
@@ -1426,11 +1426,19 @@ export default function App() {
           1. 상단 구글 드라이브 헤더
           ==================================================================== */}
       <header className="gdrive-header">
-        <div 
-          className="gdrive-logo-group"
-          onClick={navigateToHome}
-          title="드라이브 홈으로 이동"
-        >
+        {authMode === 'whiteboard' ? (
+          <div className="gdrive-logo-group" style={{ cursor: 'default' }}>
+            <span style={{ fontSize: '24px' }}>🖥️</span>
+            <span className="gdrive-logo-text" style={{ fontSize: '18px', color: '#ffffff', fontWeight: 700 }}>
+              전자칠판 라이브 수업 센터
+            </span>
+          </div>
+        ) : (
+          <div 
+            className="gdrive-logo-group"
+            onClick={navigateToHome}
+            title="드라이브 홈으로 이동"
+          >
           <div className="gdrive-logo-icon">
             {/* Google Drive 공식 SVG 아이콘 */}
             <svg width="34" height="30" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
@@ -1444,10 +1452,12 @@ export default function App() {
           </div>
           <span className="gdrive-logo-text">Drive</span>
           <span className="gdrive-logo-sub">전자칠판 허브</span>
-        </div>
+          </div>
+        )}
 
-        {/* 타원형 검색 바 */}
-        <div className="gdrive-search-bar" onClick={(e) => e.stopPropagation()}>
+        {/* 타원형 검색 바: 전자칠판 모드에서는 숨김 */}
+        {authMode !== 'whiteboard' && (
+          <div className="gdrive-search-bar" onClick={(e) => e.stopPropagation()}>
           <span style={{ fontSize: '18px', color: 'var(--g-text-muted)' }}>🔍</span>
           <input 
             type="text" 
@@ -1464,9 +1474,45 @@ export default function App() {
             </button>
           )}
         </div>
+        )}
 
         {/* 헤더 우측 메뉴 */}
-        <div className="gdrive-header-actions" onClick={(e) => e.stopPropagation()}>
+        {authMode === 'whiteboard' ? (
+          <div className="gdrive-header-actions" onClick={(e) => e.stopPropagation()} style={{ marginLeft: 'auto' }}>
+            <button
+              type="button"
+              className="g-btn"
+              onClick={() => checkVersion(true)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '6px 11px',
+                borderRadius: '20px',
+                border: '1px solid rgba(255, 255, 255, 0.16)',
+                background: 'rgba(255, 255, 255, 0.06)',
+                color: '#cbd5e1',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                marginRight: '8px'
+              }}
+              title="클릭 시 최신 배포 버전을 확인합니다."
+            >
+              <span>🔄</span>
+              <span>v{localVersion.version}</span>
+            </button>
+            <button
+              className="g-btn g-btn-text"
+              style={{ fontSize: '13px', fontWeight: 700, border: '1px solid rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', padding: '6px 16px', borderRadius: '8px', cursor: 'pointer' }}
+              onClick={handlePortalLogout}
+              title="로그아웃하고 시작 화면으로 돌아갑니다."
+            >
+              🚪 로그아웃
+            </button>
+          </div>
+        ) : (
+          <div className="gdrive-header-actions" onClick={(e) => e.stopPropagation()}>
           {/* 최신 버전 확인 및 앱 버전 배지 */}
           <button
             type="button"
@@ -1520,31 +1566,7 @@ export default function App() {
             <span>수업 QR 찍기</span>
           </button>
 
-          {/* 전자칠판 모드 전용: 수업 센터 vs 드라이브 탐색기 원클릭 스위처 */}
-          {authMode === 'whiteboard' && (
-            <button
-              type="button"
-              className="g-btn"
-              onClick={() => setWhiteboardViewMode(prev => prev === 'hub' ? 'drive' : 'hub')}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '6px 12px',
-                borderRadius: '20px',
-                border: '1.5px solid #3b82f6',
-                background: whiteboardViewMode === 'hub' ? 'linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(37, 99, 235, 0.3) 100%)' : 'rgba(255,255,255,0.08)',
-                color: '#93c5fd',
-                fontSize: '12.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                marginRight: '6px'
-              }}
-              title={whiteboardViewMode === 'hub' ? '구글 드라이브 파일 탐색기로 전환' : '전자칠판 라이브 수업 센터로 복귀'}
-            >
-              <span>{whiteboardViewMode === 'hub' ? '📁 드라이브 탐색기' : '🖥️ 수업 센터'}</span>
-            </button>
-          )}
+
 
           <button 
             className="gdrive-icon-btn" 
@@ -1603,13 +1625,15 @@ export default function App() {
             </button>
           </div>
         </div>
+      )}
       </header>
 
       {/* ====================================================================
           2. 바디 (사이드바 + 메인 뷰)
           ==================================================================== */}
       <div className="gdrive-body">
-        {/* 좌측 사이드바 */}
+        {/* 좌측 사이드바: 전자칠판 모드에서는 완전 제거 */}
+        {authMode !== 'whiteboard' && (
         <aside className="gdrive-sidebar" onClick={(e) => e.stopPropagation()}>
           {/* [+ 새로 만들기] 버튼 - 오직 선생님/관리자 모드에서만 활성화! 기본 모드는 다운로드 뱃지 표시 */}
           {canEdit ? (
@@ -1714,6 +1738,7 @@ export default function App() {
             </button>
           </nav>
         </aside>
+        )}
 
         {/* 메인 뷰 */}
         <main className="gdrive-main" onClick={() => setSelectedItemId(null)}>
@@ -1737,13 +1762,13 @@ export default function App() {
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <span style={{ fontSize: '28px' }}>🖥️</span>
-                    <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#ffffff' }}>
+                    <h2 
+                      style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#ffffff' }}
+                      title="선생님을 선택하고 개설된 수업을 터치하면 실시간 수업이 시작됩니다."
+                    >
                       전자칠판 라이브 수업 센터
                     </h2>
                   </div>
-                  <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8' }}>
-                    선생님을 선택하고 개설된 수업을 터치하면 전자칠판 실시간 수업이 즉시 시작됩니다.
-                  </p>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1751,19 +1776,10 @@ export default function App() {
                     type="button"
                     onClick={loadWhiteboardTeacherLessons}
                     className="g-btn g-btn-text"
-                    style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--g-border)', padding: '8px 14px', borderRadius: '8px', color: '#ffffff', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer' }}
+                    style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid var(--g-border)', padding: '8px 16px', borderRadius: '8px', color: '#ffffff', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
                     title="수업 목록 새로고침"
                   >
                     🔄 목록 새로고침
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setWhiteboardViewMode('drive')}
-                    className="g-btn g-btn-text"
-                    style={{ background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.4)', padding: '8px 14px', borderRadius: '8px', color: '#93c5fd', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer' }}
-                    title="구글 드라이브 파일 탐색기로 전환"
-                  >
-                    📁 드라이브 탐색기
                   </button>
                 </div>
               </div>
@@ -1820,9 +1836,7 @@ export default function App() {
                           <div style={{ fontSize: '16px', fontWeight: 700, color: '#ffffff' }}>
                             {teacher.teacherName} 선생님
                           </div>
-                          <div style={{ fontSize: '12px', color: isSelected ? '#93c5fd' : '#64748b', marginTop: '4px' }}>
-                            {isSelected ? '선택됨 (수업 목록 표시 중)' : '터치하여 수업 보기 ▶'}
-                          </div>
+                          {/* 사족 문구 제거: 카드 자체 title로 처리 */}
                         </div>
                       );
                     })}

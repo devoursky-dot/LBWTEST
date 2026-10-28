@@ -26,7 +26,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   lesson,
   initialClear = false,
   onExit,
-  onOpenFolder,
+  onOpenFolder: _onOpenFolder,
   executeDriveAction,
   showToast
 }) => {
@@ -259,7 +259,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (data.success && Array.isArray(data.notes) && data.notes.length > 0) {
-          setStudentSubmissions(data.notes as ClassNoteRecord[]);
+          const studentOnlyNotes = (data.notes as ClassNoteRecord[]).filter(
+            n => n.student_grade !== '_TEACHER_SESSION_' && !n.student_grade?.startsWith('_TEACHER')
+          );
+          setStudentSubmissions(studentOnlyNotes);
         }
       }
     } catch {}
@@ -271,6 +274,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         .from('class_notes')
         .select('*')
         .eq('lesson_id', currentLessonId)
+        .neq('student_grade', '_TEACHER_SESSION_')
         .order('updated_at', { ascending: false });
       const timeoutPromise = new Promise<any>((resolve) =>
         setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 1500)
@@ -278,7 +282,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       const { data, error } = await Promise.race([sbPromise, timeoutPromise]);
 
       if (!error && data && data.length > 0) {
-        setStudentSubmissions(data as ClassNoteRecord[]);
+        const studentOnlyNotes = (data as ClassNoteRecord[]).filter(
+          n => n.student_grade !== '_TEACHER_SESSION_' && !n.student_grade?.startsWith('_TEACHER')
+        );
+        setStudentSubmissions(studentOnlyNotes);
       }
     } catch (e) {
       console.warn('초기 제출 목록 로드 오류:', e);
@@ -301,15 +308,16 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         }).catch(() => {});
       } catch {}
 
-      // 2. Supabase 비동기 삭제 (1.5초 가드)
+      // 2. Supabase 학생 필기만 비동기 삭제 (교사 세션 row 보존)
       if (supabase && isSupabaseConfigured) {
-        const delPromise = supabase.from('class_notes').delete().eq('lesson_id', currentLessonId);
+        const delPromise = supabase.from('class_notes').delete().eq('lesson_id', currentLessonId).neq('student_grade', '_TEACHER_SESSION_');
         const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
         Promise.race([delPromise, timeoutPromise]).catch(() => {});
       }
 
       setStudentSubmissions([]);
       setStudentPresences(new Map());
+      setStudentHeartbeats(new Map());
       setSelectedStudentNote(null);
       selectedStudentKeyRef.current = null;
 
@@ -510,8 +518,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       submission?: ClassNoteRecord;
     }>();
 
-    // 1) 제출 기록이 있는 학생 추가
+    // 1) 제출 기록이 있는 학생 추가 (교사 세션 row 원천 제외)
     for (const sub of studentSubmissions) {
+      if (sub.student_grade === '_TEACHER_SESSION_' || sub.student_grade?.startsWith('_TEACHER')) continue;
       const key = `${sub.student_grade}_${sub.student_class}_${sub.student_num}`;
       studentMap.set(key, {
         key,
@@ -525,8 +534,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       });
     }
 
-    // 2) 실시간 핑 접속자 상태 병합
+    // 2) 실시간 핑 접속자 상태 병합 (교사 세션 row 원천 제외)
     for (const [key, hb] of studentHeartbeats.entries()) {
+      if (hb.grade === '_TEACHER_SESSION_' || hb.grade?.startsWith('_TEACHER')) continue;
       const existing = studentMap.get(key);
       if (existing) {
         existing.status = hb.status;
@@ -605,8 +615,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       return;
     }
 
-    const PIP_WIDTH = 380;
-    const PIP_HEIGHT = 280;
+    const PIP_WIDTH = 150;
+    const PIP_HEIGHT = 300;
 
     // 1) 최신 크롬/엣지 Document Picture-in-Picture 지원 시 (OS 레벨 Always-on-Top 고정)
     if (typeof window !== 'undefined' && 'documentPictureInPicture' in window && (window as any).documentPictureInPicture?.requestWindow) {
@@ -772,8 +782,13 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         selectedStudentKeyRef.current = null;
       }
 
-      // 2. 실시간 출석 목록(Presence)에서 즉시 제거
+      // 2. 실시간 출석 목록(Presence) 및 실시간 핑 목록(Heartbeats)에서 즉시 완전 제거
       setStudentPresences((prev) => {
+        const next = new Map(prev);
+        next.delete(studentKey);
+        return next;
+      });
+      setStudentHeartbeats((prev) => {
         const next = new Map(prev);
         next.delete(studentKey);
         return next;
@@ -963,7 +978,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           </div>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h1 style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
+              <h1 
+                style={{ fontSize: '18px', fontWeight: 700, margin: 0, color: '#ffffff' }}
+                title="전자칠판 실시간 관제 및 학생 필기 모니터링"
+              >
                 {cleanLessonTitle}
               </h1>
               <span
@@ -979,9 +997,6 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
               >
                 대화형 라이브 수업 세션
               </span>
-            </div>
-            <div style={{ fontSize: '12px', color: '#8b949e', marginTop: '2px' }}>
-              전자칠판 실시간 관제 및 학생 필기 모니터링
             </div>
           </div>
         </div>
@@ -1095,30 +1110,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             }}
             disabled={isGeneratingPdf}
             onClick={handleCompileAndSavePdf}
-            title="현재까지 참여한 모든 학생의 필기를 학번순으로 자동 정렬하여 단일 A4 PDF 파일로 만들어 구글드라이브에 저장합니다."
+            title="현재까지 참여한 모든 학생의 필기를 학번순으로 자동 정렬하여 단일 A4 PDF 파일로 만들어 저장합니다."
           >
-            {isGeneratingPdf ? '⏳ PDF 모음집 생성 중...' : '📑 학생 필기 모음집 PDF로 저장'}
+            {isGeneratingPdf ? '⏳ PDF 생성 중...' : '📑 학생 필기 PDF 저장'}
           </button>
-
-          {onOpenFolder && (
-            <button
-              type="button"
-              style={{
-                background: '#21262d',
-                border: '1px solid #30363d',
-                color: '#c9d1d9',
-                borderRadius: '8px',
-                padding: '8px 14px',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-              onClick={() => onOpenFolder(currentLessonId, lesson.name)}
-              title="구글 드라이브 해당 수업 폴더를 엽니다."
-            >
-              📁 드라이브 폴더
-            </button>
-          )}
 
           {/* 수업 초기화 버튼 (원터치 초기화) */}
           <button
@@ -1335,12 +1330,12 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                 }}
               >
                 <div>
-                  <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#ffffff' }}>
-                    👥 전체 학생 실시간 출석 및 필기 모니터링
+                  <h2 
+                    style={{ fontSize: '17px', fontWeight: 700, margin: 0, color: '#ffffff' }}
+                    title="학번순 자동 정렬 • 타일을 터치하면 학생 필기를 전체화면으로 열람합니다."
+                  >
+                    👥 실시간 출석 및 필기 모니터링
                   </h2>
-                  <span style={{ fontSize: '12px', color: '#8b949e', marginTop: '3px', display: 'block' }}>
-                    학번순(1번~35번) 자동 정렬 • 타일을 터치하면 학생 필기를 전체화면으로 즉시 열람합니다.
-                  </span>
                 </div>
 
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -1894,7 +1889,7 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        padding: '12px 14px',
+        padding: '8px 6px',
         background: '#0f172a',
         color: '#f8fafc',
         boxSizing: 'border-box',
@@ -1908,43 +1903,35 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          marginBottom: '8px',
-          paddingBottom: '6px',
+          marginBottom: '6px',
+          paddingBottom: '4px',
           borderBottom: '1px solid rgba(148, 163, 184, 0.2)'
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-          <span style={{ fontSize: '15px' }}>🖥️</span>
-          <span
-            style={{
-              fontSize: '13px',
-              fontWeight: 800,
-              color: '#38bdf8',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis'
-            }}
-            title={lessonTitle}
-          >
-            {lessonTitle}
-          </span>
-        </div>
+        <span
+          style={{
+            fontSize: '11px',
+            fontWeight: 800,
+            color: '#38bdf8',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}
+          title={lessonTitle}
+        >
+          🖥️ 출석 관제
+        </span>
         <button
           onClick={onClose}
           type="button"
           style={{
-            background: 'rgba(255, 255, 255, 0.1)',
+            background: 'transparent',
             border: 'none',
             color: '#94a3b8',
-            borderRadius: '6px',
-            width: '24px',
-            height: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
             cursor: 'pointer',
-            fontSize: '13px',
-            fontWeight: 700
+            fontSize: '12px',
+            fontWeight: 700,
+            padding: '0 2px'
           }}
           title="모니터 닫기"
         >
@@ -1952,41 +1939,21 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
         </button>
       </div>
 
-      {/* 2. 접속한 인원수 카드 */}
+      {/* 2. 접속 인원수 카드 */}
       <div
         style={{
-          background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%)',
-          border: '1px solid rgba(56, 189, 248, 0.3)',
-          borderRadius: '10px',
-          padding: '8px 12px',
-          marginBottom: '8px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between'
+          background: 'rgba(30, 41, 59, 0.9)',
+          border: '1px solid rgba(56, 189, 248, 0.25)',
+          borderRadius: '6px',
+          padding: '4px 6px',
+          marginBottom: '6px',
+          textAlign: 'center'
         }}
+        title="현재 실시간 접속 인원 / 전체 학생"
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span
-            style={{
-              display: 'inline-block',
-              width: '10px',
-              height: '10px',
-              borderRadius: '50%',
-              background: '#22c55e',
-              boxShadow: '0 0 8px #22c55e'
-            }}
-          />
-          <span style={{ fontSize: '12.5px', color: '#cbd5e1', fontWeight: 700 }}>
-            현재 접속 인원
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-          <span style={{ fontSize: '22px', fontWeight: 900, color: '#4ade80' }}>
-            {activeCount}
-          </span>
-          <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 700 }}>
-            / {totalCount}명
-          </span>
+        <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 600 }}>접속</div>
+        <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', lineHeight: 1.15 }}>
+          {activeCount}<span style={{ fontSize: '11.5px', color: '#64748b' }}>/{totalCount}</span>
         </div>
       </div>
 
@@ -1997,111 +1964,75 @@ const MiniMonitorContent: React.FC<MiniMonitorContentProps> = ({
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          background: awayStudents.length > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.08)',
-          border: awayStudents.length > 0 ? '1.5px solid #ef4444' : '1px solid rgba(34, 197, 94, 0.3)',
-          borderRadius: '10px',
-          padding: '8px 10px',
+          background: awayStudents.length > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(34, 197, 94, 0.08)',
+          border: awayStudents.length > 0 ? '1px solid #ef4444' : '1px solid rgba(34, 197, 94, 0.25)',
+          borderRadius: '6px',
+          padding: '6px 4px',
           overflow: 'hidden'
         }}
       >
         <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: '6px'
+            fontSize: '10.5px',
+            fontWeight: 800,
+            color: awayStudents.length > 0 ? '#f87171' : '#4ade80',
+            marginBottom: '4px',
+            textAlign: 'center'
           }}
         >
-          <span
-            style={{
-              fontSize: '12px',
-              fontWeight: 800,
-              color: awayStudents.length > 0 ? '#f87171' : '#4ade80',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '5px'
-            }}
-          >
-            {awayStudents.length > 0 ? (
-              <>
-                <span>🚨</span>
-                <span>다른 화면 보는 중 ({awayStudents.length}명)</span>
-              </>
-            ) : (
-              <>
-                <span>✨</span>
-                <span>수업 화면 집중 중</span>
-              </>
-            )}
-          </span>
+          {awayStudents.length > 0 ? `🚨 이탈 (${awayStudents.length})` : '✨ 전원 집중'}
         </div>
 
-        {/* 학생 목록 (스크롤 가능 칩 뷰) */}
+        {/* 학생 목록 (세로 1열 칩 뷰) */}
         <div
           style={{
             flex: 1,
             overflowY: 'auto',
             display: 'flex',
-            flexWrap: 'wrap',
-            gap: '6px',
-            alignContent: 'flex-start',
-            paddingRight: '2px'
+            flexDirection: 'column',
+            gap: '4px',
+            paddingRight: '1px'
           }}
         >
           {awayStudents.length === 0 ? (
             <div
               style={{
-                width: '100%',
                 height: '100%',
                 display: 'flex',
-                flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
                 color: '#4ade80',
-                fontSize: '12.5px',
+                fontSize: '11px',
                 fontWeight: 600
               }}
+              title="모든 학생이 수업 화면을 보고 있습니다"
             >
-              <span>모든 학생이 필기 화면을 보고 있습니다 👍</span>
+              ● 정상
             </div>
           ) : (
             awayStudents.map(student => (
               <div
                 key={student.key}
                 style={{
-                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.35) 0%, rgba(185, 28, 28, 0.45) 100%)',
+                  background: 'rgba(239, 68, 68, 0.3)',
                   border: '1px solid #ef4444',
-                  borderRadius: '16px',
-                  padding: '4px 10px',
-                  fontSize: '12px',
-                  fontWeight: 800,
+                  borderRadius: '4px',
+                  padding: '3px 4px',
+                  fontSize: '11px',
+                  fontWeight: 700,
                   color: '#fee2e2',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  boxShadow: '0 2px 6px rgba(239, 68, 68, 0.3)'
+                  textAlign: 'center',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
                 }}
+                title={`${student.grade}-${student.classNum} ${student.studentNum}번 ${student.name} 학생이 다른 화면을 보고 있습니다`}
               >
-                <span style={{ color: '#ef4444', fontSize: '10px' }}>●</span>
-                <span>
-                  {student.grade}-{student.classNum} {student.studentNum}번 {student.name}
-                </span>
+                {student.studentNum}번 {student.name}
               </div>
             ))
           )}
         </div>
-      </div>
-
-      {/* 4. 하단 안내 문구 */}
-      <div
-        style={{
-          marginTop: '6px',
-          textAlign: 'center',
-          fontSize: '10px',
-          color: '#64748b'
-        }}
-      >
-        📌 PPT나 판서 앱 위에도 항상 최상위에 떠 있습니다
       </div>
     </div>
   );
