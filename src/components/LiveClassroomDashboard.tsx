@@ -304,6 +304,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         Promise.race([delPromise, timeoutPromise]).catch(() => {});
       }
 
+      kickedStudentKeysRef.current.clear();
       setStudentSubmissions([]);
       setStudentPresences(new Map());
       setStudentHeartbeats(new Map());
@@ -341,6 +342,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
   }, [currentLessonId, initialClear]);
 
   // 4. 학생별 실시간 핑 상태 추적 Map: key -> { student, lastPingTime, status, isAway }
+  // 🚨 선생님이 칠판에서 강제 삭제한 학생 키 목록 (구버전 클라이언트의 자동 재핑 무한 부활 100% 원천 차단)
+  const kickedStudentKeysRef = useRef<Set<string>>(new Set());
+
   const [studentHeartbeats, setStudentHeartbeats] = useState<Map<string, {
     grade: string;
     classNum: string;
@@ -437,6 +441,12 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         }
 
         const key = `${signal.student.grade}_${signal.student.classNum}_${signal.student.studentNum}`;
+
+        // 🚨 만약 선생님이 칠판에서 삭제한 학생이라면 핑을 100% 폐기하여 타일에 절대 다시 띄우지 않음!
+        if (kickedStudentKeysRef.current.has(key)) {
+          return;
+        }
+
         const now = Date.now();
 
         setStudentHeartbeats((prev) => {
@@ -810,6 +820,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 
     try {
       const studentKey = studentItem.key;
+
+      // 0. 강제 삭제 학생 차단 목록에 등록 (이후 날아오는 생존 핑 100% 원천 무시)
+      kickedStudentKeysRef.current.add(studentKey);
 
       // 1. 만약 현재 이 학생의 필기를 전체화면으로 열람 중이었다면 닫기
       if (selectedStudentKeyRef.current === studentKey) {
