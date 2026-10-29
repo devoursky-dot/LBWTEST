@@ -670,6 +670,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       setAuthNewPassword('');
       setAuthConfirmPassword('');
 
+      // 학생 학번/이름 변경 시 이전 학생 세션 정리 후 새 학생 정보로 칠판 연결 즉시 갱신
+      if (isTeacherLesson) {
+        classroomRealtime.leaveLesson(studentInfo || undefined);
+        isUserExitedRef.current = false;
+        setTimeout(() => {
+          handleConnectToBoard(lessonId, lessonTitle);
+        }, 150);
+      }
+
       // 공용 태블릿 완벽 대응: 변경/로그인된 학생의 독립 공책 드래프트 로드
       const newStudentId = studentInfoToId(info);
       const existingDraft = loadStudentDraft(lessonId, newStudentId);
@@ -728,6 +737,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     setAuthErrorMsg(null);
     showToast(`✅ 학생 이름이 '${cleanNewName}'(으)로 수정되었습니다.`);
+
+    if (isTeacherLesson) {
+      classroomRealtime.leaveLesson(studentInfo || undefined);
+      isUserExitedRef.current = false;
+      setTimeout(() => {
+        handleConnectToBoard(lessonId, lessonTitle);
+      }, 150);
+    }
   };
 
   // 로그인 상태에서 비밀번호만 단독 변경하는 핸들러
@@ -2596,7 +2613,14 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
     }
   }, [isTeacherLesson, loadLessonMaterials]);
 
-  // [수업 연결]: 칠판과의 실시간 연결은 학생이 상단 툴바의 [수업 선택]을 눌러 명시적으로 참여할 때만 동작합니다.
+  // 교사 수업 진입 시 실시간 전자칠판 세션 자동 연결 (퇴장 플래그가 세워진 경우에만 재연결 차단)
+  useEffect(() => {
+    if (isTeacherLesson && !isConnectedToBoard && !isUserExitedRef.current) {
+      if (studentInfo && studentInfo.name.trim()) {
+        handleConnectToBoard(lessonId, lessonTitle);
+      }
+    }
+  }, [isTeacherLesson, isConnectedToBoard, studentInfo, lessonId, lessonTitle]);
 
   // 수업 나가기 처리 (실시간 핑/연결만 해제, 화면의 수업 필기는 유지하여 오프라인 자동저장 지속)
   const handleExitLesson = async () => {

@@ -613,10 +613,12 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     );
   }, [sortedStudentRoster]);
 
-  // 실시간 미접속 학생 목록 (미니 모니터 경고용)
+  // 실시간 미접속 학생 목록 (오늘 접속했던 학생 중 잠금/절전/퇴장으로 끊긴 학생만 추적)
   const disconnectedStudents = useMemo(() => {
-    return sortedStudentRoster.filter(s => s.status === 'disconnected');
-  }, [sortedStudentRoster]);
+    return sortedStudentRoster.filter(s => 
+      studentHeartbeats.has(s.key) && s.status === 'disconnected'
+    );
+  }, [sortedStudentRoster, studentHeartbeats]);
 
   // ==========================================================================
   // [미니 플로팅 모니터 (Document PiP 및 Always-On-Top 팝업)]
@@ -733,7 +735,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         ? studentItem.submission.strokes_data.pages
         : [{ strokes: studentItem.submission.strokes_data.strokes || [], textItems: studentItem.submission.strokes_data.textItems || [] }];
       const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
-      setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+      if (!studentItem.currentPage || studentItem.currentPage <= 0) {
+        setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+      }
       setIsLoadingDetail(false);
     } else {
       // 임시 placeholder 설정
@@ -775,7 +779,9 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             ? data.strokes_data.pages
             : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
           const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
-          setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+          if (!studentItem.currentPage || studentItem.currentPage <= 0) {
+            setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+          }
 
           setStudentSubmissions((prev) => {
             const filtered = prev.filter(p => !(
@@ -1430,9 +1436,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                   const isOnline = studentItem.status === 'connected';
                   const isChecking = studentItem.status === 'checking';
                   const hasNote = Boolean(studentItem.submission);
+                  const hasEverConnectedToday = studentHeartbeats.has(studentItem.key);
 
                   let badgeBg = '#30363d';
-                  let badgeLabel = '미접속';
+                  let badgeLabel = hasEverConnectedToday ? '🔴 연결 끊김' : (hasNote ? '제출 완료' : '미접속');
                   let borderColor = '#30363d';
                   let cardBg = '#161b22';
 
@@ -1453,6 +1460,10 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     badgeLabel = '🟡 확인 중';
                     borderColor = '#d29922';
                     cardBg = 'rgba(210, 153, 34, 0.12)';
+                  } else if (hasEverConnectedToday) {
+                    badgeBg = 'rgba(239, 68, 68, 0.3)';
+                    badgeLabel = '🔴 연결 끊김';
+                    borderColor = 'rgba(239, 68, 68, 0.6)';
                   } else if (hasNote) {
                     badgeBg = '#1f6feb';
                     badgeLabel = '제출 완료';

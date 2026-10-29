@@ -457,7 +457,12 @@ export default function App() {
               // 실시간 이벤트 수신 시 즉시 목록 갱신
               fetchExistingNotes();
               const newRecord = payload.new as ClassNoteRecord;
-              if (newRecord && newRecord.student_name) {
+              if (
+                newRecord &&
+                newRecord.student_name &&
+                newRecord.student_grade !== '_TEACHER_SESSION_' &&
+                !newRecord.student_grade?.startsWith('_TEACHER')
+              ) {
                 showToast(`🔔 ${newRecord.student_grade}-${newRecord.student_class} ${newRecord.student_name} 학생이 필기를 제출했습니다!`);
               }
             }
@@ -472,7 +477,12 @@ export default function App() {
     const handleLocalMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'STUDENT_SUBMIT') {
         const record = event.data.record as ClassNoteRecord;
-        if (record && record.lesson_id === currentLessonId) {
+        if (
+          record &&
+          record.lesson_id === currentLessonId &&
+          record.student_grade !== '_TEACHER_SESSION_' &&
+          !record.student_grade?.startsWith('_TEACHER')
+        ) {
           setStudentSubmissions(prev => {
             const filtered = prev.filter(p => !(p.student_grade === record.student_grade && p.student_class === record.student_class && p.student_num === record.student_num));
             return [record, ...filtered];
