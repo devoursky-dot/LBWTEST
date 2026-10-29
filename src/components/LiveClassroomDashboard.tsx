@@ -836,40 +836,51 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       });
     }
 
-    // 학생 기기가 최신 필기를 클라우드에 업서트할 수 있도록 0.35초 대기 후 DB 조회
-    setTimeout(async () => {
-      if (supabase && isSupabaseConfigured) {
-        try {
-          const { data, error } = await supabase
-            .from('class_notes')
-            .select('*')
-            .eq('lesson_id', currentLessonId)
-            .eq('student_grade', studentItem.grade)
-            .eq('student_class', studentItem.classNum)
-            .eq('student_num', studentItem.studentNum)
-            .order('updated_at', { ascending: false })
-            .maybeSingle();
-
-          if (!error && data) {
-            setSelectedStudentNote(data);
-            setStudentSubmissions((prev) => {
-              const filtered = prev.filter(p => !(
-                p.student_grade === data.student_grade &&
-                p.student_class === data.student_class &&
-                p.student_num === data.student_num
-              ));
-              return [data, ...filtered];
-            });
-          }
-        } catch (err) {
-          console.warn('학생 상세 필기 조회 오류:', err);
-        } finally {
-          setIsLoadingDetail(false);
-        }
-      } else {
+    // [DB 동기화 함수]: 클라우드 최신 필기 레코드 조회
+    const fetchLatestFromDb = async () => {
+      if (!supabase || !isSupabaseConfigured) {
         setIsLoadingDetail(false);
+        return;
       }
-    }, 350);
+      try {
+        const { data, error } = await supabase
+          .from('class_notes')
+          .select('*')
+          .eq('lesson_id', currentLessonId)
+          .eq('student_grade', studentItem.grade)
+          .eq('student_class', studentItem.classNum)
+          .eq('student_num', studentItem.studentNum)
+          .order('updated_at', { ascending: false })
+          .maybeSingle();
+
+        if (!error && data) {
+          if (selectedStudentKeyRef.current === studentItem.key) {
+            setSelectedStudentNote(data);
+            setIsLoadingDetail(false);
+          }
+          setStudentSubmissions((prev) => {
+            const filtered = prev.filter(p => !(
+              p.student_grade === data.student_grade &&
+              p.student_class === data.student_class &&
+              p.student_num === data.student_num
+            ));
+            return [data, ...filtered];
+          });
+        }
+      } catch (err) {
+        console.warn('학생 상세 필기 조회 오류:', err);
+      }
+    };
+
+    // 1차 즉시 DB 확인 (학생이 이미 auto-save 해둔 필기 50ms 즉각 표출)
+    fetchLatestFromDb();
+
+    // 2차: 학생 기기의 REQUEST_STUDENT_NOTE 압축 및 업서트 시간(1.2초) 부여 후 DB 재확인
+    setTimeout(() => {
+      fetchLatestFromDb().finally(() => {
+        setIsLoadingDetail(false);
+      });
+    }, 1200);
   };
 
   // [잘못 접속된 학생 삭제 및 연결 해제]
@@ -1682,6 +1693,45 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           onClose={() => {
             setSelectedStudentNote(null);
             selectedStudentKeyRef.current = null;
+          }}
+          onRefresh={async () => {
+            if (!selectedStudentKeyRef.current) return;
+            setIsLoadingDetail(true);
+            const keyParts = selectedStudentKeyRef.current.split('_');
+            const [g, c, n] = keyParts;
+
+            // 실시간 신호 전송
+            await classroomRealtime.sendSignal({
+              type: 'REQUEST_STUDENT_NOTE',
+              lessonId: currentLessonId,
+              targetStudentKey: selectedStudentKeyRef.current
+            });
+
+            // 1초 후 DB 갱신 조회
+            setTimeout(async () => {
+              if (supabase && isSupabaseConfigured) {
+                try {
+                  const { data } = await supabase
+                    .from('class_notes')
+                    .select('*')
+                    .eq('lesson_id', currentLessonId)
+                    .eq('student_grade', g)
+                    .eq('student_class', c)
+                    .eq('student_num', n)
+                    .order('updated_at', { ascending: false })
+                    .maybeSingle();
+
+                  if (data && selectedStudentKeyRef.current === `${g}_${c}_${n}`) {
+                    setSelectedStudentNote(data);
+                    showToast('⚡ 학생의 최신 필기가 동기화되었습니다!');
+                  }
+                } finally {
+                  setIsLoadingDetail(false);
+                }
+              } else {
+                setIsLoadingDetail(false);
+              }
+            }, 1000);
           }}
           onSendFeedback={(studentName) => {
             showToast(`🌟 ${studentName} 학생에게 '참 잘했어요!' 피드백을 전달했습니다.`);

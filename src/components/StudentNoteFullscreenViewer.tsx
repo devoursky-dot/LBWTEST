@@ -10,6 +10,7 @@ export interface StudentNoteFullscreenViewerProps {
   isLoading?: boolean;
   onClose: () => void;
   onSendFeedback?: (studentName: string) => void;
+  onRefresh?: () => void;
 }
 
 // ============================================================================
@@ -259,7 +260,8 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
   initialPageIdx = 0,
   isLoading = false,
   onClose,
-  onSendFeedback
+  onSendFeedback,
+  onRefresh
 }) => {
   // 1. 멀티페이지 데이터 정규화
   const studentPages: StudentNoteSheetPage[] =
@@ -739,6 +741,35 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
         >
           {zoomPercent}% ↺
         </button>
+        {onRefresh && (
+          <>
+            <div style={{ width: '1px', height: '14px', background: 'rgba(255, 255, 255, 0.15)' }} />
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={isLoading}
+              title="학생 태블릿에서 최신 필기 즉시 동기화"
+              style={{
+                background: 'rgba(56, 189, 248, 0.18)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                color: '#38bdf8',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                padding: '2px 8px',
+                borderRadius: '9999px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                opacity: isLoading ? 0.6 : 1,
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <span style={{ display: 'inline-block', animation: isLoading ? 'spin 1s linear infinite' : 'none' }}>🔄</span>
+              <span>최신 동기화</span>
+            </button>
+          </>
+        )}
       </header>
 
       {/* ====================================================================

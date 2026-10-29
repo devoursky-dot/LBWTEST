@@ -883,6 +883,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
     const targetPage = updated[targetIdx];
     setCurrentPageIndex(targetIdx);
+    // 페이지 전환 시 즉시 클라우드에 필기 보존
+    if (isConnectedToBoard && studentInfo) {
+      syncCurrentNoteToCloudRef.current(true);
+    }
     setStrokes(targetPage?.strokes || []);
     setTextItems(targetPage?.textItems || []);
     setFullPageBackground(targetPage?.fullPageBackground || null);
@@ -2687,12 +2691,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       // 3. 💥 초경량 이미지 압축 (배경 이미지 및 스티커 95% 압축 -> 150KB 내외)
       const optimizedPages = await compressNotePagesForTransmission(rawOptimized);
 
-      const now = new Date().toISOString();
-      const studentKey = `${studentInfo.grade}_${studentInfo.classNum}_${studentInfo.studentNum}`;
-      const targetRowId = submissionIdRef.current || `note_${lessonId}_${studentKey}`;
+      const client = supabase;
+      let existingUuid = submissionIdRef.current;
+      if (!existingUuid && client && isSupabaseConfigured) {
+        try {
+          const { data: existingRow } = await client
+            .from('class_notes')
+            .select('id')
+            .eq('lesson_id', lessonId)
+            .eq('student_grade', studentInfo.grade)
+            .eq('student_class', studentInfo.classNum)
+            .eq('student_num', studentInfo.studentNum)
+            .order('updated_at', { ascending: false })
+            .maybeSingle();
+          if (existingRow?.id) {
+            existingUuid = existingRow.id;
+            submissionIdRef.current = existingRow.id;
+          }
+        } catch {}
+      }
 
+      const now = new Date().toISOString();
       const record: ClassNoteRecord = {
-        id: targetRowId,
         lesson_id: lessonId,
         student_grade: studentInfo.grade,
         student_class: studentInfo.classNum,
@@ -2707,6 +2727,10 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         },
         updated_at: now
       };
+
+      if (existingUuid) {
+        record.id = existingUuid;
+      }
 
       const curStudentId = studentInfo ? studentInfoToId(studentInfo) : 'anonymous';
 
@@ -2756,15 +2780,23 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
       }
 
       // 4-2. Supabase 클라우드 실시간 업서트 (최대 3.5초 비차단 타임아웃 가드 + 1회 백오프 재시도)
-      const client = supabase;
       if (client && isSupabaseConfigured) {
         try {
           const executeUpsert = async () => {
-            const sbPromise = client
-              .from('class_notes')
-              .upsert([record])
-              .select('id')
-              .single();
+            let sbPromise;
+            if (record.id) {
+              sbPromise = client
+                .from('class_notes')
+                .upsert([record])
+                .select('id')
+                .single();
+            } else {
+              sbPromise = client
+                .from('class_notes')
+                .insert([record])
+                .select('id')
+                .single();
+            }
             const timeoutPromise = new Promise<any>((resolve) =>
               setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 3500)
             );
@@ -2817,6 +2849,26 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
   const syncCurrentNoteToCloudRef = useRef(syncCurrentNoteToCloud);
   syncCurrentNoteToCloudRef.current = syncCurrentNoteToCloud;
+
+  // 학생이 펜 필기를 진행하면 1.2초 후 백그라운드 자동 클라우드 동기화 (선생님 칠판 실시간 반영)
+  const autoCloudSyncTimerRef = useRef<any>(null);
+  useEffect(() => {
+    if (!isConnectedToBoard || !studentInfo) return;
+
+    if (autoCloudSyncTimerRef.current) {
+      clearTimeout(autoCloudSyncTimerRef.current);
+    }
+
+    autoCloudSyncTimerRef.current = setTimeout(() => {
+      syncCurrentNoteToCloudRef.current(true);
+    }, 1200);
+
+    return () => {
+      if (autoCloudSyncTimerRef.current) {
+        clearTimeout(autoCloudSyncTimerRef.current);
+      }
+    };
+  }, [strokes, textItems, embeddedImages, currentPageIndex, isConnectedToBoard, studentInfo]);
 
   // [오프라인 모듈]: 백그라운드 자동 재전송 엔진 가동
   useEffect(() => {
