@@ -508,23 +508,58 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         showToast(`📝 ${record.student_grade}-${record.student_class} ${record.student_name} 학생 답안 제출!`);
       }
 
-      // [4] 온디맨드 필기 응답 수신
-      if (signal.type === 'RESPONSE_STUDENT_NOTE' && signal.noteRecord) {
-        const record = signal.noteRecord;
-        const recKey = `${record.student_grade}_${record.student_class}_${record.student_num}`;
-        if (selectedStudentKeyRef.current === recKey) {
-          setSelectedStudentNote(record);
-          setIsLoadingDetail(false);
-          showToast(`⚡ ${record.student_name} 학생 최신 필기 동기화됨`);
+      // [4] 온디맨드 필기 응답 수신 (웹소켓 데이터 직접 반영 + DB 동기화 2중 안전망)
+      if (signal.type === 'RESPONSE_STUDENT_NOTE') {
+        const student = signal.student || (signal.noteRecord ? {
+          grade: signal.noteRecord.student_grade,
+          classNum: signal.noteRecord.student_class,
+          studentNum: signal.noteRecord.student_num,
+          name: signal.noteRecord.student_name
+        } : null);
+
+        if (student) {
+          const recKey = `${student.grade}_${student.classNum}_${student.studentNum}`;
+
+          // 1) 웹소켓 페이로드에 noteRecord가 실려온 경우 즉각 반영
+          if (signal.noteRecord) {
+            if (selectedStudentKeyRef.current === recKey) {
+              setSelectedStudentNote(signal.noteRecord);
+              setIsLoadingDetail(false);
+            }
+            setStudentSubmissions((prev) => {
+              const filtered = prev.filter(p => !(
+                p.student_grade === student.grade &&
+                p.student_class === student.classNum &&
+                p.student_num === student.studentNum
+              ));
+              return [signal.noteRecord!, ...filtered];
+            });
+            showToast(`⚡ ${student.name} 학생 최신 필기 실시간 동기화 완료!`);
+          }
+
+          // 2) 웹소켓 페이로드 256KB 한계로 noteRecord가 생략된 경우를 대비해 DB 즉각 보충 조회
+          if (supabase && isSupabaseConfigured) {
+            supabase
+              .from('class_notes')
+              .select('*')
+              .eq('lesson_id', currentLessonId)
+              .eq('student_grade', student.grade)
+              .eq('student_class', student.classNum)
+              .eq('student_num', student.studentNum)
+              .order('updated_at', { ascending: false })
+              .maybeSingle()
+              .then(({ data }) => {
+                if (data) {
+                  if (selectedStudentKeyRef.current === recKey) {
+                    setSelectedStudentNote(data);
+                    setIsLoadingDetail(false);
+                  }
+                  setStudentSubmissions(prev => [data, ...prev.filter(p => !(p.student_grade === student.grade && p.student_class === student.classNum && p.student_num === student.studentNum))]);
+                  showToast(`⚡ ${student.name} 학생 최신 필기 실시간 동기화 완료!`);
+                }
+              });
+          }
         }
-        setStudentSubmissions((prev) => {
-          const filtered = prev.filter(p => !(
-            p.student_grade === record.student_grade &&
-            p.student_class === record.student_class &&
-            p.student_num === record.student_num
-          ));
-          return [record, ...filtered];
-        });
       }
     });
 
@@ -768,30 +803,31 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     setSelectedStudentPageIdx(targetPage);
     selectedStudentKeyRef.current = studentItem.key;
 
-    // 만약 이미 메모리에 strokes_data가 있는 경우 즉시 표시 및 첫 비어있지 않은 쪽으로 포커스
+    // 학생이 열람 중인 전체 쪽수(totalPages)에 맞춰 기본 페이지 배열 구성
+    const totalP = Math.max(studentItem.totalPages || 1, targetPage + 1);
+    const placeholderPages = Array.from({ length: totalP }).map(() => ({
+      strokes: [],
+      textItems: [],
+      images: []
+    }));
+
+    // 만약 이미 메모리에 strokes_data가 있는 경우 우선 표시
     if (studentItem.submission?.strokes_data?.pages || studentItem.submission?.strokes_data?.strokes) {
       setSelectedStudentNote(studentItem.submission);
-      const pages = (Array.isArray(studentItem.submission.strokes_data.pages) && studentItem.submission.strokes_data.pages.length > 0)
-        ? studentItem.submission.strokes_data.pages
-        : [{ strokes: studentItem.submission.strokes_data.strokes || [], textItems: studentItem.submission.strokes_data.textItems || [] }];
-      const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
-      if (!studentItem.currentPage || studentItem.currentPage <= 0) {
-        setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
-      }
       setIsLoadingDetail(false);
     } else {
-      // 임시 placeholder 설정
+      // 학생이 열람 중인 쪽수(예: 4쪽)를 온전히 반영한 기본 placeholder 생성
       setSelectedStudentNote({
         lesson_id: currentLessonId,
         student_grade: studentItem.grade,
         student_class: studentItem.classNum,
         student_num: studentItem.studentNum,
         student_name: studentItem.name,
-        strokes_data: { pages: [] }
+        strokes_data: { pages: placeholderPages }
       });
     }
 
-    // C. 학생이 실시간 연결(online) 상태인 경우 원격 온디맨드 동기화 요청 신호 전송
+    // 학생이 실시간 연결(online) 상태인 경우 원격 온디맨드 동기화 요청 신호 전송
     if (studentItem.status === 'connected') {
       await classroomRealtime.sendSignal({
         type: 'REQUEST_STUDENT_NOTE',
@@ -800,46 +836,40 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       });
     }
 
-    // D. Supabase DB에서 최신 데이터 조회 (학번 기준 단건 조회)
-    if (supabase && isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('class_notes')
-          .select('*')
-          .eq('lesson_id', currentLessonId)
-          .eq('student_grade', studentItem.grade)
-          .eq('student_class', studentItem.classNum)
-          .eq('student_num', studentItem.studentNum)
-          .order('updated_at', { ascending: false })
-          .maybeSingle();
+    // 학생 기기가 최신 필기를 클라우드에 업서트할 수 있도록 0.35초 대기 후 DB 조회
+    setTimeout(async () => {
+      if (supabase && isSupabaseConfigured) {
+        try {
+          const { data, error } = await supabase
+            .from('class_notes')
+            .select('*')
+            .eq('lesson_id', currentLessonId)
+            .eq('student_grade', studentItem.grade)
+            .eq('student_class', studentItem.classNum)
+            .eq('student_num', studentItem.studentNum)
+            .order('updated_at', { ascending: false })
+            .maybeSingle();
 
-        if (!error && data) {
-          setSelectedStudentNote(data);
-          const pages = (Array.isArray(data.strokes_data?.pages) && data.strokes_data.pages.length > 0)
-            ? data.strokes_data.pages
-            : [{ strokes: data.strokes_data?.strokes || [], textItems: data.strokes_data?.textItems || [] }];
-          const firstNonEmpty = pages.findIndex((p: any) => (p.strokes?.length || 0) > 0 || (p.textItems?.length || 0) > 0 || p.fullPageBackground);
-          if (!studentItem.currentPage || studentItem.currentPage <= 0) {
-            setSelectedStudentPageIdx(firstNonEmpty >= 0 ? firstNonEmpty : 0);
+          if (!error && data) {
+            setSelectedStudentNote(data);
+            setStudentSubmissions((prev) => {
+              const filtered = prev.filter(p => !(
+                p.student_grade === data.student_grade &&
+                p.student_class === data.student_class &&
+                p.student_num === data.student_num
+              ));
+              return [data, ...filtered];
+            });
           }
-
-          setStudentSubmissions((prev) => {
-            const filtered = prev.filter(p => !(
-              p.student_grade === data.student_grade &&
-              p.student_class === data.student_class &&
-              p.student_num === data.student_num
-            ));
-            return [data, ...filtered];
-          });
+        } catch (err) {
+          console.warn('학생 상세 필기 조회 오류:', err);
+        } finally {
+          setIsLoadingDetail(false);
         }
-      } catch (err) {
-        console.warn('학생 상세 필기 조회 오류:', err);
-      } finally {
+      } else {
         setIsLoadingDetail(false);
       }
-    } else {
-      setTimeout(() => setIsLoadingDetail(false), 300);
-    }
+    }, 350);
   };
 
   // [잘못 접속된 학생 삭제 및 연결 해제]

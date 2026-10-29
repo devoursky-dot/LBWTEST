@@ -2673,18 +2673,8 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         }
         return p;
       });
-
-      // 끝부분의 빈 페이지 정리 (최소 1페이지 유지)
+      // 학생의 모든 페이지(학습지 PDF 및 추가된 쪽 전체)를 축소/잘림 없이 온전히 보존
       const finalPages = [...currentPagesCopy];
-      while (finalPages.length > 1) {
-        const last = finalPages[finalPages.length - 1];
-        const isBlank = (!last.strokes || last.strokes.length === 0) &&
-                        (!last.textItems || last.textItems.length === 0) &&
-                        !last.fullPageBackground &&
-                        (!last.images || last.images.length === 0);
-        if (isBlank) finalPages.pop();
-        else break;
-      }
 
       // 2. 포인트 최적화
       const rawOptimized = finalPages.map(p => ({
@@ -2906,12 +2896,28 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
 
           const syncedRecord = await syncCurrentNoteToCloudRef.current(true);
           if (syncedRecord) {
-            await classroomRealtime.sendSignal({
-              type: 'RESPONSE_STUDENT_NOTE',
-              lessonId,
-              student: studentInfo,
-              noteRecord: syncedRecord
-            });
+            let recordToSend: ClassNoteRecord | undefined = syncedRecord;
+            try {
+              if (JSON.stringify(syncedRecord).length > 200000) {
+                // 200KB 초과 대용량 필기인 경우 웹소켓 256KB 제한 드롭 방지를 위해 DB 조회를 유도
+                recordToSend = undefined;
+              }
+            } catch {}
+
+            try {
+              await classroomRealtime.sendSignal({
+                type: 'RESPONSE_STUDENT_NOTE',
+                lessonId,
+                student: studentInfo,
+                noteRecord: recordToSend
+              });
+            } catch (wsErr) {
+              await classroomRealtime.sendSignal({
+                type: 'RESPONSE_STUDENT_NOTE',
+                lessonId,
+                student: studentInfo
+              });
+            }
           }
         } catch (syncErr) {
           console.warn('백그라운드 동기화 실패:', syncErr);

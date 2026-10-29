@@ -247,16 +247,22 @@ export const StudentNoteSheet: React.FC<StudentNoteSheetProps> = ({
             position: 'absolute',
             inset: 0,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#8b949e',
+            color: '#94a3b8',
             fontSize: '13px',
             zIndex: 5,
             textAlign: 'center',
-            pointerEvents: 'none'
+            pointerEvents: 'none',
+            gap: '6px'
           }}
         >
-          <span>✍️ 작성된 필기나 학습지가 없는 빈 쪽입니다.</span>
+          <span style={{ fontSize: '22px' }}>✍️</span>
+          <span style={{ fontWeight: 600 }}>학생이 아직 이 쪽에 필기를 작성하지 않았습니다.</span>
+          <span style={{ fontSize: '11px', color: '#64748b' }}>
+            학생이 태블릿에서 펜 필기를 진행하면 실시간으로 자동 반영됩니다.
+          </span>
         </div>
       )}
     </div>

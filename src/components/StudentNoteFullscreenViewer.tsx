@@ -284,8 +284,16 @@ export const StudentNoteFullscreenViewer: React.FC<StudentNoteFullscreenViewerPr
 
   // 2. 현재 선택된 페이지 인덱스
   const [currentPageIdx, setCurrentPageIdx] = useState(
-    Math.min(Math.max(0, initialPageIdx), studentPages.length - 1)
+    Math.min(Math.max(0, initialPageIdx), Math.max(0, studentPages.length - 1))
   );
+
+  // 학생 데이터가 비동기로 로드되거나 쪽수가 변경되면 학생이 보고 있는 해당 쪽으로 즉각 동기화
+  useEffect(() => {
+    if (initialPageIdx !== undefined && initialPageIdx >= 0) {
+      const validTarget = Math.min(initialPageIdx, Math.max(0, studentPages.length - 1));
+      setCurrentPageIdx(validTarget);
+    }
+  }, [initialPageIdx, studentPages.length]);
 
   const currentPage = studentPages[currentPageIdx] || {
     strokes: [],
