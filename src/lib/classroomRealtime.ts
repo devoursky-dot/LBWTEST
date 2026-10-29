@@ -10,6 +10,7 @@
  */
 
 import { supabase, isSupabaseConfigured, localRealtimeChannel, type ClassNoteRecord } from './supabase';
+import { getLocalVersionInfo } from '../modules/version';
 import { DEFAULT_ROOT_FOLDER_ID, DEFAULT_GOOGLE_API_KEY, getDriveConfig } from './driveService';
 
 export { DEFAULT_ROOT_FOLDER_ID, DEFAULT_GOOGLE_API_KEY };
@@ -63,7 +64,8 @@ export type RealtimeSignalType =
   | 'RESET_SESSION'          // 전자칠판 -> 학생 수업 종료/초기화 통보
   | 'KICK_STUDENT'           // 전자칠판 -> 학생 강제 퇴장 신호
   | 'REQUEST_ALL_SYNC'       // 전자칠판 -> 전체 학생 일괄 동기화 요청
-  | 'EXTEND_SESSION';        // 전자칠판 -> 학생 수업 시간 연장 통보
+  | 'EXTEND_SESSION'         // 전자칠판 -> 학생 수업 시간 연장 통보
+  | 'FORCE_RELOAD';          // 전자칠판 -> 구버전 학생 기기 원격 새로고침 명령
 
 export interface RealtimeSignalPayload {
   type: RealtimeSignalType;
@@ -80,6 +82,7 @@ export interface RealtimeSignalPayload {
     isAway?: boolean;
     currentPage?: number;
     totalPages?: number;
+    appVersion?: string;
   };
   noteRecord?: ClassNoteRecord;
   timestamp: number; // ms
@@ -589,7 +592,8 @@ class ClassroomRealtimeManager {
           ...studentInfo,
           isAway: getIsAway(),
           currentPage: pageInfo?.currentPage,
-          totalPages: pageInfo?.totalPages
+          totalPages: pageInfo?.totalPages,
+          appVersion: getLocalVersionInfo().version
         }
       }).catch(() => {});
     };
@@ -676,6 +680,17 @@ class ClassroomRealtimeManager {
   /**
    * 수업 채널 연결 해제 및 핑 중지
    */
+  /**
+   * 구버전 학생 태블릿 또는 특정 학생에게 원격 새로고침 명령 전송
+   */
+  public async sendForceReload(lessonId: string, targetStudentKey?: string): Promise<void> {
+    await this.sendSignal({
+      type: 'FORCE_RELOAD',
+      lessonId,
+      targetStudentKey
+    });
+  }
+
   public triggerStudentPing(): void {
     if (this.currentRole === 'student' && this.currentLessonId) {
       // 등록된 visibility 리스너나 이벤트 강제 격발

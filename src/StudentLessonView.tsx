@@ -2884,6 +2884,15 @@ export const StudentLessonView: React.FC<StudentLessonViewProps> = ({
         showToast('📢 선생님에 의해 전자칠판 연결이 해제되었습니다. 작성 중이던 필기는 기기에 안전하게 보존됩니다.');
         return;
       }
+      // 선생님 칠판으로부터 원격 강제 새로고침(최신 버전 갱신) 신호 수신
+      if (signal.type === 'FORCE_RELOAD' && (!signal.targetStudentKey || signal.targetStudentKey === myKey)) {
+        showToast('🚀 전자칠판으로부터 최신 버전 갱신 신호를 수신했습니다. 화면을 새로고침합니다...');
+        setTimeout(() => {
+          window.location.reload();
+        }, 600);
+        return;
+      }
+
       const isTargeted = signal.type === 'REQUEST_STUDENT_NOTE' && signal.targetStudentKey === myKey;
       const isAllSync = signal.type === 'REQUEST_ALL_SYNC';
 

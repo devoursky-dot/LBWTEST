@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { supabase, isSupabaseConfigured, type ClassNoteRecord } from '../lib/supabase';
 import { classroomRealtime, type StudentPresenceInfo, type RealtimeSignalPayload } from '../lib/classroomRealtime';
+import { getLocalVersionInfo } from '../modules/version';
 import { getApiBaseUrl } from '../lib/apiConfig';
 import { getDriveConfig, fetchDriveItems } from '../lib/driveService';
 import { generateClassSubmissionPdf } from '../lib/pdfGenerator';
@@ -31,6 +32,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
 }) => {
   const currentLessonId = lesson.folderId || lesson.id;
   const cleanLessonTitle = lesson.name.replace('[QR수업]', '').trim();
+  const boardVersion = useMemo(() => getLocalVersionInfo().version, []);
 
   // 학생 접속 URL 상태
   const [studentUrl, setStudentUrl] = useState<string>('');
@@ -355,6 +357,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
     isAway?: boolean;
     currentPage?: number;
     totalPages?: number;
+    appVersion?: string;
   }>>(new Map());
 
   // 1시간 절대 세션 타이머 (수업 시작 기준 60분 후 자동 종료)
@@ -460,7 +463,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             status: 'connected',
             isAway: Boolean(signal.student?.isAway),
             currentPage: signal.student?.currentPage,
-            totalPages: signal.student?.totalPages
+            totalPages: signal.student?.totalPages,
+            appVersion: signal.student?.appVersion
           });
 
           // 처음 접속하거나 복귀했을 때만 토스트 알림 1회
@@ -542,6 +546,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       isAway?: boolean;
       currentPage?: number;
       totalPages?: number;
+      appVersion?: string;
       submission?: ClassNoteRecord;
     }>();
 
@@ -571,6 +576,7 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
         existing.isAway = hb.isAway;
         existing.currentPage = hb.currentPage;
         existing.totalPages = hb.totalPages;
+        existing.appVersion = hb.appVersion;
       } else {
         studentMap.set(key, {
           key,
@@ -581,7 +587,8 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
           status: hb.status,
           isAway: hb.isAway,
           currentPage: hb.currentPage,
-          totalPages: hb.totalPages
+          totalPages: hb.totalPages,
+          appVersion: hb.appVersion
         });
       }
     }
@@ -622,6 +629,29 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
       (s.status === 'connected' || s.status === 'checking') && s.isAway
     );
   }, [sortedStudentRoster]);
+
+  // 구버전 앱을 실행 중인 학생 목록 (원격 자동 새로고침 대상)
+  const outdatedStudents = useMemo(() => {
+    return sortedStudentRoster.filter(s =>
+      (s.status === 'connected' || s.status === 'checking') &&
+      (!s.appVersion || s.appVersion !== boardVersion)
+    );
+  }, [sortedStudentRoster, boardVersion]);
+
+  // 구버전 학생 전체 원격 새로고침 신호 전파
+  const handleReloadOutdatedStudents = async () => {
+    if (outdatedStudents.length === 0) {
+      showToast('✅ 모든 학생이 최신 버전 앱을 실행 중입니다.');
+      return;
+    }
+    const ok = window.confirm(`구버전 앱을 실행 중인 학생 ${outdatedStudents.length}명의 화면을 원격으로 새로고침하시겠습니까?\n(작성 중이던 필기는 기기에 안전하게 보존됩니다.)`);
+    if (!ok) return;
+
+    for (const student of outdatedStudents) {
+      await classroomRealtime.sendForceReload(currentLessonId, student.key);
+    }
+    showToast(`🚀 ${outdatedStudents.length}명의 학생 화면에 원격 새로고침 신호를 전송했습니다.`);
+  };
 
   // 실시간 미접속 학생 목록 (오늘 접속했던 학생 중 잠금/절전/퇴장으로 끊긴 학생만 추적)
   const disconnectedStudents = useMemo(() => {
@@ -1113,6 +1143,33 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
             </button>
           </div>
 
+          {outdatedStudents.length > 0 && (
+            <button
+              type="button"
+              onClick={handleReloadOutdatedStudents}
+              style={{
+                height: '36px',
+                padding: '0 8px',
+                borderRadius: '10px',
+                background: 'rgba(234, 179, 8, 0.2)',
+                border: '1px solid #eab308',
+                color: '#fde047',
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              title={`구버전 앱 학생 ${outdatedStudents.length}명 감지. 클릭 시 최신 버전으로 원격 자동 새로고침합니다.`}
+            >
+              <span>🚀</span>
+              <span style={{ fontSize: '11px', background: '#ca8a04', color: '#fff', padding: '1px 5px', borderRadius: '6px' }}>
+                {outdatedStudents.length}
+              </span>
+            </button>
+          )}
+
           <div style={{ width: '1px', height: '20px', background: 'rgba(255, 255, 255, 0.12)', margin: '0 2px' }} />
 
           {/* 1. 미니 모니터 토글 아이콘 버튼 */}
@@ -1506,18 +1563,43 @@ export const LiveClassroomDashboard: React.FC<LiveClassroomDashboardProps> = ({
                     >
                       {/* 학생 접속 상태 뱃지 & 연결 해제 버튼 */}
                       <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span
-                          style={{
-                            fontSize: '9.5px',
-                            fontWeight: 700,
-                            padding: '1px 6px',
-                            borderRadius: '10px',
-                            background: badgeBg,
-                            color: '#ffffff'
-                          }}
-                        >
-                          {badgeLabel}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                          <span
+                            style={{
+                              fontSize: '9.5px',
+                              fontWeight: 700,
+                              padding: '1px 6px',
+                              borderRadius: '10px',
+                              background: badgeBg,
+                              color: '#ffffff'
+                            }}
+                          >
+                            {badgeLabel}
+                          </span>
+                          {isOnline && (!studentItem.appVersion || studentItem.appVersion !== boardVersion) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                classroomRealtime.sendForceReload(currentLessonId, studentItem.key);
+                                showToast(`🚀 ${studentItem.name} 학생 기기에 원격 새로고침 신호를 보냈습니다.`);
+                              }}
+                              style={{
+                                background: 'rgba(234, 179, 8, 0.25)',
+                                border: '1px solid #eab308',
+                                color: '#fde047',
+                                fontSize: '8.5px',
+                                fontWeight: 800,
+                                padding: '1px 4px',
+                                borderRadius: '6px',
+                                cursor: 'pointer'
+                              }}
+                              title={`구버전 앱 실행 중 (v${studentItem.appVersion || '미확인'}). 클릭하면 최신 버전으로 원격 새로고침합니다.`}
+                            >
+                              ⚠️ 구버전 ↺
+                            </button>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={(e) => {
